@@ -47,6 +47,93 @@ checksum = "sha256:1d45d5dd911b315527b6e0d1d95e79f5e6b3d1b93b8a550c78efedd35e719
 url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621627221"
 
+[[tools."github:kjanat/runner"]]
+version = "0.27.1"
+backend = "github:kjanat/runner"
+specifiers = ["latest"]
+
+[tools."github:kjanat/runner"."platforms.linux-arm64"]
+checksum = "sha256:e8dccd019e50909c8fad16b9ecc9fad408c0f12bdd9f76b75bb609b9b2d8cb7b"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600423383"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.linux-arm64-musl"]
+checksum = "sha256:8bbb24727fa75277d8a097a1b7c9e0c68fbec6767b450ef47bc9effcb39442dd"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600423661"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.linux-x64"]
+checksum = "sha256:11a0bda23d49f7ae63e07c5d27e17434c49cf616418f40dd6a04c6a0e2a037e8"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600421970"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.linux-x64-musl"]
+checksum = "sha256:9efe7c00f5584f5a387bf4c5b5b663491494b3f38b0592fa4bb352b2435a9b98"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600423479"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.macos-arm64"]
+checksum = "sha256:f04350e77d5669e34af29cd133cf1eb872a5fbf269da8d0cff91876906545be5"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600423815"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.macos-x64"]
+checksum = "sha256:5e19e8b89e92da2f47739be69c74446652f6d0c29031a4af081e2cc083ec09d8"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600427200"
+provenance = "github-attestations"
+
+[tools."github:kjanat/runner"."platforms.windows-x64"]
+checksum = "sha256:721007318fc1be52dfb7256488b5d8ca120732acfab6cf85df60230930f955ed"
+url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600424284"
+provenance = "github-attestations"
+
+[[tools."github:koalaman/shellcheck"]]
+version = "0.11.0"
+backend = "github:koalaman/shellcheck"
+specifiers = ["latest"]
+
+[tools."github:koalaman/shellcheck"."platforms.linux-arm64"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools."github:koalaman/shellcheck"."platforms.linux-arm64-musl"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools."github:koalaman/shellcheck"."platforms.linux-x64"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools."github:koalaman/shellcheck"."platforms.linux-x64-musl"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools."github:koalaman/shellcheck"."platforms.macos-arm64"]
+checksum = "sha256:56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056932"
+
+[tools."github:koalaman/shellcheck"."platforms.macos-x64"]
+checksum = "sha256:3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056930"
+
+[tools."github:koalaman/shellcheck"."platforms.windows-x64"]
+checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
+
 [[tools.hyperfine]]
 version = "1.20.0"
 backend = "aqua:sharkdp/hyperfine"
