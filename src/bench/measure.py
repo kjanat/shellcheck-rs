@@ -39,6 +39,7 @@ import argparse
 import difflib
 import hashlib
 import json
+import math
 import os
 import platform
 import random
@@ -231,6 +232,26 @@ class WatchdogState:
     peak_rss: int = 0
 
 
+@dataclass
+class CandidateBudget:
+    seconds: float
+    spent_s: float = 0.0
+    exhausted: bool = False
+
+    @property
+    def remaining(self) -> float:
+        # Leave time for process-group termination and reaping at the boundary.
+        return (
+            0.0
+            if self.exhausted
+            else max(0.0, self.seconds - self.spent_s - min(0.1, self.seconds / 10))
+        )
+
+    @property
+    def reason(self) -> str:
+        return f"total candidate measurement budget of {self.seconds:g}s exhausted"
+
+
 def run_guarded(
     cmd: list[str], cwd: Path, timeout: float, max_rss: int, stdout: Path, stderr: Path
 ) -> Guarded:
@@ -356,46 +377,88 @@ def precheck(
     max_rss: int,
     pin: str | None,
     max_run: float,
+    budgets: dict[str, CandidateBudget] | None = None,
 ) -> dict[str, dict[str, Precheck]]:
-    results: dict[str, dict[str, Precheck]] = {}
-    for sname, sc in scenarios.items():
-        results[sname] = {}
+    budgets = budgets or {}
+    results: dict[str, dict[str, Precheck]] = {s: {} for s in scenarios}
+
+    def check(sname: str, c: Manifest) -> None:
+        sc = scenarios[sname]
         pdir = out / "precheck" / sname
         pdir.mkdir(parents=True, exist_ok=True)
-        for c in candidates:
-            cmd = scenario_command(c, sc, pin)
+        budget = budgets.get(c.name)
+        if budget and budget.remaining <= 0:
+            results[sname][c.name] = Precheck(
+                exit=None,
+                signal=None,
+                wall_s=0,
+                peak_rss_bytes=0,
+                killed=None,
+                stdout_bytes=0,
+                stdout_sha256="",
+                stderr_head="",
+                status="skipped",
+                reason=budget.reason,
+                parity="unknown",
+            )
+            log(f"pre-check {sname:12s} {c.name:10s} skipped: {budget.reason}")
+            return
+        limit = min(timeout, budget.remaining) if budget else timeout
+        started = time.perf_counter()
+        try:
             g = run_guarded(
-                cmd,
+                scenario_command(c, sc, pin),
                 corpus / sc.cwd,
-                timeout,
+                limit,
                 max_rss,
                 pdir / f"{c.name}.stdout",
                 pdir / f"{c.name}.stderr",
             )
-            stdout = (pdir / f"{c.name}.stdout").read_bytes()
-            status, reason = classify(g, sc.max_run_seconds or max_run)
-            r = Precheck(
-                exit=g.exit,
-                signal=g.signal,
-                wall_s=g.wall_s,
-                peak_rss_bytes=g.peak_rss_bytes,
-                killed=g.killed,
-                stdout_bytes=len(stdout),
-                stdout_sha256=hashlib.sha256(stdout).hexdigest(),
-                stderr_head=(pdir / f"{c.name}.stderr").read_text(errors="replace")[
-                    :2000
-                ],
-                status=status,
-                reason=reason,
-                parity="unknown",
-            )
-            results[sname][c.name] = r
-            log(
-                f"pre-check {sname:12s} {c.name:10s} {r.status:6s} {r.wall_s:7.3f}s  rss {r.peak_rss_bytes / 2**20:8.1f} MiB  exit {r.exit}  {r.reason or ''}"
-            )
+        finally:
+            if budget:
+                budget.spent_s += time.perf_counter() - started
+        stdout = (pdir / f"{c.name}.stdout").read_bytes()
+        status, reason = classify(g, sc.max_run_seconds or max_run)
+        if budget and limit < timeout and g.killed and g.killed.startswith("timeout"):
+            status, reason = "limited", budget.reason + "; sweep did not complete"
+            budget.exhausted = True
+        r = Precheck(
+            exit=g.exit,
+            signal=g.signal,
+            wall_s=g.wall_s,
+            peak_rss_bytes=g.peak_rss_bytes,
+            killed=g.killed,
+            stdout_bytes=len(stdout),
+            stdout_sha256=hashlib.sha256(stdout).hexdigest(),
+            stderr_head=(pdir / f"{c.name}.stderr").read_text(errors="replace")[:2000],
+            status=status,
+            reason=reason,
+            parity="unknown",
+        )
+        results[sname][c.name] = r
+        log(
+            f"pre-check {sname:12s} {c.name:10s} {r.status:6s} {r.wall_s:7.3f}s  rss {r.peak_rss_bytes / 2**20:8.1f} MiB  exit {r.exit}  {r.reason or ''}"
+        )
+
+    # Give a capped candidate its complete GCC sweep before overlapping groups
+    # can spend the allowance. All other candidates retain the normal order.
+    if "omarchy-all" in scenarios:
+        for c in candidates:
+            if c.name in budgets:
+                check("omarchy-all", c)
+
+    for sname, sc in scenarios.items():
+        pdir = out / "precheck" / sname
+        for c in candidates:
+            if c.name not in results[sname]:
+                check(sname, c)
 
         base = results[sname][baseline]
-        base_out = canonical(sc.format, (pdir / f"{baseline}.stdout").read_bytes())
+        base_out = (
+            canonical(sc.format, (pdir / f"{baseline}.stdout").read_bytes())
+            if base.status in ("ok", "slow")
+            else b""
+        )
         for c in candidates:
             r = results[sname][c.name]
             if c.name == baseline:
@@ -441,6 +504,14 @@ def scenario_command(
     return wrap(pin, [candidate.binary, *args])
 
 
+class TimedRoundTimeout(ValueError):
+    """A candidate outgrew its sampling budget; its pre-check remains valid."""
+
+    def __init__(self, message: str, candidate_limited: bool = False):
+        super().__init__(message)
+        self.candidate_limited = candidate_limited
+
+
 def hyperfine_one(
     hyperfine: str,
     corpus: Path,
@@ -450,6 +521,8 @@ def hyperfine_one(
     name: str,
     cmd: list[str],
     timeout: float = 600.0,
+    *,
+    wall_timeout: float | None = None,
 ) -> HyperfineResult:
     """One hyperfine process for ONE command, so its `memory_usage_byte` (the
     cumulative RUSAGE_CHILDREN maximum of that process) belongs to this command
@@ -481,13 +554,18 @@ def hyperfine_one(
         text=True,
         start_new_session=True,
     )
+    batch_limit = (runs + warmup) * timeout + 10
+    limit = min(batch_limit, wall_timeout) if wall_timeout is not None else batch_limit
     try:
-        _, stderr = proc.communicate(timeout=(runs + warmup) * timeout + 10)
+        _, stderr = proc.communicate(timeout=limit)
     except subprocess.TimeoutExpired as error:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
-        raise ValueError(
-            f"{name}: timed round exceeded its execution budget"
+        if export.exists():
+            export.rename(export.with_suffix(".incomplete"))
+        raise TimedRoundTimeout(
+            f"{name}: timed round exceeded its {error.timeout:g}s execution budget",
+            candidate_limited=wall_timeout is not None and wall_timeout <= batch_limit,
         ) from error
     if proc.returncode != 0:
         raise ValueError(f"hyperfine failed ({proc.returncode}):\n{stderr}")
@@ -509,6 +587,7 @@ class Args(argparse.Namespace):
     max_rss_gib: float | None = None
     timeout: float | None = None
     max_run_seconds: float | None = None
+    h2r_budget_seconds: float = 600.0
     hyperfine: str = shutil.which("hyperfine") or "hyperfine"
 
 
@@ -546,6 +625,11 @@ def parser() -> argparse.ArgumentParser:
         help="override workload sampling budgets (default: 15s synthetic, 60s Omarchy); slower candidates are timed once only",
     )
     _ = ap.add_argument("--hyperfine")
+    _ = ap.add_argument(
+        "--h2r-budget-seconds",
+        type=float,
+        help="total h2r measurement time across pre-checks, warm-ups and timed runs (default: 600s); prioritize the complete Omarchy GCC sweep",
+    )
     return ap
 
 
@@ -557,6 +641,8 @@ def main(argv: list[str] | None = None) -> Path:
         or (args.timeout is not None and args.timeout <= 0)
         or (args.max_run_seconds is not None and args.max_run_seconds <= 0)
         or (args.max_rss_gib is not None and args.max_rss_gib <= 0)
+        or not math.isfinite(args.h2r_budget_seconds)
+        or args.h2r_budget_seconds <= 0
     ):
         raise ValueError(
             "warmup must be nonnegative and execution limits must be positive"
@@ -621,6 +707,11 @@ def main(argv: list[str] | None = None) -> Path:
             f"1-minute load average is {env.loadavg_at_start[0]:.2f}; something else is using this machine"
         )
 
+    budgets = {
+        c.name: CandidateBudget(args.h2r_budget_seconds)
+        for c in candidates
+        if c.name == "h2r"
+    }
     checks = precheck(
         candidates,
         baseline,
@@ -631,6 +722,7 @@ def main(argv: list[str] | None = None) -> Path:
         int(max_rss_gib * 2**30),
         args.pin,
         args.max_run_seconds or 15.0,
+        budgets,
     )
 
     rng = random.Random(args.seed)
@@ -658,17 +750,42 @@ def main(argv: list[str] | None = None) -> Path:
             for pos, c in enumerate(order):
                 cmd = scenario_command(c, sc, args.pin)
                 export = out / "raw" / f"round{rnd:02d}-{sname}-{c.name}.json"
-                res = hyperfine_one(
-                    args.hyperfine,
-                    corpus / sc.cwd,
-                    export,
-                    args.warmup,
-                    args.runs,
-                    c.name,
-                    cmd,
-                    min(timeout, sc.max_run_seconds or args.max_run_seconds or 15.0),
-                )
                 entry = samples[sname][c.name]
+                budget = budgets.get(c.name)
+                if budget and budget.remaining <= 0:
+                    entry.stop_reason = budget.reason + "; showing initial sweep only"
+                    eligible[sname].remove(c)
+                    continue
+                kwargs = {"wall_timeout": budget.remaining} if budget else {}
+                candidate_started = time.perf_counter()
+                try:
+                    res = hyperfine_one(
+                        args.hyperfine,
+                        corpus / sc.cwd,
+                        export,
+                        args.warmup,
+                        args.runs,
+                        c.name,
+                        cmd,
+                        min(
+                            timeout, sc.max_run_seconds or args.max_run_seconds or 15.0
+                        ),
+                        **kwargs,
+                    )
+                except TimedRoundTimeout as error:
+                    if budget and error.candidate_limited:
+                        budget.exhausted = True
+                    entry.stop_reason = (
+                        f"sampling stopped in round {rnd}: {budget.reason if budget and error.candidate_limited else error}; "
+                        f"{entry.n} completed samples retained in raw data; showing initial sweep only"
+                    )
+                    eligible[sname].remove(c)
+                    warn(f"{sname}: {entry.stop_reason}")
+                    summary.append(f"{c.name} sampling stopped")
+                    continue
+                finally:
+                    if budget:
+                        budget.spent_s += time.perf_counter() - candidate_started
                 entry.times.extend(res.times)
                 entry.memory_bytes.extend(res.memory_usage_byte)
                 entry.exit_codes.extend(res.exit_codes)
@@ -705,6 +822,9 @@ def main(argv: list[str] | None = None) -> Path:
             hyperfine_flags=["-N", "--ignore-failure", "--output", "null"],
             # one hyperfine process per candidate per round: memory_bytes are per candidate
             memory_isolated=True,
+            candidate_budget_s={
+                name: budget.seconds for name, budget in budgets.items()
+            },
         ),
         environment=env,
         baseline=baseline,
@@ -720,6 +840,7 @@ def main(argv: list[str] | None = None) -> Path:
         precheck=checks,
         samples=samples,
         elapsed_s=time.time() - started,
+        candidate_elapsed_s={name: budget.spent_s for name, budget in budgets.items()},
     )
     _ = (out / "run.json").write_text(run.model_dump_json(indent=1) + "\n")
     log(f"wrote {out / 'run.json'} ({run.elapsed_s:.0f}s of timing)")

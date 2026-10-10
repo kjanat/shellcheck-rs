@@ -3,9 +3,10 @@ name: Bench
 on:
   workflow_dispatch:
     inputs:
-      rounds: { description: Shuffled rounds, default: "5" }
-      runs: { description: Timed runs per round, default: "10" }
-      warmup: { description: Warm-ups per round, default: "3" }
+      rounds: { description: Shuffled rounds, default: "4" }
+      runs: { description: Timed runs per round, default: "5" }
+      warmup: { description: Warm-ups per round, default: "1" }
+      max_run_seconds: { description: Repeat only workloads below this many seconds; slower workloads retain a complete sweep, default: "2" }
       scenarios: { description: Comma-separated workload subset, default: "" }
   push:
     branches: [bench]
@@ -151,12 +152,13 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
       - name: Measure
         env:
-          ROUNDS: ${{ inputs.rounds || '5' }}
-          RUNS: ${{ inputs.runs || '10' }}
-          WARMUP: ${{ inputs.warmup || '3' }}
+          ROUNDS: ${{ inputs.rounds || '4' }}
+          RUNS: ${{ inputs.runs || '5' }}
+          WARMUP: ${{ inputs.warmup || '1' }}
+          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '2' }}
           SCENARIOS: ${{ inputs.scenarios }}
         run: |
-          uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" \
+          uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600 \
             ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
       - name: Report
         run: |

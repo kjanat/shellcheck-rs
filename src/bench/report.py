@@ -84,7 +84,11 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 actions.append(
                     f"{name}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
                 )
-            if check.status == "failed":
+            if check.status == "limited":
+                actions.append(
+                    f"{name}, **{workload(run, scenario)}**: this workload stopped at the total measurement budget; its output agreement is unknown."
+                )
+            elif check.status == "failed":
                 actions.append(
                     f"{name}, **{workload(run, scenario)}**: investigate {check.reason}."
                 )
@@ -179,7 +183,9 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 duration(cell.median)
                 if cell
                 else duration(check.wall_s) + " (once)"
-                if check.status == "slow"
+                if check.status == "slow" or run.samples[scenario][name].stop_reason
+                else duration(check.wall_s) + " (stopped)"
+                if check.status == "limited"
                 else "-"
             )
             ratio = "-"
@@ -202,7 +208,9 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             base_unstable = any(
                 flag.startswith(("noisy", "drift", "only ")) for flag in base_flags
             )
-            if check.status != "ok":
+            if run.samples[scenario][name].stop_reason:
+                status = run.samples[scenario][name].stop_reason
+            elif check.status != "ok":
                 status = check.reason or check.status
             elif check.parity not in ("baseline", "identical") or any(
                 flag.startswith("not comparable") for flag in flags + base_flags
@@ -225,8 +233,9 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 status = "not comparable"
             if name == winner:
                 median = f"***🏆 {median}***"
+            rss_text = "-" if check.status == "skipped" else f"{rss / 2**20:.0f} MiB"
             lines.append(
-                f"| {name} | {output} | {median} | {ratio} | {rss / 2**20:.0f} MiB | {rss_ratio} | {status} |"
+                f"| {name} | {output} | {median} | {ratio} | {rss_text} | {rss_ratio} | {status} |"
             )
     lines += ["", "Candidates:", ""]
     for candidate in run.candidates:
@@ -237,6 +246,11 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             f"SHA-256 [{candidate.binary_sha256[:12]}](run.json)."
         )
     config = run.config
+    for name, limit in config.candidate_budget_s.items():
+        lines += [
+            "",
+            f"**{name} total measurement budget: {duration(limit)}**; used **{duration(run.candidate_elapsed_s.get(name, 0))}** across initial checks, warm-ups and timed runs. Compilation is separate. Budget-limited and skipped workloads are marked above.",
+        ]
     budgets = sorted(
         {
             scenario.max_run_seconds or config.max_run_s

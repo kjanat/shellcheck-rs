@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 type Kind = Literal["release", "git", "path"]
-type Status = Literal["ok", "slow", "failed"]
+type Status = Literal["ok", "slow", "failed", "limited", "skipped"]
 type Parity = Literal["baseline", "identical", "differs", "unknown"]
 
 
@@ -201,6 +201,7 @@ class Config(BaseModel):
     max_run_s: float = 0.0
     hyperfine_flags: list[str]
     memory_isolated: bool = False
+    candidate_budget_s: dict[str, float] = Field(default_factory=dict)
 
 
 class Precheck(BaseModel):
@@ -228,6 +229,7 @@ class Round(BaseModel):
 
 
 class Samples(BaseModel):
+    stop_reason: str | None = None
     times: list[float] = []
     memory_bytes: list[int] = []
     exit_codes: list[int | None] = []
@@ -251,6 +253,7 @@ class Run(BaseModel):
     precheck: dict[str, dict[str, Precheck]]
     samples: dict[str, dict[str, Samples]]
     elapsed_s: float
+    candidate_elapsed_s: dict[str, float] = Field(default_factory=dict)
 
 
 type Verdict = Literal["faster", "slower", "no significant difference", "n/a"]

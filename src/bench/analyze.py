@@ -437,7 +437,9 @@ def analyze(results: Path, plots: bool, resamples: int) -> None:
             e = samples[s][n]
             p = pre[s][n]
             fl: list[str] = []
-            if p.status == "slow":
+            if e.stop_reason:
+                fl.append(f"excluded: {e.stop_reason}")
+            elif p.status == "slow":
                 fl.append(f"timed once: {p.reason}")
             elif p.status != "ok":
                 fl.append(f"excluded: {p.reason}")
@@ -450,7 +452,7 @@ def analyze(results: Path, plots: bool, resamples: int) -> None:
             if e.n and p.parity == "unknown":
                 fl.append("not comparable: output agreement is unknown")
             d: Descriptives | None = None
-            if e.n:
+            if e.n and not e.stop_reason:
                 d = describe(
                     e, peak_rss(e, p, run.config, results, s, n), rng, resamples
                 )

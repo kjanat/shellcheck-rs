@@ -1,17 +1,124 @@
 import contextlib
 import io
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from bench.analyze import Summary, analyze
-from bench.measure import run_guarded
-from bench.schema import HyperfineExport
+from bench.measure import TimedRoundTimeout, hyperfine_one, main, run_guarded
+from bench.schema import CorpusManifest, HyperfineExport, HyperfineResult, Run
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
 
 class MetricsTests(unittest.TestCase):
+    def test_timed_batch_timeout_reaps_process_and_preserves_incomplete_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            export = root / "round.json"
+            export.write_text("unfinished")
+            process = Mock(pid=123)
+            process.communicate.side_effect = [
+                subprocess.TimeoutExpired("fixture", 10),
+                (None, ""),
+            ]
+            with (
+                patch("bench.measure.subprocess.Popen", return_value=process),
+                patch("bench.measure.os.killpg") as kill,
+                self.assertRaisesRegex(TimedRoundTimeout, "10s execution budget"),
+            ):
+                hyperfine_one("fixture", root, export, 0, 1, "upstream", ["true"])
+            kill.assert_called_once_with(123, signal.SIGKILL)
+            self.assertEqual(process.communicate.call_count, 2)
+            self.assertFalse(export.exists())
+            self.assertEqual(
+                export.with_suffix(".incomplete").read_text(), "unfinished"
+            )
+
+    def test_later_batch_timeout_preserves_samples_and_finishes_other_workloads(self):
+        fixture, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        scenarios = fixture.scenarios | {"after": fixture.scenarios["medium"]}
+        checks = fixture.precheck | {"after": fixture.precheck["medium"]}
+        calls: list[tuple[str, str]] = []
+
+        def timed(_tool, _cwd, export, _warmup, runs, name, _cmd, _timeout, **_limits):
+            calls.append((export.name, name))
+            if export.name == "round02-medium-upstream.json":
+                raise TimedRoundTimeout(
+                    "upstream: timed round exceeded its 790s execution budget"
+                )
+            return HyperfineResult(
+                command=name,
+                mean=0.01,
+                user=0.0,
+                system=0.0,
+                times=[0.01] * runs,
+                memory_usage_byte=[100] * runs,
+                exit_codes=[checks["medium"][name].exit] * runs,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "corpus.json").write_text(
+                CorpusManifest(
+                    generator="fixture", seed=1, sha256="fixture", files={}
+                ).model_dump_json()
+            )
+            with (
+                patch(
+                    "bench.measure.load_candidates",
+                    return_value=(fixture.candidates, fixture.baseline),
+                ),
+                patch("bench.measure.load_scenarios", return_value=scenarios),
+                patch("bench.measure.environment", return_value=fixture.environment),
+                patch("bench.measure.precheck", return_value=checks),
+                patch("bench.measure.hyperfine_one", side_effect=timed),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                out = main([
+                    "--corpus",
+                    str(root),
+                    "--out",
+                    str(root / "result"),
+                    "--rounds",
+                    "3",
+                    "--runs",
+                    "10",
+                    "--warmup",
+                    "0",
+                ])
+            run = Run.model_validate_json((out / "run.json").read_text())
+        stopped = run.samples["medium"]["upstream"]
+        self.assertEqual(stopped.n, 10)
+        self.assertEqual(len(stopped.rounds), 1)
+        self.assertIn("round 2", stopped.stop_reason or "")
+        self.assertEqual(run.precheck["medium"]["upstream"].status, "ok")
+        self.assertEqual(
+            run.precheck["medium"]["upstream"].wall_s,
+            fixture.precheck["medium"]["upstream"].wall_s,
+        )
+        self.assertNotIn(("round03-medium-upstream.json", "upstream"), calls)
+        self.assertEqual(run.samples["after"]["upstream"].n, 30)
+        self.assertEqual(run.samples["medium"]["rust-port"].n, 30)
+        summary, report = self.analyze_run(run)
+        self.assertIsNone(summary.descriptives["medium"]["upstream"])
+        self.assertFalse(
+            any(
+                pair.scenario == "medium" and pair.reference == "upstream"
+                for pair in summary.comparisons
+            )
+        )
+        row = next(
+            line for line in report.splitlines() if line.startswith("| upstream |")
+        )
+        self.assertIn("(once)", row)
+        self.assertIn("sampling stopped", row)
+        self.assertNotIn("🏆", row)
+
     def test_hyperfine_export_versions_preserve_units_samples_and_exit_status(self):
         legacy = HyperfineExport.model_validate({
             "results": [
