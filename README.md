@@ -49,6 +49,8 @@ The report starts with correctness failures, reliable runtime priorities, and ob
 
 Both ratios are **candidate ÷ upstream**: `2×` means twice the cost; `0.5×` means half. Output differences have links to diffs and earn no speed verdict. Noisy, drifting, or undersampled timings request another measurement. A single over-budget pre-check run is labelled separately, without a confidence interval.
 
+CI publishes its summary after uploading `bench-results`. Evidence links use that artifact's download URL and show the file path to open after extracting the ZIP. The bundled `report.md` keeps relative links for local reading; candidate and source revisions link directly to GitHub.
+
 If a candidate exceeds its batch budget during repeated timing, the remaining candidates and workloads continue. Its completed raw samples remain available, and its report uses the initial full sweep as a single observation with the timeout reason, without a confidence interval or winner badge. Incomplete Hyperfine exports are kept as `.incomplete` files.
 
 Workloads cover startup, small/medium/large scripts, JSON formatting, and a batch of 120 files. They are generated from a fixed seed and checked against their checksums before timing. These are controlled workloads; their results do not establish performance on every real script.

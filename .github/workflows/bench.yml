@@ -28,17 +28,17 @@ jobs:
     name: Resolve exact candidate identities
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      candidates: ${{ steps.plan.outputs.candidates }}
+    outputs: { candidates: "${{ steps.plan.outputs.candidates }}" }
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         with: { install_args: "python uv shellcheck" }
+      - name: Prepare bench plan
+        run: uv run bench prepare --resolve-only --plan .bench/plan.json
       - name: Resolve once
         id: plan
+        shell: "uv run python {0}"
         run: |
-          uv run bench prepare --resolve-only --plan .bench/plan.json
-          uv run python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -46,7 +46,6 @@ jobs:
           matrix = [{key: item[key] for key in ('name', 'key', 'layers_key')} for item in plan['builds']]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('candidates=' + json.dumps(matrix, separators=(',', ':')) + '\n')
-          PY
       - uses: actions/upload-artifact@v7
         with: { name: candidate-plan, path: .bench/plan.json, include-hidden-files: true }
 
@@ -129,7 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv hyperfine" }
+        with: { install_args: "python uv hyperfine github:kjanat/dprint" }
       - name: Install measurement runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
       - uses: actions/download-artifact@v8
@@ -137,9 +136,7 @@ jobs:
       - name: Assemble and verify prepared artifacts
         run: |
           mkdir -p .bench/prepared
-          for name in upstream rust-port h2r; do
-            mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"
-          done
+          for name in upstream rust-port h2r; do mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"; done
           chmod +x .bench/prepared/*/*/rshellcheck
           uv run bench prepare --verify
       - name: Restore pinned Omarchy source
@@ -157,13 +154,15 @@ jobs:
           WARMUP: ${{ inputs.warmup || '1' }}
           MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '2' }}
           SCENARIOS: ${{ inputs.scenarios }}
-        run: |
-          uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600 \
-            ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
+        run: uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
+          ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
       - name: Report
-        run: |
-          uv run bench report .bench/results/ci
-          cat .bench/results/ci/report.md >> "${GITHUB_STEP_SUMMARY}"
+        run: uv run bench report .bench/results/ci
       - uses: actions/upload-artifact@v7
+        id: results
         if: always() && !cancelled()
         with: { name: bench-results, path: .bench/results/ci, include-hidden-files: true, retention-days: 90 }
+      - name: Publish summary with evidence download links
+        shell: bash
+        env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
+        run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | dprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"

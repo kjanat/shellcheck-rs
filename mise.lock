@@ -2,6 +2,51 @@
 
 lockfile_version = 3
 
+[[tools.dprint]]
+version = "0.60.1"
+backend = "github:kjanat/dprint"
+specifiers = ["latest"]
+
+[[tools."github:kjanat/dprint"]]
+version = "0.59.0-kjanat"
+backend = "github:kjanat/dprint"
+specifiers = ["latest"]
+
+[tools."github:kjanat/dprint"."platforms.linux-arm64"]
+checksum = "sha256:78be7c4abd67d37ab27e9cc3e415efb6dcc38f3d3170c17b63fd20ac796c0d73"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547837"
+
+[tools."github:kjanat/dprint"."platforms.linux-arm64-musl"]
+checksum = "sha256:31162a16e2ce864d77780844cfa40978fcbe4789c2d019782748e98bf8cf9b6b"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-aarch64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547835"
+
+[tools."github:kjanat/dprint"."platforms.linux-x64"]
+checksum = "sha256:e6027824dd7195b658e8cfaccd7c36bd127bbbba894b888af74da9159cf683a0"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547953"
+
+[tools."github:kjanat/dprint"."platforms.linux-x64-musl"]
+checksum = "sha256:5873915813665e6509692edc738eeab9a9471025caa50ec1ba79250d67b794cd"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-x86_64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547960"
+
+[tools."github:kjanat/dprint"."platforms.macos-arm64"]
+checksum = "sha256:c1c96e341b8d0ac5cabee70741fd1bc58ad9c36a7d909eaf83600f11510834a9"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547836"
+
+[tools."github:kjanat/dprint"."platforms.macos-x64"]
+checksum = "sha256:668dc1c8a4181ef13ed5790344004c8704ceb93d6180d85be66e8f2f4e2b4709"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621547950"
+
+[tools."github:kjanat/dprint"."platforms.windows-x64"]
+checksum = "sha256:1d45d5dd911b315527b6e0d1d95e79f5e6b3d1b93b8a550c78efedd35e719f58"
+url = "https://github.com/kjanat/dprint/releases/download/0.59.0-kjanat/dprint-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/621627221"
+
 [[tools.hyperfine]]
 version = "1.20.0"
 backend = "aqua:sharkdp/hyperfine"
@@ -83,6 +128,53 @@ provenance = "github-attestations"
 [tools.python."platforms.windows-x64"]
 checksum = "sha256:b7ff8b700995379e425b39abce9b087d84a45aa265ea465c0069c2747ea5b2ea"
 url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.8+20261001-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[[tools.ruff]]
+version = "0.17.0"
+backend = "aqua:astral-sh/ruff"
+specifiers = ["latest"]
+
+[tools.ruff."platforms.linux-arm64"]
+checksum = "sha256:294e181ba6ccb0c2ffd778580e3c42b19f038bdbcb844f39fd9a6a26e8148804"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999236"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.linux-arm64-musl"]
+checksum = "sha256:cac779097e34bf1ca40175b4bacf8fca7a92fce5030bfc3edf1fd357428a33b0"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999241"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.linux-x64"]
+checksum = "sha256:c94fc1dc71f054d06d9f1149442dcb471516aa2b7d4b7e8124e05d082d4c91d3"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999382"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.linux-x64-musl"]
+checksum = "sha256:0df9421fd0df9aa7a62dab4d1086e085b7c7888b6343fc5a9c5f630771d61aae"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999398"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.macos-arm64"]
+checksum = "sha256:59afe64c227e5f9a39d85c4d6be6e2d8e9a85c55f0887baad9c9e2f775a1c119"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999213"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.macos-x64"]
+checksum = "sha256:1b6a10f57aa06f0de2d90666878dd875836e3e2d04f61868fa175a74149fb2ad"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999365"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.windows-x64"]
+checksum = "sha256:bc831eaa01912323099d7bc185981bf6bb1960931350bd3ad6a82f7a59a46c3b"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.0/ruff-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/625999369"
 provenance = "github-attestations"
 
 [[tools.runner-run]]

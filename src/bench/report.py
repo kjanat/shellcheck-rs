@@ -1,6 +1,45 @@
 """A compact decision surface over the complete statistical summary."""
 
+import argparse
+import re
+from pathlib import Path
+from urllib.parse import urlsplit
+
 from bench.schema import Manifest, Run, Summary
+
+
+def actions_summary(results: Path, artifact_url: str) -> str:
+    """Link bundled evidence to its download, keeping offline links untouched."""
+    artifact = urlsplit(artifact_url)
+    if artifact.scheme != "https" or not artifact.netloc:
+        raise ValueError("the artifact download URL must be an absolute HTTPS URL")
+
+    def evidence(match: re.Match[str]) -> str:
+        label, target = match.groups()
+        if urlsplit(target).scheme or target.startswith(("#", "//")):
+            return match.group()
+        if not (results / target).is_file():
+            raise ValueError(f"linked evidence is missing from the artifact: {target}")
+        return f"[{label} · `{target}`]({artifact_url})"
+
+    report = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)", evidence, (results / "report.md").read_text()
+    )
+    return (
+        f"📦 [Download benchmark evidence]({artifact_url}). "
+        "Evidence links download the ZIP; extract it and open the path shown in each link. "
+        "The bundled `report.md` links directly to those files.\n\n" + report
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="Publish an Actions-safe benchmark summary"
+    )
+    parser.add_argument("results", type=Path)
+    parser.add_argument("--artifact-url", required=True)
+    args = parser.parse_args(argv)
+    print(actions_summary(args.results, args.artifact_url))
 
 
 def duration(seconds: float) -> str:

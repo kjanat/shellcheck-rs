@@ -26,12 +26,17 @@ def main(argv: list[str] | None = None) -> None:
 
             report(arguments[1:])
             return
+        if arguments and arguments[0] == "summary":
+            from bench.report import main as summary
+
+            summary(arguments[1:])
+            return
         if arguments and arguments[0] == "corpus":
             corpus.main(arguments[1:])
             return
         parser = measure.parser()
         parser.description = __doc__
-        parser.epilog = "Stages: bench prepare --help; bench run --help; bench report --help. The default command prepares, generates workloads, measures, and reports."
+        parser.epilog = "Stages: bench prepare --help; bench run --help; bench report --help; bench summary --help. The default command prepares, generates workloads, measures, and reports."
         # The default command shares run's flags and accepts preparation overrides.
         parser.add_argument("--state", type=Path, default=candidates.STATE)
         parser.add_argument(
