@@ -123,7 +123,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         "",
         "## The results",
         "",
-        "🏆 marks the lowest reliable median with matching output. Statistical significance appears in the status column.",
+        "🏆 marks the lowest observed median with matching output. Noise and statistical significance appear in the status column.",
     ]
     for scenario in run.scenarios:
         lines += [
@@ -141,7 +141,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             and run.precheck[scenario][name].status == "ok"
             and run.precheck[scenario][name].parity in ("baseline", "identical")
             and not any(
-                flag.startswith(("noisy", "drift", "only ", "not comparable"))
+                flag.startswith("not comparable")
                 for flag in summary.flags[scenario][name]
             )
         }

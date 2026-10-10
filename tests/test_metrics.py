@@ -81,6 +81,7 @@ class MetricsTests(unittest.TestCase):
             line for line in report.splitlines() if line.startswith("| rust-port |")
         )
         self.assertIn("not comparable", row)
+        self.assertNotIn("🏆", row)
         self.assertIn("output diff", report)
 
     def test_changed_exit_status_during_timing_is_not_comparable(self):
@@ -100,6 +101,7 @@ class MetricsTests(unittest.TestCase):
             line for line in report.splitlines() if line.startswith("| rust-port |")
         )
         self.assertNotIn("faster", row)
+        self.assertNotIn("🏆", row)
 
     def test_ratio_direction_and_intervals_match_recorded_statistics(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
@@ -121,6 +123,32 @@ class MetricsTests(unittest.TestCase):
         )
         low, high = pair.speedup_median_ci
         self.assertIn(f"[{1 / high:.2f}, {1 / low:.2f}]", row)
+
+    def test_fastest_observed_result_keeps_highlight_and_noise_qualification(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        samples = run.samples["medium"]["rust-port"]
+        for round_ in samples.rounds:
+            round_.times = [0.001 if i % 2 else 0.009 for i in range(len(round_.times))]
+        samples.times = [time for round_ in samples.rounds for time in round_.times]
+        summary, report = self.analyze_run(run)
+        self.assertTrue(
+            any(
+                flag.startswith("noisy")
+                for flag in summary.flags["medium"]["rust-port"]
+            )
+        )
+        row = next(
+            line for line in report.splitlines() if line.startswith("| rust-port |")
+        )
+        self.assertIn("🏆", row)
+        self.assertIn("repeat: noise/drift", row)
+        self.assertNotIn(
+            "🏆",
+            next(
+                line for line in report.splitlines() if line.startswith("| upstream |")
+            ),
+        )
+        self.assertIn("lowest observed median", report)
 
     def test_timeout_kills_candidate_and_fast_children_are_reaped_once(self):
         with tempfile.TemporaryDirectory() as directory:
