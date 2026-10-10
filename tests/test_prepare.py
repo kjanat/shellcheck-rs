@@ -39,6 +39,13 @@ import os
 import pathlib
 import shutil
 import sys
+mutation = pathlib.Path({str(self.root / "mutation")!r})
+if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'setup':
+    pathlib.Path('main.rs').write_text('changed by setup')
+if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'postinstall':
+    if os.environ.get('MISE_LOCKED') != '1' or os.environ.get('MISE_TASK_RUN_AUTO_INSTALL') != 'false':
+        with pathlib.Path('mise.lock').open('a') as output:
+            output.write('\\n# nested mise task rewrote the lockfile\\n')
 if sys.argv[1:3] == ['which', 'shellcheck']:
     print({str(self.binary)!r})
     sys.exit(0)
@@ -55,6 +62,8 @@ if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
     shutil.copy2({str(self.binary)!r}, binary)
     with binary.open('a') as output:
         output.write('# ' + pathlib.Path('main.rs').read_text() + '\\n')
+    if mutation.exists() and mutation.read_text() == 'build':
+        pathlib.Path('main.rs').write_text('changed by build')
 """)
         mise.chmod(0o755)
         self.git("init", "-b", "main")
@@ -245,6 +254,29 @@ tools = ["rust"]
         result = self.prepare()
         self.assertIn("incremental build", result.stderr)
         self.assertEqual(self.count(), 2)
+
+    def test_setup_mutation_fails_before_compilation_with_changed_paths(self):
+        (self.root / "mutation").write_text("setup")
+        result = self.prepare(success=False)
+        self.assertIn("during toolchain setup", result.stderr)
+        self.assertIn("main.rs", result.stderr)
+        self.assertEqual(self.count(), 0)
+        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
+
+    def test_postinstall_inherits_locked_mode_without_unrelated_auto_installs(self):
+        (self.root / "mutation").write_text("postinstall")
+        self.prepare()
+        self.assertEqual(self.count(), 1)
+        self.assertFalse(self.manifest()["dirty"])
+        self.assertIn("binary cache hit", self.prepare().stderr)
+
+    def test_build_mutation_rejects_publication_with_changed_paths(self):
+        (self.root / "mutation").write_text("build")
+        result = self.prepare(success=False)
+        self.assertIn("source changed during preparation", result.stderr)
+        self.assertIn("main.rs", result.stderr)
+        self.assertEqual(self.count(), 1)
+        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
 
     def test_concurrent_preparation_builds_only_once(self):
         plan = self.root / "plan.json"

@@ -71,6 +71,8 @@ Preparation resolves refs once and builds the exact revision. Completed binaries
 
 Tool versions come from the candidate's lockfile, with the harness lockfile supplying missing tools (the handwritten port currently has no lockfile). Builds use two Cargo workers by default. Prepared binaries have content-addressed paths, so preparing a new revision preserves binaries referenced by earlier runs.
 
+Candidate toolchain hooks inherit locked mode and skip unrelated task auto-installs. Preparation checks source identity after toolchain setup, dependency preparation, and compilation; failures identify changed paths and publish no binary.
+
 Compatible intermediate Cargo, h2r extraction, and Cabal state survives between builds at stable paths. Changed inputs may invalidate an entire extraction stage; restoring a cache does not guarantee a cheap rebuild. Failed builds retain their intermediate state and publish no completed binary.
 
 CI resolves candidates, prepares them in separate jobs, and measures all three together on one runner. It caches finished binaries separately from compatible build layers and dependency downloads, and preserves partial build state when failure handling can finish. It does not cancel in-progress builds on a new benchmark push.

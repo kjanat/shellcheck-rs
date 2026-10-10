@@ -302,6 +302,19 @@ def read_manifest(directory: Path) -> Manifest:
     return manifest.model_copy(update={"binary": str(path.resolve())})
 
 
+def verify_source(build: Build, stage: str) -> None:
+    if build.source is None:
+        return
+    source = Path(build.source)
+    if source_identity(source) == (build.pin, build.dirty, build.source_sha256):
+        return
+    status = git(source, "status", "--porcelain", "--untracked-files=all")
+    raise ValueError(
+        f"{build.name}: source changed {stage}; binary was not published\n"
+        + (status or "Source fingerprint or revision differs.")
+    )
+
+
 def publish(binary: Path, build: Build, directory: Path) -> Manifest:
     directory.mkdir(parents=True, exist_ok=True)
     temp = directory / "rshellcheck.tmp"
@@ -365,6 +378,10 @@ def build_candidate(build: Build, state: Path) -> Path:
         CARGO_HOME=str(state / "dependencies/cargo"),
         CARGO_BUILD_JOBS=str(build.spec.jobs),
         MISE_EXEC_AUTO_INSTALL="false",
+        # Candidate postinstall tasks must not resolve unrelated tools or rewrite
+        # mise.lock after its contents have been recorded in the build plan.
+        MISE_LOCKED="1",
+        MISE_TASK_RUN_AUTO_INSTALL="false",
     )
     # Use the recorded recipe, rather than ambient profile/flag overrides.
     for name in list(environment):
@@ -400,6 +417,7 @@ def build_candidate(build: Build, state: Path) -> Path:
     for name in build.spec.tools:
         origin = source if source_tools.get(name) else ROOT
         run(["mise", "install", "--locked", name], origin)
+    verify_source(build, "during toolchain setup")
     execute = ["mise", "exec", *pinned, "--"]
     if "cabal" in build.spec.tools:
         cache = subprocess.run(
@@ -422,6 +440,7 @@ def build_candidate(build: Build, state: Path) -> Path:
             ],
             source / "compiler/canary",
         )
+        verify_source(build, "during dependency preparation")
     run([
         *execute,
         "cargo",
@@ -519,14 +538,7 @@ def prepare(plan: Plan, state: Path, prepared: Path, names: str = "") -> None:
                     flush=True,
                 )
                 binary = build_candidate(build, state)
-                if build.source and source_identity(Path(build.source)) != (
-                    build.pin,
-                    build.dirty,
-                    build.source_sha256,
-                ):
-                    raise ValueError(
-                        f"{name}: source changed during preparation; binary was not published"
-                    )
+                verify_source(build, "during preparation")
                 publish(binary, build, cache)
                 publish(Path(read_manifest(cache).binary), build, prepared / name)
             print(
