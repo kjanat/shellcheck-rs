@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv shellcheck" }
+        with: { install_args: "python uv github:koalaman/shellcheck" }
       - name: Prepare bench plan
         run: uv run bench prepare --resolve-only --plan .bench/plan.json
       - name: Resolve once
@@ -61,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv shellcheck" }
+        with: { install_args: "python uv github:koalaman/shellcheck" }
       - uses: actions/download-artifact@v8
         with: { name: candidate-plan, path: .bench }
       - name: Restore completed binary and provenance
