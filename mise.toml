@@ -11,19 +11,20 @@
 min_version = "2026.7.3"
 
 [tools]
-cabal  = "latest"  # Haskell build tool for the oracle (Aqua backend)
-dprint = "latest"  # formatter
-ghc    = "latest"  # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
-ghcup  = "latest"  # GHCup itself, so the compiler is reproducible
-python = "latest"  # conformance harness (rust/harness/*.py)
-tombi  = "latest"  # TOML toolkit (format/lint)
+cabal  = "latest"            # Haskell build tool for the oracle (Aqua backend)
+dprint = "latest"            # formatter
+ghc    = "latest"            # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
+ghcup  = "latest"            # GHCup itself, so the compiler is reproducible
+python = "latest"            # conformance harness (rust/harness/*.py)
+tombi  = { prefix = "1.8" }  # TOML toolkit (format/lint)
 
 [tools.rust]  # Rust port (edition 2024)
 version    = "latest"
 components = ["rustfmt", "clippy", "rust-src"]
 
 [tool_alias]
-ghc = "mise-ghcup:ghc"
+ghc    = "mise-ghcup:ghc"
+dprint = { backend = "github:kjanat/dprint" }
 
 [plugins]
 "vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
@@ -33,9 +34,9 @@ ghc = "mise-ghcup:ghc"
 experimental = true
 
 [tasks]
-[tasks.fmt]
-alias = "f"
-tools = { tombi = "latest" }
+[tasks.format]
+alias = ["f", "fmt"]
+tools = { tombi = { prefix = "1.8" } }
 run   = "dprint fmt"
 
 # --- Refactor safety net -----------------------------------------------------
@@ -63,4 +64,4 @@ run = "cargo mutants"
 
 [wrappers."rshellcheck"]
 command = "cargo"
-args    = ["shellcheck"]
+args    = ["rshellcheck"]

@@ -752,6 +752,11 @@ fn backref_warn(
     cmd: &str,
     out: &mut Out,
 ) {
+    // No earlier assignment can be referenced by this argument. In particular,
+    // avoid expanding CFG node sets for flags and the first declaration.
+    if backrefs.is_empty() {
+        return;
+    }
     // findReferences: every CFReadVariable effect on the CFG nodes of `list`.
     let mut nodes: BTreeSet<crate::cfg::Node> = BTreeSet::new();
     for t in list {

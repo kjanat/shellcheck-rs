@@ -273,6 +273,9 @@ pub(super) fn check_redirect_to_same(params: &Parameters, t: &Token, out: &mut O
             }
         }
     }
+    if all_redirs.is_empty() {
+        return;
+    }
     for stage in list {
         let mut nodes: Vec<&Token> = vec![];
         all_nodes(stage, &mut nodes);
@@ -431,9 +434,7 @@ pub(super) fn check_expansion_with_redirection(params: &Parameters, t: &Token, o
 /// Pre-order traversal of every node in `t`'s subtree (`doAnalysis` order).
 fn all_nodes<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
     out.push(t);
-    for c in t.children() {
-        all_nodes(c, out);
-    }
+    t.inner.for_each_child(|c| all_nodes(c, out));
 }
 
 /// `isParentOf parentMap ancestor child`: is `ancestor` on the path from `child`
@@ -649,13 +650,14 @@ fn ptn_command_specific_exception(name: &str, cmd: &Token) -> bool {
 }
 
 fn ptn_tree_contains(pred: fn(&Token) -> bool, t: &Token) -> bool {
-    let mut found = false;
-    t.visit_preorder(&mut |n| {
+    t.try_visit_preorder(&mut |n| {
         if pred(n) {
-            found = true;
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
         }
-    });
-    found
+    })
+    .is_break()
 }
 
 fn ptn_may_consume(t: &Token) -> bool {
@@ -764,15 +766,17 @@ fn ptn_check_pipe(
     emit_dupes: bool,
     out: &mut Out,
 ) {
-    let has_consumers = ptn_tree_contains(ptn_may_consume, stage);
-    let has_producers = ptn_tree_contains(ptn_may_produce, stage);
+    // Subtree scans are needed only for actual pipe warnings. Cache a scan
+    // shared by SC2216 and SC2259, and leave unpiped compound commands alone.
+    let has_consumers = std::cell::LazyCell::new(|| ptn_tree_contains(ptn_may_consume, stage));
+    let has_producers = std::cell::LazyCell::new(|| ptn_tree_contains(ptn_may_produce, stage));
 
     // SC2216
     if let Some(cmd) = get_command(stage)
         && let Some(name) = get_command_basename(cmd)
         && NON_READING_COMMANDS.contains(&name.as_str())
-        && !has_consumers
         && input != PipeType::NoPipe
+        && !*has_consumers
         && !ptn_command_specific_exception(&name, cmd)
     {
         let suggestion = if name == "echo" {
@@ -809,9 +813,9 @@ fn ptn_check_pipe(
 
         // inputWarning (SC2259)
         if input != PipeType::NoPipe
-            && !has_consumers
             && let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 0)
             && let Some(override_) = list.first()
+            && !*has_consumers
         {
             err(
                 out,
@@ -822,9 +826,9 @@ fn ptn_check_pipe(
         }
         // outputWarning (SC2260)
         if output == PipeType::StdoutPipe
-            && !has_producers
             && let Some((_, list)) = fd_map.iter().find(|(k, _)| *k == 1)
             && let Some(override_) = list.first()
+            && !*has_producers
         {
             err(
                 out,

@@ -1,6 +1,44 @@
 # Performance notes for the Rust port
 
-Measured facts, the fast loops, and the work packages, in that order. Numbers are from this container (slower than CI by about 2.4×); compare ratios, not absolutes.
+Measured facts, the fast loops, and the work packages, in that order. Each measurement section names its baseline and method; compare within a section rather than across machines.
+
+## 2026-10-11: lazy CFG associations and allocation-free traversal
+
+Compared with our own Rust release binary at [c0e72e70](https://github.com/kjanat/shellcheck-rs/commit/c0e72e70ce09d83193de087a3eed4e2edea3fba0). Five shuffled before/after process runs per workload, one warm-up per binary, pinned to CPU 0; full analysis, `--norc -s bash`. Times are medians. Every measured output is byte-identical, including complete GCC and JSON sweeps of pinned Omarchy [077ac1da939d](https://github.com/omacom/omarchy/commit/077ac1da939de00d061c1035e1a1d00587a119b8). These are local observations without confidence intervals; startup is effectively unchanged.
+
+| Workload                                       |     Before |             After | Speedup | Peak RSS before → after |
+| ---------------------------------------------- | ---------: | ----------------: | ------: | ----------------------: |
+| **Ordinary scripts**                           |            |                   |         |                         |
+| 2-line script                                  |    2.47 ms |       **2.45 ms** |   1.01× |           6.2 → 6.3 MiB |
+| 170-line script                                |   12.65 ms |      **11.46 ms** |   1.10× |           8.9 → 9.2 MiB |
+| 1,632-line script                              |  112.58 ms |     **103.60 ms** |   1.09× |         48.8 → 44.3 MiB |
+| 4,337-line script                              |  369.20 ms |     **307.01 ms** |   1.20× |       109.8 → 103.5 MiB |
+| 120 scripts / 9,107 lines                      |  395.85 ms |     **357.62 ms** |   1.11× |           9.6 → 9.1 MiB |
+| **Nested control flow**                        |            |                   |         |                         |
+| 200 nested if statements                       |   83.56 ms |      **15.70 ms** |   5.32× |         30.6 → 12.2 MiB |
+| 400 nested if statements                       |  356.37 ms |      **33.83 ms** |  10.53× |         98.5 → 19.2 MiB |
+| 800 nested if statements                       | 1560.40 ms | ***🏆 77.87 ms*** |  20.04× |        367.9 → 37.5 MiB |
+| **Full Omarchy corpus**                        |            |                   |         |                         |
+| All Omarchy: 1,228 files / 119,468 lines, GCC  | 4934.84 ms |    **4442.69 ms** |   1.11× |         56.3 → 56.0 MiB |
+| All Omarchy: 1,228 files / 119,468 lines, JSON | 5041.36 ms |    **4583.16 ms** |   1.10× |         56.0 → 56.0 MiB |
+
+Peak RSS is a separate isolated GNU `time` measurement per binary/workload. The raw Python `wait4` readings for small processes include a launcher-memory floor and are not used in this table. Binary size grew from 5,678,655 to 5,772,568 bytes (1.7%).
+
+Implemented:
+
+- Skip whole-subtree redirection searches when no relevant redirection exists. Pipeline producer/consumer predicates run only when a warning needs them, stop at the first match, and cache shared lookups.
+- Replace eagerly expanded ancestor/node pairs with per-token ranges over original node numbers and a shared remapping vector. `NodeAssociations::get` materializes and caches a sorted, deduplicated set only when requested. Declaration checks skip lookups until there is an earlier assignment to reference. Construction storage is linear in tokens/build visits and graph nodes; demanding sets for every ancestor could still expand quadratically.
+- Use one shared AST child-order definition for collecting, mutable, allocation-free and short-circuit visitors. Preorder, stack analysis and map-building walks no longer allocate temporary child vectors.
+
+The public `CFGResult::cf_id_to_nodes` and `CFGAnalysis::token_to_nodes` fields now use `NodeAssociations` rather than a mutable `IdMap`. The current consumers retain the same `get(&Id) -> Option<&BTreeSet<Node>>` behavior; external code constructing or mutating those fields directly must adapt. No diagnostic or CLI contract changes.
+
+Callgrind confirms the improvement is eliminated work: the 4,337-line workload drops from 1.633B to 1.308B instructions (19.9%); nesting depth 400 from 1.979B to 0.176B (91.1%); depth 800 from 7.895B to 0.455B (94.2%). Eager CFG association insertion is gone. Doubling depth now increases instructions 2.59x rather than 3.99x: the dominant quadratic paths are removed, but the complete analyzer is not claimed to be linear.
+
+Across the entire Omarchy corpus, instructions fall from 33.777B to 27.364B (19.0%), allocation calls from 65,823,020 to 51,070,285 (22.4%), and collecting AST child-list calls from 20,090,714 to 821,737 (95.9%). The remaining walks use the allocation-free visitor. Native runtime improvements are smaller than instruction reductions; they are measured separately above.
+
+Validation: 2,135 workspace tests; Clippy with warnings denied; rustfmt and dprint; 2,086 Haskell-oracle comparisons with zero divergences; 2,000 seeded fuzz inputs with zero divergences; all 4,062 behavior snapshot entries unchanged. Unit-test CFG builds compare every association against the original eager algorithm after graph collapse. Dedicated tests cover overlapping ranges, lazy caching, absent IDs, traversal order, mutable children and early stopping.
+
+Local evidence (not published artifacts): `.cache/optimize-c0e72e70/comparison.json`, `rss.json`, `*.callgrind`, `*.metrics.json`, and verification logs. The comparison driver records exact arguments, input/output hashes, binary hashes, run order and all samples. The after binary SHA-256 is `1bc5368695c5a3a9990da52c80db69a6d1a34f4fd6ac8dfa85cbc9b2f736c767`.
 
 ## Where the time goes (measured, `5d3fe06`)
 

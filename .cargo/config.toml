@@ -15,4 +15,8 @@ install-bin          = "install --path=rust/crates/shellcheck-cli --bin=rshellch
 lint                 = "clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all"
 rb                   = "run --bin"
 rbr                  = "run --release --bin"
+rshellcheck          = "rbr rshellcheck --"
 shellcheck           = "rbr rshellcheck --"
+
+[build]
+rustflags = ["-Dwarnings"]

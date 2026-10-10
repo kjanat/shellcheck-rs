@@ -37,3 +37,5 @@ target/
 /mutants.out.old/
 /compiler/
 /probe-*.py
+/.bench/
+/ports/

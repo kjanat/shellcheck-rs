@@ -449,10 +449,10 @@ fn from_shebang(shebang: &Token) -> String {
 pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
     fn go(t: &Token, parent: &mut BTreeMap<Id, Id>, id_map: &mut BTreeMap<Id, Token>) {
         id_map.insert(t.id(), t.clone());
-        for c in t.children() {
+        t.inner.for_each_child(|c| {
             parent.insert(c.id(), t.id());
             go(c, parent, id_map);
-        }
+        });
     }
     let mut parent = BTreeMap::new();
     let mut id_map = BTreeMap::new();
@@ -1301,9 +1301,7 @@ fn stack_analysis(ctx: &FlowCtx, t: &Token, out: &mut Vec<StackData>) {
         push_modified(t, out);
     }
     // recurse (doStackAnalysis)
-    for c in t.children() {
-        stack_analysis(ctx, c, out);
-    }
+    t.inner.for_each_child(|c| stack_analysis(ctx, c, out));
     // endScope
     for (b, tok, name) in get_referenced_variables(ctx, t) {
         out.push(StackData::Reference(b, tok, name));

@@ -628,7 +628,7 @@ pub enum InnerToken {
 }
 
 macro_rules! children_of {
-    ($inner:expr) => {{
+    ($inner:expr, $visit:ident) => {{
         use InnerToken::{
             T_AND_IF, T_AndIf, T_Annotation, T_Arithmetic, T_Array, T_Assignment, T_Backgrounded,
             T_Backticked, T_Bang, T_Banged, T_BatsTest, T_BraceExpansion, T_BraceGroup, T_CLOBBER,
@@ -647,7 +647,6 @@ macro_rules! children_of {
             TA_Unary, TA_Variable, TC_And, TC_Binary, TC_Empty, TC_Group, TC_Nullary, TC_Or,
             TC_Unary,
         };
-        let mut out = Vec::new();
         match $inner {
             TA_Binary { lhs, rhs, .. }
             | TA_Assignment { lhs, rhs, .. }
@@ -656,10 +655,14 @@ macro_rules! children_of {
             | TC_Or { lhs, rhs, .. }
             | T_AndIf { lhs, rhs }
             | T_OrIf { lhs, rhs } => {
-                out.push(lhs);
-                out.push(rhs);
+                $visit(lhs)?;
+                $visit(rhs)?;
             }
-            TA_Variable { indices, .. } => out.extend(indices),
+            TA_Variable { indices, .. } => {
+                for child in indices {
+                    $visit(child)?;
+                }
+            }
             TA_Expansion(l)
             | TA_Sequence(l)
             | T_Array(l)
@@ -670,7 +673,11 @@ macro_rules! children_of {
             | T_DollarExpansion(l)
             | T_DoubleQuoted(l)
             | T_NormalWord(l)
-            | T_Subshell(l) => out.extend(l),
+            | T_Subshell(l) => {
+                for child in l {
+                    $visit(child)?;
+                }
+            }
             TA_Parenthesis(t)
             | T_Arithmetic(t)
             | T_Backgrounded(t)
@@ -679,94 +686,136 @@ macro_rules! children_of {
             | T_DollarBracket(t)
             | T_HereString(t)
             | T_CoProcBody(t)
-            | T_Include(t) => out.push(t),
+            | T_Include(t) => $visit(t)?,
             TA_Trinary { cond, then, els } => {
-                out.push(cond);
-                out.push(then);
-                out.push(els);
+                $visit(cond)?;
+                $visit(then)?;
+                $visit(els)?;
             }
-            TA_Unary { operand, .. } => out.push(operand),
+            TA_Unary { operand, .. } => $visit(operand)?,
             TC_Group { token, .. }
             | TC_Nullary { token, .. }
             | TC_Unary { token, .. }
             | T_Condition { token, .. }
-            | T_Annotation { token, .. } => out.push(token),
+            | T_Annotation { token, .. } => $visit(token)?,
             T_IndexedElement { indices, value } | T_Assignment { indices, value, .. } => {
-                out.extend(indices);
-                out.push(value);
+                for child in indices {
+                    $visit(child)?;
+                }
+                $visit(value)?;
             }
             T_CaseExpression { word, cases } => {
-                out.push(word);
+                $visit(word)?;
                 for (_, pats, body) in cases {
-                    out.extend(pats);
-                    out.extend(body);
+                    for child in pats {
+                        $visit(child)?;
+                    }
+                    for child in body {
+                        $visit(child)?;
+                    }
                 }
             }
-            T_DollarBraced { op, .. } | T_IoDuplicate { op, .. } => out.push(op),
+            T_DollarBraced { op, .. } | T_IoDuplicate { op, .. } => $visit(op)?,
             T_DollarBraceCommandExpansion { list, .. }
             | T_Extglob { list, .. }
-            | T_ProcSub { list, .. } => out.extend(list),
-            T_FdRedirect { target, .. } => out.push(target),
+            | T_ProcSub { list, .. } => {
+                for child in list {
+                    $visit(child)?;
+                }
+            }
+            T_FdRedirect { target, .. } => $visit(target)?,
             T_ForArithmetic {
                 init,
                 cond,
                 step,
                 body,
             } => {
-                out.push(init);
-                out.push(cond);
-                out.push(step);
-                out.extend(body);
+                $visit(init)?;
+                $visit(cond)?;
+                $visit(step)?;
+                for child in body {
+                    $visit(child)?;
+                }
             }
             T_ForIn { items, body, .. } | T_SelectIn { items, body, .. } => {
-                out.extend(items);
-                out.extend(body);
+                for child in items {
+                    $visit(child)?;
+                }
+                for child in body {
+                    $visit(child)?;
+                }
             }
             // Haskell declares `Inner_T_CoProc (Maybe Token) t`: the name is a
             // plain `Token`, not the recursive parameter, so the derived
             // `Traversable` (and with it `analyze`) never visits it. Checks
             // therefore see nothing inside `coproc $(cmd) { ..; }`'s name.
             T_Function { body, .. } | T_CoProc { body, .. } | T_BatsTest { body, .. } => {
-                out.push(body);
+                $visit(body)?;
             }
-            T_HereDoc { body, .. } => out.extend(body),
+            T_HereDoc { body, .. } => {
+                for child in body {
+                    $visit(child)?;
+                }
+            }
             T_IfExpression { clauses, elses } => {
                 for (cond, body) in clauses {
-                    out.extend(cond);
-                    out.extend(body);
+                    for child in cond {
+                        $visit(child)?;
+                    }
+                    for child in body {
+                        $visit(child)?;
+                    }
                 }
-                out.extend(elses);
+                for child in elses {
+                    $visit(child)?;
+                }
             }
             T_IoFile { op, file } => {
-                out.push(op);
-                out.push(file);
+                $visit(op)?;
+                $visit(file)?;
             }
             T_Pipeline {
                 separators,
                 commands,
             } => {
-                out.extend(separators);
-                out.extend(commands);
+                for child in separators {
+                    $visit(child)?;
+                }
+                for child in commands {
+                    $visit(child)?;
+                }
             }
             T_Redirecting { redirs, cmd } => {
-                out.extend(redirs);
-                out.push(cmd);
+                for child in redirs {
+                    $visit(child)?;
+                }
+                $visit(cmd)?;
             }
             T_Script { shebang, commands } => {
-                out.push(shebang);
-                out.extend(commands);
+                $visit(shebang)?;
+                for child in commands {
+                    $visit(child)?;
+                }
             }
             T_SimpleCommand { assignments, words } => {
-                out.extend(assignments);
-                out.extend(words);
+                for child in assignments {
+                    $visit(child)?;
+                }
+                for child in words {
+                    $visit(child)?;
+                }
             }
             T_UntilExpression { condition, body } | T_WhileExpression { condition, body } => {
-                out.extend(condition);
-                out.extend(body);
+                for child in condition {
+                    $visit(child)?;
+                }
+                for child in body {
+                    $visit(child)?;
+                }
             }
             T_SourceCommand { includer, included } => {
-                out.push(includer);
-                out.push(included);
+                $visit(includer)?;
+                $visit(included)?;
             }
 
             // Leaves with no token children.
@@ -813,23 +862,53 @@ macro_rules! children_of {
             | T_Until
             | T_While => {}
         }
-        out
+        std::ops::ControlFlow::Continue(())
     }};
 }
 
 impl InnerToken {
+    /// Visit immediate children in traversal order without allocating a list.
+    pub fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a Token)) {
+        let _ = self.try_for_each_child(|child| {
+            visit(child);
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    }
+
+    /// Visit immediate children until the visitor breaks, without allocating.
+    pub fn try_for_each_child<'a, B>(
+        &'a self,
+        mut visit: impl FnMut(&'a Token) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        children_of!(self, visit)
+    }
+
     /// Immediate child tokens, in Haskell `Traversable` order (fields
     /// left-to-right, list elements in order). Used by pre-order traversal.
     #[must_use]
     pub fn children(&self) -> Vec<&Token> {
-        children_of!(self)
+        let mut out = Vec::new();
+        self.for_each_child(|child| out.push(child));
+        out
     }
 }
 
 impl InnerToken {
     /// Mutable immediate child tokens, in the same order as [`children`](Self::children).
     pub fn children_mut(&mut self) -> Vec<&mut Token> {
-        children_of!(self)
+        let mut out = Vec::new();
+        let _ = self.try_for_each_child_mut(|child| {
+            out.push(child);
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+        out
+    }
+
+    fn try_for_each_child_mut<'a, B>(
+        &'a mut self,
+        mut visit: impl FnMut(&'a mut Token) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        children_of!(self, visit)
     }
 }
 
@@ -843,18 +922,24 @@ impl Token {
     /// Pre-order visit (parent before children), matching `doAnalysis f`.
     pub fn visit_preorder<F: FnMut(&Self)>(&self, f: &mut F) {
         f(self);
-        for c in self.children() {
-            c.visit_preorder(f);
-        }
+        self.inner.for_each_child(|c| c.visit_preorder(f));
+    }
+
+    /// Pre-order traversal that stops immediately when the visitor breaks.
+    pub fn try_visit_preorder<B>(
+        &self,
+        visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        visit(self)?;
+        self.inner
+            .try_for_each_child(|child| child.try_visit_preorder(visit))
     }
 
     /// Stack analysis: `start` pre-order, recurse, `end` post-order —
     /// matching `doStackAnalysis`.
     pub fn visit_stack<S: FnMut(&Self), E: FnMut(&Self)>(&self, start: &mut S, end: &mut E) {
         start(self);
-        for c in self.children() {
-            c.visit_stack(start, end);
-        }
+        self.inner.for_each_child(|c| c.visit_stack(start, end));
         end(self);
     }
 }
@@ -862,6 +947,65 @@ impl Token {
 #[cfg(test)]
 mod sharing_tests {
     use super::*;
+
+    #[test]
+    fn visitors_preserve_field_order_and_stop_before_later_siblings() {
+        let leaf = |id| Token::new(Id(id), InnerToken::T_Literal(id.to_string()));
+        let mut tree = Token::new(
+            Id(0),
+            InnerToken::T_Redirecting {
+                redirs: vec![leaf(1), leaf(2)],
+                cmd: Token::new(Id(3), InnerToken::T_NormalWord(vec![leaf(4), leaf(5)])),
+            },
+        );
+        let mut ids = Vec::new();
+        tree.visit_preorder(&mut |t| ids.push(t.id()));
+        assert_eq!(ids, (0..6).map(Id).collect::<Vec<_>>());
+        ids.clear();
+        let result = tree.try_visit_preorder(&mut |t| {
+            ids.push(t.id());
+            if t.id() == Id(4) {
+                std::ops::ControlFlow::Break(42)
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+        assert_eq!(result, std::ops::ControlFlow::Break(42));
+        assert_eq!(ids, (0..5).map(Id).collect::<Vec<_>>());
+        assert_eq!(
+            tree.children().iter().map(|t| t.id()).collect::<Vec<_>>(),
+            vec![Id(1), Id(2), Id(3)]
+        );
+        let mutable_ids: Vec<_> = tree
+            .inner_mut()
+            .children_mut()
+            .iter()
+            .map(|t| t.id())
+            .collect();
+        assert_eq!(mutable_ids, vec![Id(1), Id(2), Id(3)]);
+        let events = std::cell::RefCell::new(Vec::new());
+        tree.visit_stack(
+            &mut |t| events.borrow_mut().push((true, t.id())),
+            &mut |t| events.borrow_mut().push((false, t.id())),
+        );
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                (true, Id(0)),
+                (true, Id(1)),
+                (false, Id(1)),
+                (true, Id(2)),
+                (false, Id(2)),
+                (true, Id(3)),
+                (true, Id(4)),
+                (false, Id(4)),
+                (true, Id(5)),
+                (false, Id(5)),
+                (false, Id(3)),
+                (false, Id(0)),
+            ]
+        );
+    }
 
     fn word(s: &str) -> Token {
         Token::new(

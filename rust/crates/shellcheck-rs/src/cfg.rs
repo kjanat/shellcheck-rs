@@ -26,6 +26,7 @@ use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::data::{FLAGS_FOR_MAPFILE, FLAGS_FOR_READ};
 use crate::idhash::{IdMap, IdSet};
 use crate::regex_lib::mk_regex;
+use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap};
 
 use regex::Regex;
@@ -189,6 +190,82 @@ pub struct CFGParameters {
     pub cf_pipefail: bool,
 }
 
+/// Compact token-to-node associations, expanded only when requested.
+///
+/// Building a token creates a contiguous range of original node numbers.
+/// Nested ranges share the same remapping table, avoiding one entry for every
+/// ancestor of every node. Lookups retain the old sorted, deduplicated sets.
+#[derive(Debug, Clone)]
+pub struct NodeAssociations {
+    entries: IdMap<Id, NodeRanges>,
+    remapped_nodes: Vec<Node>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NodeRanges {
+    ranges: Vec<std::ops::Range<Node>>,
+    nodes: OnceCell<BTreeSet<Node>>,
+}
+
+impl NodeAssociations {
+    fn new(ranges: Vec<(Id, std::ops::Range<Node>)>, remapped_nodes: Vec<Node>) -> Self {
+        let mut entries: IdMap<Id, NodeRanges> = IdMap::default();
+        for (id, range) in ranges {
+            if !range.is_empty() {
+                entries.entry(id).or_default().ranges.push(range);
+            }
+        }
+        Self {
+            entries,
+            remapped_nodes,
+        }
+    }
+
+    /// All graph nodes created while this token (or a descendant) was built.
+    /// Repeated lookups reuse the same sorted set after structural-node collapse.
+    #[must_use]
+    pub fn get(&self, id: &Id) -> Option<&BTreeSet<Node>> {
+        let entry = self.entries.get(id)?;
+        Some(entry.nodes.get_or_init(|| {
+            entry
+                .ranges
+                .iter()
+                .flat_map(|range| self.remapped_nodes[range.clone()].iter().copied())
+                .collect()
+        }))
+    }
+
+    /// Number of tokens with associated nodes, without expanding any sets.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether there are no tokens with associated nodes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Whether a token has associated nodes, without expanding its set.
+    #[must_use]
+    pub fn contains_key(&self, id: &Id) -> bool {
+        self.entries.contains_key(id)
+    }
+}
+
+#[cfg(test)]
+fn assert_associations_match(actual: &NodeAssociations, eager: &[(Id, Node)]) {
+    let mut expected: IdMap<Id, BTreeSet<Node>> = IdMap::default();
+    for (id, node) in eager {
+        expected.entry(*id).or_default().insert(*node);
+    }
+    assert_eq!(actual.len(), expected.len());
+    for (id, nodes) in &expected {
+        assert_eq!(actual.get(id), Some(nodes), "association for {id:?}");
+    }
+}
+
 /// The result of building a CFG (`data CFGResult`).
 #[derive(Debug, Clone)]
 pub struct CFGResult {
@@ -197,7 +274,7 @@ pub struct CFGResult {
     /// Map from Id to nominal start&end node (normal execution without exits).
     pub cf_id_to_range: IdMap<Id, (Node, Node)>,
     /// A set of all nodes belonging to an Id, recursively.
-    pub cf_id_to_nodes: IdMap<Id, BTreeSet<Node>>,
+    pub cf_id_to_nodes: NodeAssociations,
     /// Which nodes post-dominate a given node, queried through
     /// [`PostDominators::contains`].
     pub cf_post_dominators: PostDominators,
@@ -377,6 +454,7 @@ struct Ctx {
     // cfIsCondition: set by asCondition but never read (kept for fidelity).
     is_condition: bool,
     is_function: bool,
+    #[cfg(test)]
     token_stack: Vec<Id>,
     exit_target: Option<Node>,
     return_target: Option<Node>,
@@ -387,6 +465,7 @@ impl Ctx {
         Self {
             is_condition: false,
             is_function: false,
+            #[cfg(test)]
             token_stack: Vec::new(),
             exit_target: None,
             return_target: None,
@@ -406,7 +485,9 @@ struct Builder {
     nodes: Vec<(Node, CFNode)>,
     edges: Vec<(Node, Node, CFEdge)>,
     mapping: Vec<(Id, (Node, Node))>,
-    assoc: Vec<(Id, Node)>,
+    assoc: Vec<(Id, std::ops::Range<Node>)>,
+    #[cfg(test)]
+    eager_assoc: Vec<(Id, Node)>,
     ctx: Ctx,
     params: CFGParameters,
     /// The first internal error, after which the graph is discarded.
@@ -425,6 +506,8 @@ impl Builder {
             edges: Vec::new(),
             mapping: Vec::new(),
             assoc: Vec::new(),
+            #[cfg(test)]
+            eager_assoc: Vec::new(),
             ctx: Ctx::new(),
             params,
             internal_error: None,
@@ -441,8 +524,9 @@ impl Builder {
         let n = self.next;
         self.next += 1;
         self.nodes.push((n, label));
+        #[cfg(test)]
         for c in &self.ctx.token_stack {
-            self.assoc.push((*c, n));
+            self.eager_assoc.push((*c, n));
         }
         n
     }
@@ -539,6 +623,8 @@ impl Builder {
     // --- buildRoot / build / build' ---
 
     fn build_root(&mut self, t: &Token) -> Range {
+        let first_node = self.next;
+        #[cfg(test)]
         self.ctx.token_stack.push(t.id);
         let entry = self.new_node_range(CFNode::CFEntryPoint("MAIN".to_string()));
         let implied_exit = self.new_node(CFNode::CFImpliedExit);
@@ -555,13 +641,19 @@ impl Builder {
             &[start, node_to_range(implied_exit), node_to_range(end)],
         );
         self.register_node(t.id, range);
+        self.assoc.push((t.id, first_node..self.next));
+        #[cfg(test)]
         self.ctx.token_stack.pop();
         range
     }
 
     fn build(&mut self, t: &Token) -> Range {
+        let first_node = self.next;
+        #[cfg(test)]
         self.ctx.token_stack.push(t.id);
         let range = self.build_prime(t);
+        self.assoc.push((t.id, first_node..self.next));
+        #[cfg(test)]
         self.ctx.token_stack.pop();
         self.register_node(t.id, range);
         range
@@ -1684,7 +1776,14 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, Int
     if let Some(e) = builder.internal_error {
         return Err(e);
     }
-    let base: CFW = (builder.nodes, builder.edges, builder.mapping, builder.assoc);
+    let node_count = builder.next;
+    // The eager reference is retained in tests to verify every association
+    // against the original ancestor-stack algorithm after graph collapse.
+    #[cfg(test)]
+    let eager_assoc = builder.eager_assoc;
+    #[cfg(not(test))]
+    let eager_assoc = Vec::new();
+    let base: CFW = (builder.nodes, builder.edges, builder.mapping, eager_assoc);
 
     // renumberTopologically is commented out in CFG.hs; keep the same.
     let ((nodes, edges, mapping, association), recursive_remapping) =
@@ -1706,10 +1805,16 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, Int
 
     let main_exit = remap_helper(&recursive_remapping, root_range.1);
 
-    let mut id_to_nodes: IdMap<Id, BTreeSet<Node>> = IdMap::default();
-    for (id, n) in &association {
-        id_to_nodes.entry(*id).or_default().insert(*n);
-    }
+    let id_to_nodes = NodeAssociations::new(
+        builder.assoc,
+        (0..node_count)
+            .map(|n| remap_helper(&recursive_remapping, n))
+            .collect(),
+    );
+    #[cfg(test)]
+    assert_associations_match(&id_to_nodes, &association);
+    #[cfg(not(test))]
+    let _ = association;
 
     let post_dominators = find_post_dominators(main_exit, &nodes, &only_real_edges);
 
@@ -2815,6 +2920,61 @@ mod tests {
         let (main_start, main_exit) = result.cf_id_to_range[&root.id];
         assert!(result.cf_post_dominators.contains(main_start, main_exit));
         assert!(!result.cf_post_dominators.contains(main_exit, main_start));
+    }
+
+    #[test]
+    fn associations_are_lazy_and_union_remapped_overlapping_ranges() {
+        let associations = NodeAssociations::new(
+            vec![(Id(1), 1..4), (Id(1), 0..2), (Id(2), 4..6), (Id(3), 2..2)],
+            vec![0, 1, 1, 3, 3, 5],
+        );
+        assert_eq!(associations.len(), 2);
+        assert!(!associations.is_empty());
+        assert!(!associations.contains_key(&Id(3)));
+        assert!(
+            associations
+                .entries
+                .values()
+                .all(|e| e.nodes.get().is_none())
+        );
+        let first = associations.get(&Id(1)).unwrap();
+        assert_eq!(first, &BTreeSet::from([0, 1, 3]));
+        assert!(std::ptr::eq(first, associations.get(&Id(1)).unwrap()));
+        assert!(associations.entries[&Id(2)].nodes.get().is_none());
+        assert_eq!(associations.get(&Id(2)), Some(&BTreeSet::from([3, 5])));
+        assert_eq!(associations.get(&Id(99)), None);
+    }
+
+    #[test]
+    fn nested_graph_association_storage_grows_with_tokens_and_nodes() {
+        for depth in [20, 40] {
+            let script = format!(
+                "{}:\n{}",
+                "if true; then\n".repeat(depth),
+                "fi\n".repeat(depth)
+            );
+            let root = crate::parser::parse_script("nested.sh", &script)
+                .root
+                .unwrap();
+            // build_graph's test-only reference compares every lazy set with
+            // the original eager algorithm, including collapsed nodes.
+            let graph = build_graph(
+                CFGParameters {
+                    cf_lastpipe: false,
+                    cf_pipefail: false,
+                },
+                &root,
+            )
+            .unwrap();
+            let ranges: usize = graph
+                .cf_id_to_nodes
+                .entries
+                .values()
+                .map(|e| e.ranges.len())
+                .sum();
+            assert!(ranges < 10 * depth + 20);
+            assert!(graph.cf_id_to_nodes.remapped_nodes.len() < 25 * depth + 30);
+        }
     }
 
     #[test]

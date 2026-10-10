@@ -262,7 +262,7 @@ pub struct CFGAnalysis {
     /// Each token's nominal start and end node.
     pub token_to_range: IdMap<Id, (Node, Node)>,
     /// All nodes belonging to each token, recursively.
-    pub token_to_nodes: IdMap<Id, BTreeSet<Node>>,
+    pub token_to_nodes: crate::cfg::NodeAssociations,
     /// The post-dominator relation.
     pub post_dominators: crate::cfg::PostDominators,
     /// The incoming and outgoing state of each node.
