@@ -5,19 +5,26 @@ requires-python = ">=3.12"
 dependencies    = ["rshellcheck-wasm"]
 
 [dependency-groups]
-dev = [
-  "basedpyright>=1.40.2",
+dev       = [{ include-group = "lint" }, { include-group = "workspace" }]
+lint      = [
+  "basedpyright>=1.39.10,<1.40",                                           # https://github.com/microsoft/pyright/issues/11861
   "ruff>=0.17.0",
   "ty>=0.0.86",
 ]
+workspace = ["rshellcheck-release"]
 
 [tool.basedpyright]
-include               = ["bindings", "tools"]
-executionEnvironments = [
+venvPath                    = "."
+venv                        = ".venv"
+include                     = [".github/release", "bindings", "tools"]
+exclude                     = ["**/node_modules"]
+ignore                      = []
+executionEnvironments       = [
+  { root = ".github/release" },
   { root = "bindings/wasm/python" },
   { root = "tools" },
-  { root = "bindings" },
 ]
+analyzeUnannotatedFunctions = true
 
 [tool.ruff]
 cache-dir = ".venv/cache/ruff"
@@ -26,7 +33,8 @@ cache-dir = ".venv/cache/ruff"
 package = false
 
 [tool.uv.workspace]
-members = ["bindings/wasm/python"]
+members = ["bindings/wasm/python", ".github/release"]
 
 [tool.uv.sources]
-rshellcheck-wasm = { workspace = true }
+rshellcheck-wasm    = { workspace = true }
+rshellcheck-release = { workspace = true }

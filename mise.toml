@@ -11,28 +11,34 @@
 min_version = "2026.10.7"
 
 [tools]
-dprint = "latest"  # formatter
-go     = "1.27.2"
-node   = "26"
-python = "latest"  # conformance harness (rust/harness/*.py)
-tombi  = "1.8.0"   # Exact version avoids release-age range resolution failures.
+dprint         = "latest"                                          # formatter
+go             = { prefix = "1.27" }
+node           = { prefix = "26" }
+python         = "latest"                                          # conformance harness (rust/harness/*.py)
+tombi          = { prefix = "1.8" }                                # Exact version avoids release-age range resolution failures.
+uv             = { prefix = "0.13" }
+cargo-binstall = { prefix = "1.23" }
+cargo-mutants  = { prefix = "27", ddepends = ["cargo-binstall"] }
 
-[tools.rust]  # Rust port (edition 2024)
+[tools.rust]
 version    = "latest"
 components = ["rustfmt", "clippy", "rust-src"]
 
 [tool_alias]
-dprint = { backend = "github:kjanat/dprint" }
+dprint        = { backend = "github:kjanat/dprint" }
+cargo-mutants = { backend = "cargo:cargo-mutants" }
+tombi         = { backend = "github:tombi-toml/tombi" }
 
 [settings]
 # Backend plugins are experimental, so they must be enabled explicitly.
 experimental                        = true
 idiomatic_version_file_enable_tools = ["python"]
+python.uv_venv_auto                 = "source"
 
 [tasks]
 [tasks.format]
 alias = ["f", "fmt"]
-tools = { tombi = "1.8.0" }
+tools = { tombi = { prefix = "1.8" } }
 run   = "dprint fmt"
 
 # --- Refactor safety net -----------------------------------------------------
@@ -55,9 +61,10 @@ run = [
 
 [tasks.check-py]
 run = [
-  "uv run ruff check",
-  "uv run ty check",
-  "uv run basedpyright",
+  "ruff check",
+  "ty check",
+  "basedpyright",
+  "basedpyright --project .github/release",
 ]
 
 # Whether the tests would catch a behaviour change at all. Scope it to the file
@@ -68,6 +75,18 @@ run = "cargo mutants"
 [tasks.oracle]
 description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
 run         = "python tools/oracle.py"
+
+[wrappers.ruff]
+command = "uv"
+args    = ["run", "ruff"]
+
+[wrappers.ty]
+command = "uv"
+args    = ["run", "ty"]
+
+[wrappers.basedpyright]
+command = "uv"
+args    = ["run", "basedpyright"]
 
 [wrappers."rshellcheck"]
 command = "cargo"

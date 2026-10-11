@@ -7,15 +7,26 @@
 // mkdir -p .zed; curl -fsSLo .zed/settings.json https://github.com/kjanat/kjanat/raw/HEAD/.zed/settings.json
 {
 	"formatter": [
-		{
-			"external": {
-				"command": "dprint",
-				"arguments": ["fmt", "-c=.dprint.jsonc", "--stdin", "{buffer_path}"]
-			}
-		}
+		{ "language_server": { "name": "dprint" } },
+		// { "external": { "command": "dprint", "arguments": ["fmt", "--stdin", "{buffer_path}"] } }
 	],
 	"prettier": { "allowed": false },
 	"languages": { "Markdown": { "language_servers": ["!markdownlint", "!rumdl", "..."] } },
 	"file_scan_exclusions": ["**/ports", "**/.bench"],
-	"file_scan_inclusions": [".git/info/*"]
+	"file_scan_inclusions": [".git/info/*"],
+	"lsp": {
+		"dprint": {
+			"binary": {
+				"path": "mise",
+				"arguments": ["exec", "github:kjanat/dprint", "--", "dprint", "lsp"]
+			}
+		},
+		"tombi": {
+			"binary": {
+				"path": "mise",
+				"arguments": ["exec", "--quiet", "--silent", "tombi", "--", "tombi", "lsp", "-vv"],
+				"env": { "NO_COLOR": "true" },
+			}
+		},
+	}
 }

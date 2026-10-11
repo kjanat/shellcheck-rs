@@ -1,5 +1,8 @@
 #:schema https://www.schemastore.org/cargo-config.json
 
+# rustup run nightly -- rustc -Z unstable-options --print target-spec-json
+# some nice shizz
+
 # An alias is the *arguments* to cargo, so it must not start with "cargo":
 # `cargo conformance-gate` would expand to `cargo cargo run ..` and fail with
 # "no such command: cargo".

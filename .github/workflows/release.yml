@@ -10,6 +10,8 @@ on:
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "pyproject.toml"
+      - "uv.lock"
       - "crates/**"
       - "rust/**"
   workflow_dispatch:
@@ -19,7 +21,7 @@ concurrency:
   group: "release-${{ github.ref }}"
   # A new PR revision may replace an old build; a release must finish intact.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-defaults: { run: { shell: bash } }
+defaults: { run: { shell: "bash -euo pipefail {0}" } }
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
@@ -27,7 +29,7 @@ env:
 jobs:
   plan:
     name: Validate version and plan targets
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -38,27 +40,29 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
-      - uses: actions/setup-python@v7
-        with: { python-version: "3.14" }
-      - name: Test release tooling
-        run: python -m unittest discover -s .github/release -p 'test_*.py' -v
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { python-version: "3.14", version: "0.12.15" }
       - name: Resolve once
         id: plan
-        run: python .github/release/release.py plan
+        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release plan
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with: { toolchain: "${{ steps.plan.outputs.rust }}" }
+      - name: Test release tooling
+        run: uv run --locked --no-dev --package rshellcheck-release python -m unittest discover -s .github/release -p 'test_*.py' -v
 
   check:
     name: Rust tests and behavior snapshot
     needs: plan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with: { toolchain: "${{ needs.plan.outputs.rust }}" }
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -86,16 +90,16 @@ jobs:
       CROSS_VERSION: ${{ needs.plan.outputs.cross }}
       NDK_VERSION: ${{ needs.plan.outputs.ndk }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
-      - uses: actions/setup-python@v7
-        with: { python-version: "3.14" }
-      - uses: dtolnay/rust-toolchain@master
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { python-version: "3.14", version: "0.12.15" }
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
           targets: ${{ matrix.target }}
       - name: Cache Rust compilation
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -106,7 +110,7 @@ jobs:
       - name: Cache cross
         if: matrix.backend == 'cross'
         id: cross
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cargo/bin/cross
           key: release-cross-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.cross }}
@@ -117,10 +121,19 @@ jobs:
         if: matrix.backend == 'android'
         run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"'
       - name: Build and smoke-test
-        run: python .github/release/release.py build --target "${TARGET}"
+        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release build --target "${TARGET}"
+      - name: Smoke-test on FreeBSD
+        if: contains(matrix.target, 'freebsd')
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "15.1"
+          envs: TARGET
+          copyback: false
+          prepare: pkg install -y python314
+          run: python3.14 .github/release/release.py smoke --target "${TARGET}"
       - name: Package binary, license and build metadata
-        run: python .github/release/release.py pack --target "${TARGET}" --label "${LABEL}"
-      - uses: actions/upload-artifact@v7
+        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release pack --target "${TARGET}" --label "${LABEL}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: binary-${{ matrix.target }}
           path: dist/*
@@ -132,19 +145,34 @@ jobs:
   assemble:
     name: Verify complete release payload
     needs: [plan, check, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     env: { LABEL: "${{ needs.plan.outputs.label }}" }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
-      - uses: actions/setup-python@v7
-        with: { python-version: "3.13" }
-      - uses: actions/download-artifact@v8
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { python-version: "3.14", version: "0.13.0" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with: { pattern: "binary-*", path: dist, merge-multiple: true }
       - name: Check every target and add source archive and checksums
-        run: python .github/release/release.py assemble --label "${LABEL}"
-      - uses: actions/upload-artifact@v7
+        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release assemble --label "${LABEL}"
+      - name: Prepare exact released source for SBOM scanning
+        run: mkdir sbom-source;
+          tar -xzf "dist/rshellcheck-${LABEL}-source.tar.gz" -C sbom-source --strip-components=1
+      - name: Generate source dependency SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: sbom-source
+          format: spdx-json
+          syft-version: v1.54.0
+          output-file: dist/source.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+      - name: Validate SBOM and checksum the complete payload
+        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-supply-chain dist --lockfile sbom-source/Cargo.lock
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
           path: dist/*
@@ -157,23 +185,46 @@ jobs:
     name: Publish complete GitHub release
     needs: [plan, assemble]
     if: needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
-    permissions: { contents: write }
+    permissions: { contents: write, id-token: write, attestations: write }
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.plan.outputs.tag }}
       LABEL: ${{ needs.plan.outputs.label }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Verify checksums
         working-directory: dist
         run: sha256sum --check SHA256SUMS
+      - name: Sign SLSA build provenance for every payload file
+        id: provenance
+        uses: actions/attest@7d8b1cacecb65f487779b3b98fd5296a018d1a1b
+        with: { subject-path: dist/* }
+      - name: Attest the source dependency inventory
+        id: sbom
+        uses: actions/attest@7d8b1cacecb65f487779b3b98fd5296a018d1a1b
+        with:
+          subject-path: dist/rshellcheck-${{ env.LABEL }}-source.tar.gz
+          sbom-path: dist/source.spdx.json
+      - name: Verify signatures and workflow identity before publishing
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
+        run: |
+          identity=(--repo "${GH_REPO}" --signer-workflow "${GH_REPO}/.github/workflows/release.yml"
+            --source-digest "${GITHUB_SHA}" --source-ref "${GITHUB_REF}")
+          for asset in dist/*; do
+            gh attestation verify "${asset}" --bundle "${PROVENANCE_BUNDLE}" "${identity[@]}"
+          done
+          gh attestation verify "dist/rshellcheck-${LABEL}-source.tar.gz" \
+            --bundle "${SBOM_BUNDLE}" --predicate-type https://spdx.dev/Document "${identity[@]}"
+          cp "${PROVENANCE_BUNDLE}" dist/provenance.sigstore.json
+          cp "${SBOM_BUNDLE}" dist/source-sbom.sigstore.json
       - name: Upload to a draft, then publish
         run: |
-          set -euo pipefail
           # Recover an interrupted draft; never overwrite a published release.
           if gh release view "${TAG}" --json isDraft > release.json 2> release-error.txt; then
             jq -e '.isDraft == true' release.json

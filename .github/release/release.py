@@ -2,6 +2,7 @@
 """Plan, build, smoke-test and package rshellcheck without third-party Python deps."""
 
 import argparse
+import datetime
 import gzip
 import hashlib
 import io
@@ -13,64 +14,171 @@ import subprocess
 import tarfile
 import tomllib
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal, TypedDict, cast
+
+type JSON = bool | int | float | str | list[JSON] | dict[str, JSON] | None
+type TOML = (
+    bool
+    | int
+    | float
+    | str
+    | datetime.datetime
+    | datetime.date
+    | datetime.time
+    | list[TOML]
+    | dict[str, TOML]
+)
+type Triple = Literal[
+    "x86_64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-musl",
+    "i686-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "armv7-unknown-linux-musleabihf",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-freebsd",
+    "i686-unknown-freebsd",
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-linux-android",
+    "i686-linux-android",
+]
+type Backend = Literal["cargo", "cross", "android"]
+type Runner = Literal[
+    "windows-2025-vs2026",
+    "windows-11-vs2026-arm",
+    "ubuntu-26.04",
+    "macos-15-intel",
+    "macos-15",
+]
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = "rshellcheck-v"
 CROSS_VERSION = "0.2.5"
 NDK_VERSION = "30.0.16248370"
 ANDROID_API = 23
+DYNAMIC_CRT = re.compile(
+    r"((vcruntime|msvcp|msvcr)\w*|ucrtbased?|api-ms-win-crt-[\w-]+)\.dll",
+    re.IGNORECASE,
+)
 # One source of truth for the workflow matrix, archives and completeness gate.
-TARGETS = [
-    ("x86_64-pc-windows-msvc", "windows-2025", "cargo"),
-    ("i686-pc-windows-msvc", "windows-2025", "cargo"),
-    ("aarch64-pc-windows-msvc", "windows-11-arm", "cargo"),
-    ("x86_64-unknown-linux-musl", "ubuntu-24.04", "cross"),
-    ("i686-unknown-linux-musl", "ubuntu-24.04", "cross"),
-    ("aarch64-unknown-linux-musl", "ubuntu-24.04", "cross"),
-    ("armv7-unknown-linux-musleabihf", "ubuntu-24.04", "cross"),
+TARGETS: list[tuple[Triple, Runner, Backend]] = [
+    ("x86_64-pc-windows-msvc", "windows-2025-vs2026", "cargo"),
+    ("i686-pc-windows-msvc", "windows-2025-vs2026", "cargo"),
+    ("aarch64-pc-windows-msvc", "windows-11-vs2026-arm", "cargo"),
+    ("x86_64-unknown-linux-musl", "ubuntu-26.04", "cross"),
+    ("i686-unknown-linux-musl", "ubuntu-26.04", "cross"),
+    ("aarch64-unknown-linux-musl", "ubuntu-26.04", "cross"),
+    ("armv7-unknown-linux-musleabihf", "ubuntu-26.04", "cross"),
     ("x86_64-apple-darwin", "macos-15-intel", "cargo"),
     ("aarch64-apple-darwin", "macos-15", "cargo"),
-    ("x86_64-unknown-freebsd", "ubuntu-24.04", "cross"),
-    ("i686-unknown-freebsd", "ubuntu-24.04", "cross"),
-    ("aarch64-linux-android", "ubuntu-24.04", "android"),
-    ("armv7-linux-androideabi", "ubuntu-24.04", "android"),
-    ("x86_64-linux-android", "ubuntu-24.04", "android"),
-    ("i686-linux-android", "ubuntu-24.04", "android"),
+    ("x86_64-unknown-freebsd", "ubuntu-26.04", "cross"),
+    ("i686-unknown-freebsd", "ubuntu-26.04", "cross"),
+    ("aarch64-linux-android", "ubuntu-26.04", "android"),
+    ("armv7-linux-androideabi", "ubuntu-26.04", "android"),
+    ("x86_64-linux-android", "ubuntu-26.04", "android"),
+    ("i686-linux-android", "ubuntu-26.04", "android"),
 ]
 
 
-def run(*args, **kwargs):
-    return subprocess.run(args, check=True, cwd=ROOT, **kwargs)
+class Target(TypedDict):
+    target: Triple
+    runner: Runner
+    backend: Backend
 
 
-def git(*args):
-    return run("git", *args, capture_output=True, text=True).stdout.strip()
+class Matrix(TypedDict):
+    include: list[Target]
 
 
-def metadata():
-    manifests = [
-        ROOT / "crates" / crate / "Cargo.toml"
-        for crate in ("shellcheck-cli", "shellcheck-rs")
-    ]
+class Metadata(TypedDict):
+    version: str
+    commit: str
+    rust: str
+
+
+class Plan(Metadata):
+    label: str
+    tag: str
+    publish: bool
+    cross: str
+    ndk: str
+    matrix: Matrix
+
+
+class Args(argparse.Namespace):
+    command: str = ""
+    target: Triple | None = None
+    label: str | None = None
+
+
+def run(
+    *args: str,
+    capture_output: bool = False,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        check=True,
+        cwd=ROOT,
+        capture_output=capture_output,
+        text=True,
+        env=env,
+        timeout=timeout,
+    )
+
+
+def git(*args: str) -> str:
+    return run("git", *args, capture_output=True).stdout.strip()
+
+
+def toml_string(path: Path, *keys: str) -> str:
+    value = cast(TOML, tomllib.loads(path.read_text()))
+    for key in keys:
+        if not isinstance(value, dict):
+            raise TypeError(f"{path}: {key} is not inside a table")
+        value = value[key]
+    if not isinstance(value, str):
+        raise TypeError(f"{path}: {'.'.join(keys)} is not a string")
+    return value
+
+
+def unpack(fmt: str, data: bytes, offset: int = 0) -> int:
+    (value,) = cast(tuple[int], struct.unpack_from(fmt, data, offset))
+    return value
+
+
+def cargo_version() -> str:
     versions = [
-        tomllib.loads(path.read_text())["package"]["version"] for path in manifests
+        toml_string(ROOT / "crates" / crate / "Cargo.toml", "package", "version")
+        for crate in ("shellcheck-cli", "shellcheck-rs")
     ]
     if versions[0] != versions[1]:
         raise ValueError("CLI and library versions must agree")
     version = versions[0]
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version):
         raise ValueError(f"Unsupported release version: {version}")
-    toolchain = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
-        "package"
-    ]["rust-version"]
+    return version
+
+
+def metadata() -> Metadata:
+    version = cargo_version()
+    toolchain = toml_string(ROOT / "Cargo.toml", "workspace", "package", "rust-version")
     if toolchain.count(".") == 1:
         toolchain += ".0"
-    sha = git("rev-parse", "HEAD")
-    return {"version": version, "commit": sha, "rust": toolchain}
+    return Metadata(version=version, commit=git("rev-parse", "HEAD"), rust=toolchain)
 
 
-def plan(ref="", event=""):
+def target_entries() -> list[Target]:
+    return [Target(target=t, runner=r, backend=b) for t, r, b in TARGETS]
+
+
+def plan(ref: str = "", event: str = "") -> Plan:
     meta = metadata()
     publishing = event == "push" and ref.startswith("refs/tags/")
     expected = PREFIX + meta["version"]
@@ -83,77 +191,115 @@ def plan(ref="", event=""):
         if publishing
         else f"{meta['version']}-dev.{meta['commit'][:12]}"
     )
-    return {
+    return Plan(
         **meta,
-        "label": label,
-        "tag": expected,
-        "publish": publishing,
-        "cross": CROSS_VERSION,
-        "ndk": NDK_VERSION,
-        "matrix": {
-            "include": [{"target": t, "runner": r, "backend": b} for t, r, b in TARGETS]
-        },
-    }
-
-
-def target_info(target):
-    return next(
-        {"target": t, "runner": r, "backend": b} for t, r, b in TARGETS if t == target
+        label=label,
+        tag=expected,
+        publish=publishing,
+        cross=CROSS_VERSION,
+        ndk=NDK_VERSION,
+        matrix=Matrix(include=target_entries()),
     )
 
 
-def archive_name(label, target):
+def target_info(target: Triple) -> Target:
+    return next(entry for entry in target_entries() if entry["target"] == target)
+
+
+def archive_name(label: str, target: Triple) -> str:
     extension = ".zip" if "windows" in target else ".tar.gz"
     return f"rshellcheck-{label}-{target}{extension}"
 
 
-def verify_binary(data, target):
+def pe_imports(data: bytes, pe: int) -> list[str]:
+    optional = pe + 24
+    directories = optional + (112 if unpack("<H", data, optional) == 0x20B else 96)
+    if unpack("<I", data, directories - 4) < 2 or not unpack(
+        "<I", data, directories + 8
+    ):
+        return []
+    sections = optional + unpack("<H", data, pe + 20)
+
+    def offset(rva: int) -> int:
+        for header in range(sections, sections + 40 * unpack("<H", data, pe + 6), 40):
+            start = unpack("<I", data, header + 12)
+            size = max(unpack("<I", data, header + 8), unpack("<I", data, header + 16))
+            if start <= rva < start + size:
+                return rva - start + unpack("<I", data, header + 20)
+        raise ValueError(f"PE address {rva:#x} lies outside every section")
+
+    names: list[str] = []
+    descriptor = offset(unpack("<I", data, directories + 8))
+    while any(data[descriptor : descriptor + 20]):
+        name = offset(unpack("<I", data, descriptor + 12))
+        names.append(data[name : data.index(b"\0", name)].decode("ascii"))
+        descriptor += 20
+    return names
+
+
+def elf_interpreter(data: bytes, wide: bool) -> bytes | None:
+    phoff = unpack("<Q", data, 32) if wide else unpack("<I", data, 28)
+    phsize = unpack("<H", data, 54 if wide else 42)
+    phcount = unpack("<H", data, 56 if wide else 44)
+    for header in (phoff + index * phsize for index in range(phcount)):
+        if unpack("<I", data, header) == 3:
+            start = (
+                unpack("<Q", data, header + 8)
+                if wide
+                else unpack("<I", data, header + 4)
+            )
+            size = (
+                unpack("<Q", data, header + 32)
+                if wide
+                else unpack("<I", data, header + 16)
+            )
+            return data[start : start + size].rstrip(b"\0")
+    return None
+
+
+def verify_binary(data: bytes, target: Triple) -> None:
     """Reject host binaries accidentally packaged under a cross-target filename."""
-    arch = target.split("-")[0]
+    arch = target.split("-", 1)[0]
+    wide = arch in ("x86_64", "aarch64")
     if "windows" in target:
-        if data[:2] != b"MZ":
-            raise ValueError("Expected PE executable")
-        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        pe = unpack("<I", data, 0x3C)
         machine = {"x86_64": 0x8664, "i686": 0x14C, "aarch64": 0xAA64}[arch]
-        valid = (
-            data[pe : pe + 4] == b"PE\0\0"
-            and struct.unpack_from("<H", data, pe + 4)[0] == machine
-        )
+        if (
+            data[:2] != b"MZ"
+            or data[pe : pe + 4] != b"PE\0\0"
+            or unpack("<H", data, pe + 4) != machine
+            or unpack("<H", data, pe + 24) != (0x20B if wide else 0x10B)
+        ):
+            raise ValueError(f"Binary is not a {target} PE executable")
+        if dynamic := [n for n in pe_imports(data, pe) if DYNAMIC_CRT.fullmatch(n)]:
+            raise ValueError(
+                f"{target} binary imports the dynamic C runtime: {dynamic}"
+            )
     elif "darwin" in target:
         machine = {"x86_64": 0x1000007, "aarch64": 0x100000C}[arch]
-        valid = struct.unpack_from("<II", data) == (0xFEEDFACF, machine)
+        if unpack("<I", data) != 0xFEEDFACF or unpack("<I", data, 4) != machine:
+            raise ValueError(f"Binary is not a {target} Mach-O executable")
     else:
         machine = {"x86_64": 62, "i686": 3, "aarch64": 183, "armv7": 40}[arch]
-        bits = 2 if arch in ("x86_64", "aarch64") else 1
-        valid = (
-            data[:6] == b"\x7fELF" + bytes([bits, 1])
-            and struct.unpack_from("<H", data, 18)[0] == machine
-        )
-        valid = valid and (data[7] == 9 if "freebsd" in target else data[7] in (0, 3))
-        if valid and "musl" in target:
-            # Static binaries must not depend on a host ELF interpreter.
-            offset, size, count = (28, 42, 44) if bits == 1 else (32, 54, 56)
-            phoff = struct.unpack_from("<I" if bits == 1 else "<Q", data, offset)[0]
-            phsize, phcount = (
-                struct.unpack_from("<H", data, size)[0],
-                struct.unpack_from("<H", data, count)[0],
-            )
-            valid = all(
-                struct.unpack_from("<I", data, phoff + i * phsize)[0] != 3
-                for i in range(phcount)
-            )
-    if not valid:
-        raise ValueError(
-            f"Binary does not match {target} (or musl binary is not static)"
-        )
+        if (
+            data[:6] != b"\x7fELF" + bytes([2 if wide else 1, 1])
+            or unpack("<H", data, 18) != machine
+            or data[7] not in ((9,) if "freebsd" in target else (0, 3))
+        ):
+            raise ValueError(f"Binary is not a {target} ELF executable")
+        interpreter = elf_interpreter(data, wide)
+        # Static binaries must not depend on a host ELF interpreter.
+        if "musl" in target and interpreter is not None:
+            raise ValueError(f"{target} binary is not static: {interpreter!r}")
+        linker = b"/system/bin/linker64" if wide else b"/system/bin/linker"
+        if "android" in target and interpreter != linker:
+            raise ValueError(f"{target} binary needs {linker!r}, has {interpreter!r}")
 
 
-def smoke(command, version):
+def smoke(command: list[str], version: str) -> None:
     env = os.environ.copy()
-    env.pop("SHELLCHECK_OPTS", None)
-    banner = run(
-        *command, "--version", capture_output=True, text=True, env=env, timeout=60
-    ).stdout
+    _ = env.pop("SHELLCHECK_OPTS", None)
+    banner = run(*command, "--version", capture_output=True, env=env, timeout=60).stdout
     if f"version: {version}\n" not in banner:
         raise ValueError("Binary version differs from Cargo version")
     for script, status in [
@@ -174,16 +320,18 @@ def smoke(command, version):
         if result.returncode != status or result.stderr:
             raise ValueError(
                 f"Smoke test failed: expected {status}, got {result.returncode}; "
-                f"stdout={result.stdout!r}; stderr={result.stderr!r}"
+                + f"stdout={result.stdout!r}; stderr={result.stderr!r}"
             )
-        comments = json.loads(result.stdout)["comments"]
-        if (status == 0 and comments) or (
-            status == 1 and not any(c["code"] == 2086 for c in comments)
-        ):
+        report = cast(JSON, json.loads(result.stdout))
+        comments = report.get("comments") if isinstance(report, dict) else None
+        if not isinstance(comments, list):
+            raise TypeError("Smoke output lacks a comments array")
+        codes = [c.get("code") for c in comments if isinstance(c, dict)]
+        if (status == 0 and comments) or (status == 1 and 2086 not in codes):
             raise ValueError("Smoke diagnostic mismatch")
 
 
-def build(target):
+def build(target: Triple) -> None:
     backend = target_info(target)["backend"]
     env = os.environ.copy()
     if backend == "cross":
@@ -205,7 +353,7 @@ def build(target):
     if "darwin" in target:
         env["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
     tool = "cross" if backend == "cross" else "cargo"
-    run(
+    _ = run(
         tool,
         "build",
         "--release",
@@ -218,45 +366,57 @@ def build(target):
         target,
         env=env,
     )
-    binary = (
-        ROOT
-        / "target"
-        / target
-        / "release"
-        / ("rshellcheck.exe" if "windows" in target else "rshellcheck")
-    )
+    binary = built_binary(target)
     verify_binary(binary.read_bytes(), target)
     if backend == "cargo" or target in (
         "x86_64-unknown-linux-musl",
         "i686-unknown-linux-musl",
     ):
-        smoke([str(binary)], metadata()["version"])
+        smoke([str(binary)], cargo_version())
     # Invoke QEMU directly: old cross runners can drop CLI arguments on new Cargo.
     elif "musl" in target:
-        smoke(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--interactive",
-                "--volume",
-                f"{binary.parent}:/work:ro",
-                "--entrypoint",
-                "/usr/local/bin/qemu-aarch64"
-                if target.startswith("aarch64")
-                else "/usr/local/bin/qemu-arm",
-                f"ghcr.io/cross-rs/{target}:{CROSS_VERSION}",
-                "/work/rshellcheck",
-            ],
-            metadata()["version"],
-        )
+        qemu = "qemu-aarch64" if target.startswith("aarch64") else "qemu-arm"
+        smoke(emulated(target, binary, f"/usr/local/bin/{qemu}"), cargo_version())
+    elif backend == "android":
+        arch = {
+            "aarch64": "aarch64",
+            "armv7": "arm",
+            "x86_64": "x86_64",
+            "i686": "i686",
+        }
+        runner = arch[target.split("-", 1)[0]]
+        smoke(emulated(target, binary, "/android-runner", runner), cargo_version())
 
 
-def pack(target, label, binary=None, dest=None):
+def built_binary(target: Triple) -> Path:
+    name = "rshellcheck.exe" if "windows" in target else "rshellcheck"
+    return ROOT / "target" / target / "release" / name
+
+
+def emulated(target: Triple, binary: Path, entrypoint: str, *args: str) -> list[str]:
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--interactive",
+        # 32-bit bionic calls personality(2), which Docker's seccomp profile denies.
+        "--security-opt",
+        "seccomp=unconfined",
+        "--volume",
+        f"{binary.parent}:/work:ro",
+        "--entrypoint",
+        entrypoint,
+        f"ghcr.io/cross-rs/{target}:{CROSS_VERSION}",
+        *args,
+        "/work/rshellcheck",
+    ]
+
+
+def pack(
+    target: Triple, label: str, binary: Path | None = None, dest: Path | None = None
+) -> Path:
     meta = metadata()
-    binary = binary or ROOT / "target" / target / "release" / (
-        "rshellcheck.exe" if "windows" in target else "rshellcheck"
-    )
+    binary = binary or built_binary(target)
     dest = dest or ROOT / "dist"
     data = binary.read_bytes()
     verify_binary(data, target)
@@ -269,7 +429,7 @@ def pack(target, label, binary=None, dest=None):
         "(../workflows/release.yml)", f"({source_url}/workflows/release.yml)"
     )
     readme = readme.replace("(release.py)", f"({source_url}/release/release.py)")
-    files = {
+    files: dict[str, tuple[bytes, int]] = {
         binary.name: (data, 0o755),
         "LICENSE.txt": ((ROOT / "LICENSE").read_bytes(), 0o644),
         "README.md": (readme.encode(), 0o644),
@@ -314,14 +474,14 @@ def pack(target, label, binary=None, dest=None):
     return archive
 
 
-def read_member(archive, name):
+def read_member(archive: tarfile.TarFile, name: str) -> bytes:
     file = archive.extractfile(name)
     if file is None:
         raise ValueError(f"{name} is not a regular file")
     return file.read()
 
 
-def assemble(label, dest=None):
+def assemble(label: str, dest: Path | None = None) -> list[str]:
     """Check every target and source identity before making the release payload."""
     dest = dest or ROOT / "dist"
     meta = metadata()
@@ -337,12 +497,15 @@ def assemble(label, dest=None):
         binary = "rshellcheck.exe" if "windows" in target else "rshellcheck"
         if archive.suffix == ".zip":
             with zipfile.ZipFile(archive) as source:
-                build_meta = json.loads(source.read(prefix + "BUILD.json"))
+                build_json = source.read(prefix + "BUILD.json")
                 data = source.read(prefix + binary)
         else:
             with tarfile.open(archive) as source:
-                build_meta = json.loads(read_member(source, prefix + "BUILD.json"))
+                build_json = read_member(source, prefix + "BUILD.json")
                 data = read_member(source, prefix + binary)
+        build_meta = cast(JSON, json.loads(build_json))
+        if not isinstance(build_meta, dict):
+            raise TypeError(f"{archive.name}: BUILD.json is not an object")
         for key, value in {
             **meta,
             "label": label,
@@ -353,7 +516,7 @@ def assemble(label, dest=None):
                 raise ValueError(f"{archive.name}: mismatched {key}")
         verify_binary(data, target)
     source = dest / f"rshellcheck-{label}-source.tar.gz"
-    run(
+    _ = run(
         "git",
         "archive",
         "--format=tar.gz",
@@ -366,16 +529,18 @@ def assemble(label, dest=None):
         f"{hashlib.sha256((dest / name).read_bytes()).hexdigest()}  {name}\n"
         for name in assets
     )
-    (dest / "SHA256SUMS").write_text(checksums, encoding="utf-8")
+    _ = (dest / "SHA256SUMS").write_text(checksums, encoding="utf-8")
     return assets
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "build", "pack", "assemble"])
-    parser.add_argument("--target", choices=[t for t, _, _ in TARGETS])
-    parser.add_argument("--label")
-    args = parser.parse_args()
+    _ = parser.add_argument(
+        "command", choices=["plan", "build", "smoke", "pack", "assemble"]
+    )
+    _ = parser.add_argument("--target", choices=[t for t, _, _ in TARGETS])
+    _ = parser.add_argument("--label")
+    args = parser.parse_args(namespace=Args())
     if args.command == "plan":
         result = plan(
             os.environ.get("GITHUB_REF", ""), os.environ.get("GITHUB_EVENT_NAME", "")
@@ -389,13 +554,18 @@ def main():
                 )
     elif args.command == "build" and args.target:
         build(args.target)
+    elif args.command == "smoke" and args.target:
+        binary = built_binary(args.target)
+        verify_binary(binary.read_bytes(), args.target)
+        smoke([str(binary)], cargo_version())
     elif args.command == "pack" and args.target and args.label:
-        pack(args.target, args.label)
+        _ = pack(args.target, args.label)
     elif args.command == "assemble" and args.label:
-        assemble(args.label)
+        _ = assemble(args.label)
     else:
         parser.error(
-            "build needs --target; pack needs --target and --label; assemble needs --label"
+            "build and smoke need --target; pack needs --target and --label; "
+            + "assemble needs --label"
         )
 
 

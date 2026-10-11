@@ -7,8 +7,10 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from typing import cast
 
 import release
+from release import JSON
 
 FAKE_GH = """#!/usr/bin/env python3
 import json, os, sys
@@ -39,8 +41,23 @@ elif command == "upload" and scenario == "upload-failure":
 """
 
 
+def read_calls(log: Path) -> list[list[str]]:
+    calls: list[list[str]] = []
+    for line in log.read_text().splitlines():
+        call = cast(JSON, json.loads(line))
+        if not isinstance(call, list):
+            raise TypeError(f"{log}: {line} is not a JSON array")
+        args = [arg for arg in call if isinstance(arg, str)]
+        if len(args) != len(call):
+            raise TypeError(f"{log}: {line} has non-string arguments")
+        calls.append(args)
+    return calls
+
+
 class PublicationTests(unittest.TestCase):
-    def invoke(self, scenario):
+    def invoke(
+        self, scenario: str
+    ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
         workflow = (release.ROOT / ".github/workflows/release.yml").read_text()
         script = textwrap.dedent(
             workflow.split(
@@ -49,11 +66,11 @@ class PublicationTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            (root / "gh").write_text(FAKE_GH)
+            _ = (root / "gh").write_text(FAKE_GH)
             (root / "gh").chmod(0o755)
             (root / "dist").mkdir()
-            (root / "dist/archive.tar.gz").write_bytes(b"archive")
-            (root / "dist/SHA256SUMS").write_text("test fixture")
+            _ = (root / "dist/archive.tar.gz").write_bytes(b"archive")
+            _ = (root / "dist/SHA256SUMS").write_text("test fixture")
             env = {
                 **os.environ,
                 "PATH": str(root) + os.pathsep + os.environ["PATH"],
@@ -62,7 +79,7 @@ class PublicationTests(unittest.TestCase):
                 "LABEL": "0.11.0-rc.1" if scenario == "prerelease" else "0.11.0",
             }
             result = subprocess.run(
-                ["bash", "-c", script],
+                ["bash", "-euo", "pipefail", "-c", script],
                 cwd=root,
                 env=env,
                 capture_output=True,
@@ -70,11 +87,7 @@ class PublicationTests(unittest.TestCase):
                 check=False,
                 timeout=15,
             )
-            calls = [
-                json.loads(line)
-                for line in (root / "calls.jsonl").read_text().splitlines()
-            ]
-            return result, calls
+            return result, read_calls(root / "calls.jsonl")
 
     def test_new_release_uploads_and_verifies_before_publication(self):
         result, calls = self.invoke("new")
@@ -118,4 +131,4 @@ class PublicationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _ = unittest.main()

@@ -1,0 +1,23 @@
+[project]
+name            = "rshellcheck-release"
+version         = "0.0.0"
+description     = "Internal rshellcheck release tooling; run from the repository workspace"
+requires-python = ">=3.12"
+license         = "GPL-3.0-or-later"
+classifiers     = ["Private :: Do Not Upload"]
+dependencies    = []
+
+[project.scripts]
+rshellcheck-release      = "release:main"
+rshellcheck-supply-chain = "supply_chain:main"
+
+[build-system]
+requires      = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool]
+pyright               = { include = ["."], extends = "../../pyproject.toml" }
+# Match the Python version used by the release workflow and editor tooling.
+ruff                  = { extend = "../../pyproject.toml", target-version = "py314" }
+setuptools            = { py-modules = ["release", "supply_chain"] }
+ty.environment.python = "../../.venv"

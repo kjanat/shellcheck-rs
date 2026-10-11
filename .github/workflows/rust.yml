@@ -23,7 +23,7 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    steps: [uses: &CO actions/checkout@v7, uses: kjanat/actionlint@v1]
+    steps: [uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1, uses: kjanat/actionlint@722799fa4b8cc6734debb97bae24aca9e0dbaf59]
 
   lint:
     name: "Format, clippy, workflows"
@@ -36,10 +36,10 @@ jobs:
         uses: *CO
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@v5.1.1
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
 
       - name: Check formatting
-        uses: kjanat/dprint-check@v3.1
+        uses: kjanat/dprint-check@29c42153a7346f4d7315883ff7722cfe22cd510c # v3.1
 
       - name: Clippy
         run: cargo lint
@@ -56,10 +56,10 @@ jobs:
 
       - name: Install Rust stable
         id: rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Cache cargo
-        uses: &CA actions/cache@v6
+        uses: &CA actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         env: { CACHE_PREFIX: "${{ format('{0}-{1}-cargo-{2}', runner.os, runner.arch, steps.rust.outputs.cachekey) }}" }
         with:
           path: |
@@ -90,7 +90,7 @@ jobs:
       - name: Setup Haskell
         if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
         id: haskell
-        uses: haskell-actions/setup@v2
+        uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2
         with: { ghc-version: "${{ env.ghc-version }}" }
 
       - name: Cache Haskell build

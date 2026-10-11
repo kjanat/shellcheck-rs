@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import wasmtime
+
 from rshellcheck_wasm import JSON, Checker
 
 ROOT = Path(__file__).resolve().parents[3]

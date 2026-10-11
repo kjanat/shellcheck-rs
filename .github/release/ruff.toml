@@ -1,2 +1,0 @@
-# Match the Python version used by the release workflow and editor tooling.
-target-version = "py314"
