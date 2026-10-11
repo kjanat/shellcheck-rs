@@ -39,3 +39,8 @@ target/
 /probe-*.py
 /.bench/
 /ports/
+
+# Node and Python workspace dependencies.
+node_modules/
+.venv/
+__pycache__/

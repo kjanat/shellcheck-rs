@@ -120,15 +120,27 @@ Each instance permits one request at a time; do not retain pointers between call
 Never reuse an instance after a trap. The ABI export attributes are the adapter's
 only unsafe-code lint exception; the core's unsafe-code prohibition is unchanged.
 
+## Workspace setup
+
+Development uses Node 26, Go 1.27.2 and Python 3.14 (`mise install`).
+The Python pin also selects 3.14 for uv. Library minimum versions remain separate.
+
+Run `uv sync --locked` and `npm ci --include=dev` from the repository root.
+The Python binding is installed editably into the root `.venv`; select
+`.venv/bin/python` in your editor (Windows: `.venv/Scripts/python.exe`).
+Both ecosystems share root lockfiles, while binding packages retain their own
+metadata. Run Python commands with `uv run` from the root or a workspace member.
+
 ## Validation
 
 ```sh
 cargo build --release -p shellcheck-wasm --example check
 python bindings/wasm/fixtures.py
-node bindings/wasm/js/test.mjs
-uv run --locked --project bindings/wasm/python python -m unittest discover -s bindings/wasm/python -v
+npm run test:wasm
+uv run --locked python -m unittest discover -s bindings/wasm/python -v
 (cd bindings/wasm/go && go test -race ./...)
-(cd bindings/wasm/js && npm ci --include=dev && npx playwright install chromium && npx playwright test browser.spec.mjs)
+npm run install:browser --workspace=@kjanat/rshellcheck-wasm
+npm run test:browser
 ```
 
 The same 26 cases are compared with the native core in Go, Python, Node and a real

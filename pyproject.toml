@@ -1,0 +1,14 @@
+[project]
+name            = "shellcheck-rs-workspace"
+version         = "0.0.0"
+requires-python = ">=3.10"
+dependencies    = ["rshellcheck-wasm"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["bindings/wasm/python"]
+
+[tool.uv.sources]
+rshellcheck-wasm = { workspace = true }

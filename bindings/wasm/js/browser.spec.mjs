@@ -2,9 +2,10 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 test('browser worker agrees with native core', async ({ page }) => {
-	const root = path.resolve('../../..');
+	const root = fileURLToPath(new URL('../../../', import.meta.url));
 	const server = createServer(async (req, res) => {
 		const paths = {
 			'/': 'bindings/wasm/js/test.html',
