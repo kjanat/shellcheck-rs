@@ -76,7 +76,7 @@ pub struct RunConfig {
     pub color: ColorOption,
     /// Max wiki link count from `-W`/`--wiki-link-count` (defaults to 3), used by tty wiki summary.
     pub wiki_link_count: usize,
-    /// Maximum file-analysis workers (default 1; quiet mode stays sequential).
+    /// Maximum file-analysis workers (default: available CPUs, capped at 4).
     pub jobs: usize,
     /// Explicit config path from `--rcfile <path>`. When `None`, standard `.shellcheckrc` discovery applies.
     pub rcfile: Option<String>,
@@ -166,7 +166,7 @@ const OPTS: &[OptDef] = &[
         key: "jobs",
         kind: ArgKind::Required,
         arg: "N",
-        help: "Analyze files with N workers (default 1; quiet stays sequential)",
+        help: "Analyze files with N workers (default: up to 4 CPUs; quiet stays sequential)",
     },
     OptDef {
         short: None,
@@ -686,7 +686,9 @@ impl Folded {
             format: None,
             color: ColorOption::ColorAuto,
             wiki_link_count: 3,
-            jobs: 1,
+            jobs: std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .min(4),
             rcfile: None,
             source_paths: Vec::new(),
             external_sources: false,
@@ -981,6 +983,20 @@ mod tests {
     /// `parse` in a directory with no files in it.
     fn parse(argv: &[String]) -> Outcome {
         super::parse(argv, &|_| false)
+    }
+
+    #[test]
+    fn worker_defaults_and_explicit_overrides() {
+        let expected = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(4);
+        assert_eq!(run(&["script.sh"]).jobs, expected);
+        for flags in [vec!["-j1"], vec!["-j", "1"], vec!["--jobs", "1"]] {
+            let mut argv = flags;
+            argv.push("script.sh");
+            assert_eq!(run(&argv).jobs, 1);
+        }
+        assert_eq!(run(&["-j8", "script.sh"]).jobs, 8);
     }
 
     #[test]

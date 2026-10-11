@@ -22,10 +22,15 @@ impl Fixture {
             .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
     }
     fn run(&self, jobs: &str, args: &[&str], stdin: &str) -> Output {
+        let worker_args = if jobs.is_empty() {
+            vec![]
+        } else {
+            vec!["--jobs", jobs]
+        };
         let mut child = Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
             .current_dir(&self.0)
             .env_remove("SHELLCHECK_OPTS")
-            .args(["--jobs", jobs])
+            .args(worker_args)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -44,10 +49,12 @@ impl Fixture {
     }
     fn compare(&self, args: &[&str], stdin: &str) -> Output {
         let serial = self.run("1", args, stdin);
-        let parallel = self.run("4", args, stdin);
-        assert_eq!(serial.status, parallel.status, "{args:?}");
-        assert_eq!(serial.stdout, parallel.stdout, "{args:?}");
-        assert_eq!(serial.stderr, parallel.stderr, "{args:?}");
+        for jobs in ["4", ""] {
+            let parallel = self.run(jobs, args, stdin);
+            assert_eq!(serial.status, parallel.status, "{jobs}: {args:?}");
+            assert_eq!(serial.stdout, parallel.stdout, "{jobs}: {args:?}");
+            assert_eq!(serial.stderr, parallel.stderr, "{jobs}: {args:?}");
+        }
         serial
     }
 }

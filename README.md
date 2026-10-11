@@ -59,6 +59,11 @@ Paste a shell script on <https://www.shellcheck.net> for instant feedback.
 
 Run `shellcheck yourscript` in your terminal for instant output, as seen above.
 
+When checking multiple regular files, `rshellcheck` uses up to four available CPUs
+by default. Set `-j N` (or `--jobs N`) to choose the worker count; `-j 1`
+forces serial analysis. Quiet mode and invocations containing non-regular inputs
+remain serial. Diagnostics retain input order. More workers can increase peak memory.
+
 ### In your editor
 
 You can see ShellCheck suggestions directly in a variety of editors.
