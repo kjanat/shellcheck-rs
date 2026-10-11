@@ -1,6 +1,6 @@
 [![Rust conformance](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml)
 
-# rshellcheck — ShellCheck in Rust
+# rshellcheck — [ShellCheck](https://github.com/koalaman/shellcheck "koalaman/shellcheck") in Rust
 
 ShellCheck is a GPLv3 tool that gives warnings and suggestions for bash/sh shell scripts:
 
@@ -132,73 +132,95 @@ GCC compatible warnings as well as human readable text (with or without ANSI col
 
 The easiest way to install ShellCheck locally is through your package manager.
 
-To install this Rust port from the checkout:
+To install this Rust port from git:
 
 ```sh
-cargo install --locked --path crates/shellcheck-cli --bin rshellcheck
+cargo install --locked --git 'https://github.com/kjanat/shellcheck-rs' 'shellcheck-cli' --bin 'rshellcheck' [--branch rust-port|master]
 ```
 
 The other installation methods below describe the original upstream ShellCheck.
 
 On Debian based distros:
 
-    sudo apt install shellcheck
+```sh
+sudo apt install shellcheck
+```
 
 On Arch Linux based distros:
 
-    pacman -S shellcheck
+```sh
+pacman -S shellcheck
+```
 
 or get the dependency free [shellcheck-bin](https://aur.archlinux.org/packages/shellcheck-bin/) from the AUR.
 
 On Gentoo based distros:
 
-    emerge --ask shellcheck
+```sh
+emerge --ask shellcheck
+```
 
 On EPEL based distros:
 
-    sudo yum -y install epel-release
-    sudo yum install ShellCheck
+```sh
+sudo yum -y install epel-release
+sudo yum install ShellCheck
+```
 
 On Fedora based distros:
 
-    dnf install ShellCheck
+```sh
+dnf install ShellCheck
+```
 
 On FreeBSD:
 
-    pkg install hs-ShellCheck
+```sh
+pkg install hs-ShellCheck
+```
 
 On macOS (OS X) with Homebrew:
 
-    brew install shellcheck
+```sh
+brew install shellcheck
+```
 
 Or with MacPorts:
 
-    sudo port install shellcheck
+```sh
+sudo port install shellcheck
+```
 
 On OpenBSD:
 
-    pkg_add shellcheck
+```sh
+pkg_add shellcheck
+```
 
 On openSUSE
 
-    zypper in ShellCheck
+```sh
+zypper in ShellCheck
+```
 
 Or use OneClickInstall - <https://software.opensuse.org/package/ShellCheck>
 
 On Solus:
 
-    eopkg install shellcheck
+```sh
+eopkg install shellcheck
+```
 
 On Windows (via [chocolatey](https://chocolatey.org/packages/shellcheck)):
 
-```cmd
-C:\> choco install shellcheck
+```ps1
+choco install shellcheck
 ```
 
 Or Windows (via [winget](https://github.com/microsoft/winget-pkgs)):
 
-```cmd
-C:\> winget install --id koalaman.shellcheck
+```ps1
+winget install --id koalaman.shellcheck
 ```
 
 Or Windows (via [scoop](http://scoop.sh)):
@@ -209,11 +231,15 @@ C:\> scoop install shellcheck
 
 From [conda-forge](https://anaconda.org/conda-forge/shellcheck):
 
-    conda install -c conda-forge shellcheck
+```sh
+conda install -c conda-forge shellcheck
+```
 
 From Snap Store:
 
-    snap install --channel=edge shellcheck
+```sh
+snap install --channel=edge shellcheck
+```
 
 From Docker Hub:
 
@@ -253,7 +279,7 @@ There are currently no official binaries for Apple Silicon, but third party buil
 
 Distro packages already come with a `man` page. If you are building from source, it can be installed with:
 
-```console
+```sh
 pandoc -s -f markdown-smart -t man shellcheck.1.md -o shellcheck.1
 sudo mv shellcheck.1 /usr/share/man/man1
 ```
@@ -262,13 +288,13 @@ sudo mv shellcheck.1 /usr/share/man/man1
 
 To run ShellCheck via [pre-commit](https://pre-commit.com/), add the hook to your `.pre-commit-config.yaml`:
 
-```
+```yaml
 repos:
--   repo: https://github.com/koalaman/shellcheck-precommit
+  - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
     hooks:
-    -   id: shellcheck
-#       args: ["--severity=warning"]  # Optionally only show errors and warnings
+      - id: shellcheck
+        # args: ["--severity=warning"]  # Optionally only show errors and warnings
 ```
 
 ### Travis CI
@@ -280,8 +306,7 @@ using the latest release, follow the steps below to install a binary version.
 
 ### Installing a pre-compiled binary
 
-The pre-compiled binaries come in `tar.xz` files. To decompress them, make sure
-`xz` is installed.
+The pre-compiled binaries come in `tar.xz` files. To decompress them, make sure `xz` is installed.
 On Debian/Ubuntu/Mint, you can `apt install xz-utils`.
 On Redhat/Fedora/CentOS, `yum -y install xz`.
 
