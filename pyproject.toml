@@ -1,8 +1,26 @@
 [project]
 name            = "shellcheck-rs-workspace"
 version         = "0.0.0"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies    = ["rshellcheck-wasm"]
+
+[dependency-groups]
+dev = [
+  "basedpyright>=1.40.2",
+  "ruff>=0.17.0",
+  "ty>=0.0.86",
+]
+
+[tool.basedpyright]
+include               = ["bindings", "tools"]
+executionEnvironments = [
+  { root = "bindings/wasm/python" },
+  { root = "tools" },
+  { root = "bindings" },
+]
+
+[tool.ruff]
+cache-dir = ".venv/cache/ruff"
 
 [tool.uv]
 package = false

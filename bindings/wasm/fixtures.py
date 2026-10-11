@@ -3,9 +3,15 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import cast
 
+type JSON = bool | int | float | str | list[JSON] | dict[str, JSON] | None
 ROOT = Path(__file__).resolve().parents[2]
-requests = [
+shell_requests: list[dict[str, JSON]] = [
+    {"script": "echo $x; [[ -n $x ]]", "shell": shell}
+    for shell in ("sh", "bash", "dash", "ksh", "busybox")
+]
+requests: list[dict[str, JSON]] = [
     {"script": "#!/bin/sh\nprintf '%s\\n' hello\n"},
     {"script": "#!/bin/sh\necho $value\n"},
     {"script": "#!/bin/bash\necho café\n\techo $value\n", "filename": "脚本.sh"},
@@ -35,16 +41,13 @@ requests = [
     },
     {"script": "#" + "x" * 200_000 + "\ntrue\n", "shell": "sh"},
     {"script": "#!/bin/sh\ntrue\n"},
-    *(
-        {"script": "echo $x; [[ -n $x ]]", "shell": shell}
-        for shell in ("sh", "bash", "dash", "ksh", "busybox")
-    ),
+    *shell_requests,
     {"script": "true", "shell": "invalid"},
     {"script": "true", "unexpected": True},
     {"script": "true", "severity": "invalid"},
     {},
 ]
-fixtures = []
+fixtures: list[JSON] = []
 for request in requests:
     result = subprocess.run(
         [str(ROOT / "target/release/examples/check")],
@@ -53,8 +56,9 @@ for request in requests:
         capture_output=True,
         check=True,
     )
-    fixtures.append({"request": request, "result": json.loads(result.stdout)})
+    output = cast(JSON, json.loads(result.stdout))
+    fixtures.append({"request": request, "result": output})
 out = ROOT / ".cache/wasm-parity.json"
 out.parent.mkdir(exist_ok=True)
-out.write_text(json.dumps(fixtures), encoding="utf-8")
+_ = out.write_text(json.dumps(fixtures), encoding="utf-8")
 print(f"Wrote {len(fixtures)} native parity cases to {out}")

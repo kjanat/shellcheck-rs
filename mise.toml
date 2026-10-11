@@ -1,3 +1,4 @@
+#:tombi toml-version = "v1.1.0"
 # Project toolchain, managed by mise (https://mise.jdx.dev).
 #
 # Unpinned tools track "latest"; mise.lock records exact resolutions.
@@ -50,6 +51,13 @@ run = [
   "cargo llvm-cov clean --workspace",
   "cargo llvm-cov --no-report run --release -p conformance -- snapshot",
   "cargo llvm-cov report --release --summary-only",
+]
+
+[tasks.check-py]
+run = [
+  "uv run ruff check",
+  "uv run ty check",
+  "uv run basedpyright",
 ]
 
 # Whether the tests would catch a behaviour change at all. Scope it to the file
