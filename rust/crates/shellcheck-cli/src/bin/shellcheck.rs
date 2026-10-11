@@ -6,12 +6,12 @@
 //! Output formatting mirrors `ShellCheck.Formatter.*`: tty (default), gcc,
 //! checkstyle, json, json1, quiet, and diff.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
 use shellcheck_cli::options::{self, Outcome, RunConfig};
@@ -66,14 +66,14 @@ fn main() -> ExitCode {
 #[derive(Clone)]
 struct IoSystem {
     /// The input filenames, normalized (`inputs <- mapM normalize files`).
-    inputs: Rc<HashSet<PathBuf>>,
+    inputs: Arc<HashSet<PathBuf>>,
     /// `externalSources options` (`-x`).
     external_sources: bool,
     /// `sourcePaths options` (`-P`), in flag order.
     source_paths: Vec<String>,
     /// `inputFile`'s cache for inputs that cannot be reopened -- stdin. A
     /// seekable file is re-read instead, exactly as upstream does.
-    cache: Rc<RefCell<HashMap<String, String>>>,
+    cache: Arc<Mutex<HashMap<String, String>>>,
     /// Native root input for this analysis. Display names may collide, so
     /// each input and its formatter use their own filesystem view.
     input: Option<PathBuf>,
@@ -82,10 +82,10 @@ struct IoSystem {
 impl IoSystem {
     fn new(config: &RunConfig) -> Self {
         Self {
-            inputs: Rc::new(config.inputs.iter().map(|f| normalize_path(f)).collect()),
+            inputs: Arc::new(config.inputs.iter().map(|f| normalize_path(f)).collect()),
             external_sources: config.external_sources,
             source_paths: config.source_paths.clone(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         }
     }
@@ -130,7 +130,10 @@ impl System for IoSystem {
         external_sources: Option<bool>,
         file: &str,
     ) -> Result<String, ErrorMessage> {
-        if let Some(hit) = self.cache.borrow().get(file) {
+        // Hold the cache lock through a stdin read so workers share the same
+        // cached contents rather than racing to consume the stream.
+        let mut cache = self.cache.lock().expect("input cache lock poisoned");
+        if let Some(hit) = cache.get(file) {
             return Ok(hit.clone());
         }
         if !self.allowable(external_sources, file) {
@@ -141,9 +144,7 @@ impl System for IoSystem {
         }
         let (contents, should_cache) = input_file(file, self.os_path(file).as_os_str())?;
         if should_cache {
-            self.cache
-                .borrow_mut()
-                .insert(file.to_string(), contents.clone());
+            cache.insert(file.to_string(), contents.clone());
         }
         Ok(contents)
     }
@@ -287,15 +288,28 @@ fn load(
     sys: &Rc<IoSystem>,
 ) -> Input {
     let sys = Rc::new(sys.for_input(path));
+    let spec = match prepare_spec(path, spec_template, config, &sys) {
+        Ok(spec) => spec,
+        Err(error) => return error,
+    };
+    analyze_input(spec, sys)
+}
+
+fn prepare_spec(
+    path: &Path,
+    spec_template: &CheckSpec,
+    config: Option<&ConfigLookup>,
+    sys: &IoSystem,
+) -> Result<CheckSpec, Input> {
     let name = path.to_string_lossy();
     let name = name.as_ref();
     let contents = match sys.read_file(None, name) {
         Ok(s) => s,
         Err(message) => {
-            return Input::Err {
+            return Err(Input::Err {
                 name: name.to_string(),
                 message,
-            };
+            });
         }
     };
     let mut spec = CheckSpec {
@@ -308,14 +322,80 @@ fn load(
     if let Some(rc) = config.and_then(|c| c.get(name)) {
         rc::merge_into(&mut spec, &rc);
     }
+    Ok(spec)
+}
+
+fn analyze_input(spec: CheckSpec, sys: Rc<IoSystem>) -> Input {
     let sys_dyn = Rc::clone(&sys) as Rc<dyn System>;
     let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
     Input::Ok(Loaded {
-        name: name.to_string(),
+        name: spec.filename,
         sys,
         comments: result.comments,
         failure: result.dataflow_error.map(dataflow_failure),
     })
+}
+
+/// Read roots and resolve configuration in input order, then analyze with
+/// worker-local ASTs. Only plain diagnostics cross thread boundaries; formatters
+/// retain each input's native-path system and the shared stream cache.
+fn load_parallel(
+    inputs: &[PathBuf],
+    template: &CheckSpec,
+    config: Option<&ConfigLookup>,
+    sys: &IoSystem,
+    jobs: usize,
+) -> Vec<Input> {
+    let mut loaded: Vec<Option<Input>> = (0..inputs.len()).map(|_| None).collect();
+    let mut pending = Vec::new();
+    for (index, path) in inputs.iter().enumerate() {
+        match prepare_spec(path, template, config, &sys.for_input(path)) {
+            Ok(spec) => pending.push((index, spec)),
+            Err(error) => loaded[index] = Some(error),
+        }
+    }
+    let worker_count = jobs
+        .min(pending.len())
+        .min(std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get));
+    // A shared queue balances large scripts against collections of tiny ones.
+    let pending = Mutex::new(pending.into_iter());
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let pending = &pending;
+            let send = send.clone();
+            std::thread::Builder::new()
+                .stack_size(8 * 1024 * 1024)
+                .spawn_scoped(scope, move || {
+                    loop {
+                        let Some((index, spec)) =
+                            pending.lock().expect("work queue lock poisoned").next()
+                        else {
+                            break;
+                        };
+                        let system = Rc::new(sys.for_input(&inputs[index]));
+                        let result = shellcheck_rs::checker::check_script_with(system, &spec);
+                        if send.send((index, result)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .expect("could not start analysis worker");
+        }
+        drop(send);
+        for (index, result) in receive {
+            loaded[index] = Some(Input::Ok(Loaded {
+                name: inputs[index].to_string_lossy().into_owned(),
+                sys: Rc::new(sys.for_input(&inputs[index])),
+                comments: result.comments,
+                failure: result.dataflow_error.map(dataflow_failure),
+            }));
+        }
+    });
+    loaded
+        .into_iter()
+        .map(|input| input.expect("worker returned no result"))
+        .collect()
 }
 
 /// `NE.groupWith sourceFile`: split the comments into runs that share a start
@@ -354,6 +434,7 @@ fn run(config: RunConfig) -> ExitCode {
         spec_template,
         color,
         wiki_link_count,
+        jobs,
         rcfile,
         source_paths: _,
         external_sources: _,
@@ -386,10 +467,14 @@ fn run(config: RunConfig) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let loaded: Vec<Input> = inputs
-        .iter()
-        .map(|i| load(i, &spec_template, config.as_ref(), &sys))
-        .collect();
+    let loaded = if jobs > 1 && inputs.len() > 1 && inputs.iter().all(|path| path.is_file()) {
+        load_parallel(&inputs, &spec_template, config.as_ref(), &sys, jobs)
+    } else {
+        inputs
+            .iter()
+            .map(|i| load(i, &spec_template, config.as_ref(), &sys))
+            .collect()
+    };
 
     let any_comments = loaded.iter().any(|i| !i.comments().is_empty());
 
@@ -665,10 +750,10 @@ mod tests {
         // `allowable`: the inputs are readable whatever the flags say; anything
         // else needs -x or an `external-sources` directive.
         let sys = IoSystem {
-            inputs: Rc::new(HashSet::from([normalize_path(Path::new("Cargo.toml"))])),
+            inputs: Arc::new(HashSet::from([normalize_path(Path::new("Cargo.toml"))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         };
         assert!(sys.allowable(None, "Cargo.toml"));
@@ -685,10 +770,10 @@ mod tests {
         );
         // An input that is not there at all still reports the read failure.
         let sys = IoSystem {
-            inputs: Rc::new(HashSet::from([normalize_path(Path::new("nope.sh"))])),
+            inputs: Arc::new(HashSet::from([normalize_path(Path::new("nope.sh"))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         };
         assert_eq!(
@@ -706,10 +791,10 @@ mod tests {
         std::fs::write(&path, b"#!/bin/sh\necho \xff\xfe $u\n").unwrap();
         let name = path.to_str().unwrap().to_string();
         let sys = IoSystem {
-            inputs: Rc::new(HashSet::from([normalize_path(Path::new(&name))])),
+            inputs: Arc::new(HashSet::from([normalize_path(Path::new(&name))])),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         };
         let contents = sys.read_file(None, &name).unwrap();
@@ -726,10 +811,10 @@ mod tests {
         // working directory the test happens to run in.
         let dir = env!("CARGO_MANIFEST_DIR");
         let sys = IoSystem {
-            inputs: Rc::new(HashSet::new()),
+            inputs: Arc::new(HashSet::new()),
             external_sources: true,
             source_paths: vec!["SCRIPTDIR/src".to_string()],
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         };
         // SCRIPTDIR is the checked script's directory, not the sourcing file's.
@@ -739,10 +824,10 @@ mod tests {
         );
         // An annotation path is searched too, after the flag paths.
         let no_flags = IoSystem {
-            inputs: Rc::new(HashSet::new()),
+            inputs: Arc::new(HashSet::new()),
             external_sources: true,
             source_paths: Vec::new(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         };
         assert_eq!(
@@ -788,10 +873,10 @@ mod tests {
 
     fn no_sources() -> Rc<IoSystem> {
         Rc::new(IoSystem {
-            inputs: Rc::new(HashSet::new()),
+            inputs: Arc::new(HashSet::new()),
             external_sources: false,
             source_paths: Vec::new(),
-            cache: Rc::new(RefCell::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             input: None,
         })
     }

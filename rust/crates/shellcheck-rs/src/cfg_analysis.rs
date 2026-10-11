@@ -326,7 +326,7 @@ enum StateDependency {
     DepProperties(Scope, String, VariableProperties),
     DepFunction(String, FunctionValue),
     DepIsRecursive(Node, bool),
-    DepExitCodes(BTreeSet<Id>),
+    DepExitCodes(Rc<BTreeSet<Id>>),
 }
 
 /// A `Map` that keeps an integer version to quickly determine if it changed.
@@ -448,7 +448,7 @@ struct InternalState {
     s_local_values: VMap<VariableState>,
     s_prefix_values: VMap<VariableState>,
     s_function_targets: VMap<FunctionValue>,
-    s_exit_codes: Option<BTreeSet<Id>>,
+    s_exit_codes: Option<Rc<BTreeSet<Id>>>,
     s_is_reachable: Option<bool>,
 }
 
@@ -681,7 +681,19 @@ fn insert_function(name: &str, val: FunctionValue, state: &InternalState) -> Int
     s.s_function_targets = s.s_function_targets.insert(name, val);
     modified(s)
 }
-fn set_exit_codes(set: BTreeSet<Id>, state: &InternalState) -> InternalState {
+/// Exit-code sets are immutable between updates. Keep state snapshots cheap,
+/// and reuse either operand when a merge adds no possible exit code.
+fn union_exit_codes(a: &Rc<BTreeSet<Id>>, b: &Rc<BTreeSet<Id>>) -> Rc<BTreeSet<Id>> {
+    if Rc::ptr_eq(a, b) || b.is_subset(a) {
+        a.clone()
+    } else if a.is_subset(b) {
+        b.clone()
+    } else {
+        Rc::new(a.union(b).copied().collect())
+    }
+}
+
+fn set_exit_codes(set: Rc<BTreeSet<Id>>, state: &InternalState) -> InternalState {
     let mut s = state.clone();
     s.s_exit_codes = Some(set);
     modified(s)
@@ -689,7 +701,7 @@ fn set_exit_codes(set: BTreeSet<Id>, state: &InternalState) -> InternalState {
 fn set_exit_code(id: Id, state: &InternalState) -> InternalState {
     let mut set = BTreeSet::new();
     set.insert(id);
-    set_exit_codes(set, state)
+    set_exit_codes(Rc::new(set), state)
 }
 
 fn get_variable_with_scope(s: &InternalState, name: &str) -> Option<(VariableState, Scope)> {
@@ -1018,12 +1030,12 @@ impl Ctx {
             unknown_function_value(),
         )
     }
-    fn read_exit_codes(&mut self) -> BTreeSet<Id> {
+    fn read_exit_codes(&mut self) -> Rc<BTreeSet<Id>> {
         self.lookup_stack(
             false,
             |s| s.s_exit_codes.clone(),
-            |v: &BTreeSet<Id>| StateDependency::DepExitCodes(v.clone()),
-            BTreeSet::new(),
+            |v: &Rc<BTreeSet<Id>>| StateDependency::DepExitCodes(v.clone()),
+            Rc::default(),
         )
     }
 
@@ -1055,7 +1067,7 @@ impl Ctx {
         }
         unknown_function_value()
     }
-    fn peek_exit_codes(&self) -> BTreeSet<Id> {
+    fn peek_exit_codes(&self) -> Rc<BTreeSet<Id>> {
         if let Some(v) = &self.input.s_exit_codes {
             return v.clone();
         }
@@ -1064,7 +1076,7 @@ impl Ctx {
                 return v.clone();
             }
         }
-        BTreeSet::new()
+        Rc::default()
     }
 
     // --- writes ---
@@ -1329,16 +1341,16 @@ impl Ctx {
 
     fn merge_maybes_exit(
         &mut self,
-        a: Option<&BTreeSet<Id>>,
-        b: Option<&BTreeSet<Id>>,
-    ) -> Option<BTreeSet<Id>> {
+        a: Option<&Rc<BTreeSet<Id>>>,
+        b: Option<&Rc<BTreeSet<Id>>>,
+    ) -> Option<Rc<BTreeSet<Id>>> {
         match (a, b) {
             (None, None) => None,
             (Some(v), None) | (None, Some(v)) => {
                 let r = self.read_exit_codes();
-                Some(v.union(&r).copied().collect())
+                Some(union_exit_codes(v, &r))
             }
-            (Some(v1), Some(v2)) => Some(v1.union(v2).copied().collect()),
+            (Some(v1), Some(v2)) => Some(union_exit_codes(v1, v2)),
         }
     }
 
@@ -1839,7 +1851,7 @@ fn internal_to_external(s: &InternalState) -> ProgramState {
         global_values: ScopeValues::flat(&s.s_global_values),
         local_values: ScopeValues::flat(&s.s_local_values),
         prefix_values: ScopeValues::flat(&s.s_prefix_values),
-        exit_codes: s.s_exit_codes.clone().unwrap_or_default(),
+        exit_codes: s.s_exit_codes.as_deref().cloned().unwrap_or_default(),
         state_is_reachable: s.s_is_reachable.unwrap_or(true),
     }
 }
@@ -1863,7 +1875,7 @@ fn patched_to_external(base: &InternalState, diff: &InternalState) -> ProgramSta
             .s_exit_codes
             .as_ref()
             .or(base.s_exit_codes.as_ref())
-            .cloned()
+            .map(|codes| (**codes).clone())
             .unwrap_or_default(),
         state_is_reachable: diff.s_is_reachable.or(base.s_is_reachable).unwrap_or(true),
     }
@@ -2010,6 +2022,35 @@ mod tests {
     use super::*;
     use crate::ast::InnerToken;
     use crate::parser::parse_script;
+
+    #[test]
+    fn exit_code_snapshots_share_storage_without_changing_older_states() {
+        let original = set_exit_code(Id(1), &new_internal_state());
+        let snapshot = original.clone();
+        assert!(Rc::ptr_eq(
+            original.s_exit_codes.as_ref().unwrap(),
+            snapshot.s_exit_codes.as_ref().unwrap()
+        ));
+        let changed = set_exit_code(Id(2), &snapshot);
+        assert_eq!(internal_to_external(&original).exit_codes, [Id(1)].into());
+        assert_eq!(internal_to_external(&changed).exit_codes, [Id(2)].into());
+    }
+
+    #[test]
+    fn exit_code_unions_preserve_values_and_reuse_containing_sets() {
+        let small = Rc::new([Id(1)].into());
+        let large = Rc::new([Id(1), Id(2)].into());
+        assert!(Rc::ptr_eq(&union_exit_codes(&small, &large), &large));
+        assert!(Rc::ptr_eq(&union_exit_codes(&large, &small), &large));
+        assert!(Rc::ptr_eq(&union_exit_codes(&large, &large), &large));
+        let other = Rc::new([Id(2), Id(3)].into());
+        assert_eq!(
+            *union_exit_codes(&large, &other),
+            [Id(1), Id(2), Id(3)].into()
+        );
+        assert_eq!(*large, [Id(1), Id(2)].into());
+        assert_eq!(*other, [Id(2), Id(3)].into());
+    }
 
     #[test]
     fn an_internal_error_is_recorded_and_the_first_one_kept() {
@@ -2283,7 +2324,7 @@ mod tests {
             "d".into(),
             int_props,
         ));
-        deps.insert(StateDependency::DepExitCodes([Id(7)].into()));
+        deps.insert(StateDependency::DepExitCodes(Rc::new([Id(7)].into())));
         let base = deps_to_state(&deps);
 
         let diff = insert_global("a", val("a b"), &new_internal_state());

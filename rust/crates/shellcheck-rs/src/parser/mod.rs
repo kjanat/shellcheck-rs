@@ -399,7 +399,9 @@ pub(super) struct Context {
 #[derive(Debug, Clone)]
 pub(super) struct Failure {
     reach: usize,
-    pos: Position,
+    // Failure snapshots stay within this parser's file (including text
+    // sub-parsers). Allocate the filename only if a diagnostic is emitted.
+    pos: (i64, i64),
     message: String,
     /// Haskell reads `contextStack` once, after the parse has given up. This
     /// parser backtracks in places Parsec would not, and those recoveries pop
@@ -997,9 +999,14 @@ impl Parser {
         } else {
             format!("{}.", f.message)
         };
+        let pos = Position {
+            file: self.filename.clone(),
+            line: f.pos.0,
+            column: f.pos.1,
+        };
         out.push(ParseNote {
-            start: f.pos.clone(),
-            end: f.pos.clone(),
+            start: pos.clone(),
+            end: pos,
             severity: Severity::ErrorC,
             code: 1072,
             message: format!("{detail} Fix any mentioned problems and try again."),
@@ -1150,7 +1157,7 @@ impl Parser {
         if self.outranks_current(rank) {
             self.failure = Some(Failure {
                 reach: self.idx,
-                pos: self.pos(),
+                pos: (self.line, self.col),
                 message: message.to_string(),
                 contexts: self.contexts.clone(),
                 consumed,
@@ -1247,7 +1254,7 @@ impl Parser {
     /// a parse error rather than a key that quietly takes no value.
     fn string_tokens(&mut self, s: &str) -> PResult<()> {
         let start_idx = self.idx;
-        let start_pos = self.pos();
+        let start_pos = (self.line, self.col);
         let saved = self.failure.clone();
         for (i, c) in s.chars().enumerate() {
             if self.peek() == Some(c) {

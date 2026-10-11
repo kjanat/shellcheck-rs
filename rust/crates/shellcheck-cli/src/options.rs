@@ -76,6 +76,8 @@ pub struct RunConfig {
     pub color: ColorOption,
     /// Max wiki link count from `-W`/`--wiki-link-count` (defaults to 3), used by tty wiki summary.
     pub wiki_link_count: usize,
+    /// Maximum file-analysis workers (default 1; quiet mode stays sequential).
+    pub jobs: usize,
     /// Explicit config path from `--rcfile <path>`. When `None`, standard `.shellcheckrc` discovery applies.
     pub rcfile: Option<String>,
     /// Search directories for sourced files from `-P`/`--source-path` in flag order. `SCRIPTDIR` expands to target script directory.
@@ -157,6 +159,14 @@ const OPTS: &[OptDef] = &[
         kind: ArgKind::Required,
         arg: "FORMAT",
         help: "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
+    },
+    OptDef {
+        short: Some('j'),
+        long: "jobs",
+        key: "jobs",
+        kind: ArgKind::Required,
+        arg: "N",
+        help: "Analyze files with N workers (default 1; quiet stays sequential)",
     },
     OptDef {
         short: None,
@@ -658,6 +668,7 @@ struct Folded {
     format: Option<String>,
     color: ColorOption,
     wiki_link_count: usize,
+    jobs: usize,
     rcfile: Option<String>,
     source_paths: Vec<String>,
     external_sources: bool,
@@ -670,10 +681,21 @@ impl Folded {
             format: None,
             color: ColorOption::ColorAuto,
             wiki_link_count: 3,
+            jobs: 1,
             rcfile: None,
             source_paths: Vec::new(),
             external_sources: false,
         }
+    }
+}
+
+fn parse_worker_count(value: &str) -> ControlFlow<Outcome, usize> {
+    match value.parse::<usize>() {
+        Ok(n) if n > 0 => ControlFlow::Continue(n),
+        _ => ControlFlow::Break(Outcome::Error {
+            message: format!("Invalid worker count, expected a positive integer: {value}"),
+            code: 3,
+        }),
     }
 }
 
@@ -762,6 +784,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
                 }
             };
         }
+        "jobs" => o.jobs = parse_worker_count(flag.value.as_deref().unwrap_or(""))?,
         "wiki-link-count" => {
             // Parsed as a number; invalid -> SyntaxFailure (exit 3).
             match parse_num(flag.value.as_deref().unwrap_or("")) {
@@ -915,6 +938,7 @@ pub fn parse_os(argv: &[OsString], exists: &dyn Fn(&Path) -> bool) -> Outcome {
         spec_template: o.spec,
         color: o.color,
         wiki_link_count: o.wiki_link_count,
+        jobs: o.jobs,
         rcfile: o.rcfile,
         source_paths: o.source_paths,
         external_sources: o.external_sources,

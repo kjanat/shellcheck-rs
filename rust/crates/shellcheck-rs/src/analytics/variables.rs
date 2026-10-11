@@ -257,16 +257,20 @@ pub(super) fn check_dollar_brackets(_params: &Parameters, t: &Token, out: &mut O
 
 pub(super) fn check_prefix_assignment_reference(params: &Parameters, t: &Token, out: &mut Out) {
     if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
-        let path = get_path(params, t);
-        let id_path: Vec<Id> = path.iter().map(super::super::ast::Token::id).collect();
-        // check: walk path until a T_SimpleCommand with vars and non-empty words.
-        for node in &path {
+        // Stop at the nearest command with words, even if it has no prefix
+        // assignments. Only build an ID path when there is something to check.
+        for node in crate::analyzer_lib::path_iter(params, t) {
             if let InnerToken::T_SimpleCommand { assignments, words } = &*node.inner
                 && !words.is_empty()
             {
-                for v in assignments {
-                    par_check_var(v, &name, &id_path, t.id(), out);
+                if !assignments.is_empty() {
+                    let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
+                    let id_path: Vec<Id> = crate::analyzer_lib::path_iter(params, t)
+                        .map(Token::id)
+                        .collect();
+                    for v in assignments {
+                        par_check_var(v, &name, &id_path, t.id(), out);
+                    }
                 }
                 break;
             }

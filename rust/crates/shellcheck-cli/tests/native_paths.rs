@@ -36,12 +36,20 @@ impl Drop for Fixture {
 }
 
 fn run(format: &str, files: &[&Path]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
-        .env_remove("SHELLCHECK_OPTS")
-        .args(["--norc", "--format", format, "--"])
-        .args(files)
-        .output()
-        .unwrap_or_else(|e| panic!("run CLI: {e}"))
+    let execute = |jobs| {
+        Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
+            .env_remove("SHELLCHECK_OPTS")
+            .args(["--jobs", jobs, "--norc", "--format", format, "--"])
+            .args(files)
+            .output()
+            .unwrap_or_else(|e| panic!("run CLI: {e}"))
+    };
+    let serial = execute("1");
+    let parallel = execute("4");
+    assert_eq!(serial.status, parallel.status);
+    assert_eq!(serial.stdout, parallel.stdout);
+    assert_eq!(serial.stderr, parallel.stderr);
+    serial
 }
 
 #[test]

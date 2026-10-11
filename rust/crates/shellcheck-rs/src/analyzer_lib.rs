@@ -346,6 +346,12 @@ pub const fn fix_with(replacements: Vec<Replacement>) -> Fix {
 /// Plain functions and closures implement it directly; `CommandCheck` and
 /// `ForShell` implement it with their dispatch in front.
 pub trait Check {
+    /// Whether this check applies to a node kind. This must depend only on
+    /// the enum variant, never its fields: dispatch caches it by discriminant.
+    fn accepts_kind(&self, _kind: &InnerToken) -> bool {
+        true
+    }
+
     /// Run the check on `t`, pushing its comments into `out`.
     fn run(&self, params: &Parameters, t: &Token, out: &mut Out);
 }
@@ -353,6 +359,21 @@ pub trait Check {
 impl<F: Fn(&Parameters, &Token, &mut Out)> Check for F {
     fn run(&self, params: &Parameters, t: &Token, out: &mut Out) {
         self(params, t, out);
+    }
+}
+
+struct KindCheck<C> {
+    accepts: fn(&InnerToken) -> bool,
+    check: C,
+}
+
+impl<C: Check> Check for KindCheck<C> {
+    fn accepts_kind(&self, kind: &InnerToken) -> bool {
+        (self.accepts)(kind)
+    }
+
+    fn run(&self, params: &Parameters, t: &Token, out: &mut Out) {
+        self.check.run(params, t, out);
     }
 }
 
@@ -385,6 +406,11 @@ impl Checker {
         self.node_checks.push(Box::new(c));
     }
 
+    /// Add a check restricted to enum variants. `accepts` must ignore fields.
+    pub fn node_for<C: Check + 'static>(&mut self, accepts: fn(&InnerToken) -> bool, check: C) {
+        self.node(KindCheck { accepts, check });
+    }
+
     /// `<>`: append the checks of `other`.
     pub fn merge(&mut self, mut other: Self) {
         self.tree_checks.append(&mut other.tree_checks);
@@ -400,8 +426,18 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
         c.run(params, &params.root, &mut out);
     }
     if !checker.node_checks.is_empty() {
+        let mut dispatch = crate::idhash::IdMap::default();
         params.root.visit_preorder(&mut |t| {
-            for c in &checker.node_checks {
+            let checks = dispatch
+                .entry(std::mem::discriminant(&*t.inner))
+                .or_insert_with(|| {
+                    checker
+                        .node_checks
+                        .iter()
+                        .filter(|c| c.accepts_kind(&t.inner))
+                        .collect::<Vec<_>>()
+                });
+            for c in checks {
                 c.run(params, t, &mut out);
             }
         });
@@ -877,19 +913,18 @@ pub(crate) fn word_parts(t: &Token) -> Vec<&Token> {
     ast_lib::get_word_parts(t)
 }
 
+/// The token and its ancestors, stopping without allocating when a caller
+/// finds the enclosing construct it needs.
+pub(crate) fn path_iter<'a>(
+    params: &'a Parameters,
+    t: &'a Token,
+) -> impl Iterator<Item = &'a Token> {
+    std::iter::successors(Some(t), |node| params.parent(node))
+}
+
 /// `getPath tree t`: the token and its ancestors up to the root (owned clones).
 pub(crate) fn get_path(params: &Parameters, t: &Token) -> Vec<Token> {
-    let mut out = vec![t.clone()];
-    let mut cur = t.id();
-    while let Some(&pid) = params.parent_map.get(&cur) {
-        if let Some(tok) = params.id_map.get(&pid) {
-            out.push(tok.clone());
-            cur = pid;
-        } else {
-            break;
-        }
-    }
-    out
+    path_iter(params, t).cloned().collect()
 }
 
 // ---- command-name resolution ----------------------------------------------
@@ -2069,9 +2104,7 @@ pub(crate) fn is_confused_glob_regex(s: &str) -> bool {
 }
 
 pub(crate) fn is_sourced(params: &Parameters, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|p| matches!(&*p.inner, InnerToken::T_SourceCommand { .. }))
+    path_iter(params, t).any(|p| matches!(&*p.inner, InnerToken::T_SourceCommand { .. }))
 }
 
 /// Condition-children of a parent node, per `isCondition`'s `getConditionChildren`.
@@ -2323,6 +2356,44 @@ mod tests {
     use super::{determine_shell, get_variables_from_literal};
     use crate::interface::Shell;
 
+    #[test]
+    fn filtered_and_generic_checks_keep_order_after_merge() {
+        use super::{Checker, Out, Parameters, info, run_checker};
+        use crate::ast::{InnerToken, Token};
+        let params = crate::test_support::params_for("echo first second\n");
+        let check = |code| {
+            move |_: &Parameters, t: &Token, out: &mut Out| {
+                info(out, t.id(), code, "order marker");
+            }
+        };
+        let literal = |kind: &InnerToken| matches!(kind, InnerToken::T_Literal(..));
+        let mut checker = Checker::new();
+        checker.tree(check(0));
+        checker.node(check(1));
+        checker.node_for(literal, check(2));
+        let mut other = Checker::new();
+        other.node(check(3));
+        other.node_for(literal, check(4));
+        checker.merge(other);
+
+        let mut expected = vec![(params.root.id(), 0)];
+        params.root.visit_preorder(&mut |t| {
+            expected.push((t.id(), 1));
+            if literal(&t.inner) {
+                expected.push((t.id(), 2));
+            }
+            expected.push((t.id(), 3));
+            if literal(&t.inner) {
+                expected.push((t.id(), 4));
+            }
+        });
+        let actual: Vec<_> = run_checker(&params, &checker)
+            .into_iter()
+            .map(|comment| (comment.id, comment.comment.code))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
     fn determine_shell_test_with(fallback: Option<Shell>, script: &str) -> Shell {
         let root = crate::parser::parse_script("script", script)
             .root
@@ -2424,9 +2495,7 @@ pub(crate) fn has_floating_point(params: &Parameters) -> bool {
 
 /// `shouldIgnoreCode`.
 pub(crate) fn should_ignore_code(params: &Parameters, code: i64, t: &Token) -> bool {
-    get_path(params, t)
-        .iter()
-        .any(|p| is_annotation_ignoring_code(code, p))
+    path_iter(params, t).any(|p| is_annotation_ignoring_code(code, p))
 }
 
 /// `hasFlag`.

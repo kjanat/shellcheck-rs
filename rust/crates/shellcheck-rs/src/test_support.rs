@@ -55,6 +55,9 @@ fn is_ignored(params: &Parameters, code: Code, id: crate::ast::Id) -> bool {
 
 /// `runAndGetComments`: run a tree check on the root, then `filterByAnnotation`.
 fn run_and_get_comments(params: &Parameters, f: impl FnOnce(&Parameters, &Token) -> Out) -> Out {
+    // Exercise the optimized dispatcher and its exhaustive reference on every
+    // check fixture, including all optional checks, before testing one rule.
+    let _ = crate::analytics::analyze_with(params, &["all".to_string()]);
     let mut out = f(params, &params.root);
     out.retain(|c| !is_ignored(params, c.comment.code, c.id));
     out
