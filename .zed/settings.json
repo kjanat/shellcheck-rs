@@ -15,5 +15,7 @@
 		}
 	],
 	"prettier": { "allowed": false },
-	"languages": { "Markdown": { "language_servers": ["!markdownlint", "!rumdl", "..."] } }
+	"languages": { "Markdown": { "language_servers": ["!markdownlint", "!rumdl", "..."] } },
+	"file_scan_exclusions": ["**/ports", "**/.bench"],
+	"file_scan_inclusions": [".git/info/*"]
 }
