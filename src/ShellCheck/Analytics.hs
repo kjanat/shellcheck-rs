@@ -1075,6 +1075,9 @@ prop_checkSingleQuotedVariables4 = verifyNot checkSingleQuotedVariables "awk '{p
 prop_checkSingleQuotedVariables5 = verifyNot checkSingleQuotedVariables "trap 'echo $SECONDS' EXIT"
 prop_checkSingleQuotedVariables6 = verifyNot checkSingleQuotedVariables "sed -n '$p'"
 prop_checkSingleQuotedVariables6a = verify checkSingleQuotedVariables "sed -n '$pattern'"
+prop_checkSingleQuotedVariables6b = verifyNot checkSingleQuotedVariables "sed -n -e '/foo/h; ${ g; }'"
+prop_checkSingleQuotedVariables6c = verifyNot checkSingleQuotedVariables "sed -e '${a\\\nEOF' -e '}'"
+prop_checkSingleQuotedVariables6d = verifyNot checkSingleQuotedVariables "sed -n -e '/0$/h; 42,${' -e G -e '}'"
 prop_checkSingleQuotedVariables7 = verifyNot checkSingleQuotedVariables "PS1='$PWD \\$ '"
 prop_checkSingleQuotedVariables8 = verify checkSingleQuotedVariables "find . -exec echo '$1' {} +"
 prop_checkSingleQuotedVariables9 = verifyNot checkSingleQuotedVariables "find . -exec awk '{print $1}' {} \\;"
@@ -1148,7 +1151,7 @@ checkSingleQuotedVariables params t@(T_SingleQuoted id s) =
             _ -> False
 
     re = mkRegex "\\$[{(0-9a-zA-Z_]|`[^`]+`"
-    sedContra = mkRegex "\\$[{dpsaic]($|[^a-zA-Z])"
+    sedContra = mkRegex "\\$[acdgGilpPsxy]($|[^a-zA-Z])|\\$\\{[[:space:]]*($|/|[acdgGilpPsxy]($|[^a-zA-Z]))"
 
     getFindCommand (T_SimpleCommand _ _ words) =
         let list = map getLiteralString words
@@ -2471,6 +2474,7 @@ prop_checkUnused48 = verifyNotTree checkUnusedAssignments "_a=1"
 prop_checkUnused49 = verifyNotTree checkUnusedAssignments "declare -A array; key=a; [[ -v array[$key] ]]"
 prop_checkUnused50 = verifyNotTree checkUnusedAssignments "foofunc() { :; }; typeset -fx foofunc"
 prop_checkUnused51 = verifyTree checkUnusedAssignments "x[y[z=1]]=1; echo ${x[@]}"
+prop_checkUnused52 = verifyNotTree checkUnusedAssignments "set -o allexport\nfoo=bar"
 
 checkUnusedAssignments params t = execWriter (mapM_ warnFor unused)
   where
@@ -2482,7 +2486,7 @@ checkUnusedAssignments params t = execWriter (mapM_ warnFor unused)
     unused = Map.assocs $ Map.difference assignments references
 
     warnFor (name, token) =
-        unless ("_" `isPrefixOf` name) $
+        unless ("_" `isPrefixOf` name || hasAllexport params) $
             warn (getId token) 2034 $
                 name ++ " appears unused. Verify use (or export if used externally)."
 
@@ -2816,7 +2820,7 @@ prop_checkCdAndBack6 = verify checkCdAndBack "for dir in */; do cd \"$dir\"; som
 prop_checkCdAndBack7 = verifyNot checkCdAndBack "set -e; for dir in */; do cd \"$dir\"; some_cmd; cd ..; done"
 prop_checkCdAndBack8 = verifyNot checkCdAndBack "cd tmp\nfoo\n# shellcheck disable=SC2103\ncd ..\n"
 checkCdAndBack params t =
-    unless (hasSetE params) $ mapM_ doList $ getCommandSequences t
+    unless (hasErrexit params) $ mapM_ doList $ getCommandSequences t
   where
     isCdRevert t =
         case oversimplify t of
@@ -3318,7 +3322,7 @@ prop_checkUncheckedCdInFunction9 = verifyNotTree checkUncheckedCdPushdPopd "f() 
 prop_checkUncheckedCdInFunction10 = verifyTree checkUncheckedCdPushdPopd "f() { { cd /abc; echo continued; }; }"
 
 checkUncheckedCdPushdPopd params root =
-    if hasSetE params then
+    if hasErrexit params then
         []
     else execWriter $ doAnalysis checkElement root
   where
@@ -3932,6 +3936,7 @@ prop_checkUseBeforeDefinition3 = verifyNotTree checkUseBeforeDefinition "if ! my
 prop_checkUseBeforeDefinition4 = verifyNotTree checkUseBeforeDefinition "mycmd || mycmd() { f; }"
 prop_checkUseBeforeDefinition5 = verifyTree checkUseBeforeDefinition "false || mycmd; mycmd() { f; }"
 prop_checkUseBeforeDefinition6 = verifyNotTree checkUseBeforeDefinition "f() { one; }; f; f() { two; }; f"
+prop_checkUseBeforeDefinition7 = verifyNotTree checkUseBeforeDefinition "f() { true; }\nreturn\necho \"$(f)\"\necho \"$(f)\""
 checkUseBeforeDefinition :: Parameters -> Token -> [TokenComment]
 checkUseBeforeDefinition params t = fromMaybe [] $ do
     cfga <- cfgAnalysis params
@@ -4197,7 +4202,7 @@ prop_checkUselessBang7 = verifyNot checkUselessBang "set -e; x() { ! [ x ]; }"
 prop_checkUselessBang8 = verifyNot checkUselessBang "set -e; if { ! true; }; then true; fi"
 prop_checkUselessBang9 = verifyNot checkUselessBang "set -e; while ! true; do true; done"
 prop_checkUselessBang10 = verify checkUselessBang "set -e\nshellcheck disable=SC0000\n! true\nrest"
-checkUselessBang params t = when (hasSetE params) $ mapM_ check (getNonReturningCommands t)
+checkUselessBang params t = when (hasErrexit params) $ mapM_ check (getNonReturningCommands t)
   where
     check t =
         case t of
@@ -4908,7 +4913,7 @@ prop_checkSetESuppressed17 = verifyNotTree checkSetESuppressed "set -e; f(){ :; 
 prop_checkSetESuppressed18 = verifyNotTree checkSetESuppressed "set -e; shopt -s inherit_errexit; f(){ :; }; x=$(f)"
 prop_checkSetESuppressed19 = verifyNotTree checkSetESuppressed "set -e; set -o posix; f(){ :; }; x=$(f)"
 checkSetESuppressed params t =
-    if hasSetE params then runNodeAnalysis checkNode params t else []
+    if hasErrexit params then runNodeAnalysis checkNode params t else []
   where
     checkNode _ (T_SimpleCommand _ _ (cmd:_)) = when (isFunction cmd) (checkCmd cmd)
     checkNode _ _ = return ()
@@ -4945,7 +4950,7 @@ checkSetESuppressed params t =
                 "Bash implicitly disabled set -e for this function " ++
                 "invocation because it's inside a command substitution. " ++
                 "Add set -e; before it or enable inherit_errexit.")
-        errExitEnabled t = hasInheritErrexit params || containsSetE t
+        errExitEnabled t = hasInheritErrexit params || containsErrexit t
         isIn t cmds = getId t `elem` map getId cmds
 
 

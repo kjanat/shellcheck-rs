@@ -38,7 +38,7 @@ no Haskell oracle or H2R compiler is built.
    in the version commit; release builds use `--locked`.
 2. Review the tests and build artifacts from the pull request. The workflow
    builds all 15 targets on relevant PR changes and checks workspace unit tests
-   and the 4,062-entry behavior snapshot.
+   and the 4,067-entry behavior snapshot.
 3. After the intended commit is merged, verify its required signature, then
    create and push a tag such as `rshellcheck-v0.11.0`. A mismatched version
    fails before any build job starts. Prerelease versions use tags such as

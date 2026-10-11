@@ -1196,6 +1196,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prop_checkUseBeforeDefinition7() {
+        assert!(!tree_emits(
+            check_use_before_definition,
+            "f() { true; }\nreturn\necho \"$(f)\"\necho \"$(f)\""
+        ));
+    }
+
     // --- SC2317/2329 checkCommandIsUnreachable ---
 
     #[test]

@@ -48,6 +48,12 @@ pub struct Parameters {
 }
 
 impl Parameters {
+    /// Whether the script mentions `set -a` or `set -o allexport` anywhere.
+    #[must_use]
+    pub const fn has_allexport(&self) -> bool {
+        self.options.has(ShellOption::Allexport)
+    }
+
     /// `hasSetE`: whether this script has `set -e` anywhere.
     #[must_use]
     pub const fn has_set_e(&self) -> bool {
@@ -102,6 +108,8 @@ pub enum ShellOption {
     Noglob,
     /// `shopt -s execfail` in bash.
     Execfail,
+    /// `set -a` or `set -o allexport`.
+    Allexport,
 }
 
 /// The set of `ShellOption`s that hold for a script.
@@ -532,27 +540,13 @@ pub fn is_option_set(opt: &str, root: &Token) -> bool {
 /// `--`, or a shebang such as `#!/bin/sh -f` (Haskell's `[[:space:]]-[^-]*f`).
 pub fn contains_noglob(root: &Token) -> bool {
     use std::sync::OnceLock;
-    static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let shebang_re = SHEBANG_RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*f"));
-    let mut found = false;
-    root.visit_preorder(&mut |t| {
-        if found {
-            return;
-        }
-        found = match &*t.inner {
-            InnerToken::T_Script { shebang, .. } => match &*shebang.inner {
-                InnerToken::T_Literal(s) => shebang_re.is_match(s),
-                _ => false,
-            },
-            InnerToken::T_SimpleCommand { .. } => {
-                get_command_name(t).as_deref() == Some("set")
-                    && (ast_lib::oversimplify(t).iter().any(|w| w == "noglob")
-                        || get_all_flags(t).iter().any(|(_, f)| f == "f"))
-            }
-            _ => false,
-        };
-    });
-    found
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    contains_short_option(
+        root,
+        "noglob",
+        "f",
+        RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*f")),
+    )
 }
 
 /// `getFlagsUntil stopCondition`: turn a simple command's arguments into
@@ -614,8 +608,28 @@ pub(crate) fn get_all_flags(t: &Token) -> Vec<(&Token, String)> {
 /// (Haskell's `[[:space:]]-[^-]*e`).
 pub fn contains_set_e(root: &Token) -> bool {
     use std::sync::OnceLock;
-    static SHEBANG_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let shebang_re = SHEBANG_RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*e"));
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    contains_short_option(
+        root,
+        "errexit",
+        "e",
+        RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*e")),
+    )
+}
+
+/// Whether this script enables `set -a` or `set -o allexport` anywhere.
+pub fn contains_allexport(root: &Token) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    contains_short_option(
+        root,
+        "allexport",
+        "a",
+        RE.get_or_init(|| mk_regex(r"[[:space:]]-[^-]*a")),
+    )
+}
+
+fn contains_short_option(root: &Token, long: &str, short: &str, shebang_re: &regex::Regex) -> bool {
     let mut found = false;
     root.visit_preorder(&mut |t| {
         if found {
@@ -628,8 +642,8 @@ pub fn contains_set_e(root: &Token) -> bool {
             },
             InnerToken::T_SimpleCommand { .. } => {
                 get_command_name(t).as_deref() == Some("set")
-                    && (ast_lib::oversimplify(t).iter().any(|w| w == "errexit")
-                        || get_all_flags(t).iter().any(|(_, f)| f == "e"))
+                    && (ast_lib::oversimplify(t).iter().any(|w| w == long)
+                        || get_all_flags(t).iter().any(|(_, f)| f == short))
             }
             _ => false,
         };
@@ -665,6 +679,7 @@ pub fn make_parameters_ext(
     let shell_type_specified = shell_override.is_some() || fallback_shell.is_some();
     let (parent_map, id_map) = build_maps(&root);
     let has_set_e = contains_set_e(&root);
+    let has_allexport = contains_allexport(&root);
     let has_noglob = contains_noglob(&root);
     let has_pipefail = is_option_set("pipefail", &root);
     let has_inherit_errexit = match shell {
@@ -715,6 +730,7 @@ pub fn make_parameters_ext(
         id_map,
         options: ShellOptions::default()
             .with(ShellOption::SetE, has_set_e)
+            .with(ShellOption::Allexport, has_allexport)
             .with(ShellOption::Pipefail, has_pipefail)
             .with(ShellOption::Lastpipe, has_lastpipe)
             .with(ShellOption::InheritErrexit, has_inherit_errexit)

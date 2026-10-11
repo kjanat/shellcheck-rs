@@ -66,8 +66,8 @@ mod tests {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
             &mut files,
         );
-        let raw = Regex::new(r#"mk_regex\(r"([^"]*)"\)"#).unwrap();
-        let plain = Regex::new(r#"mk_regex\("((?:[^"\\]|\\.)*)"\)"#).unwrap();
+        let raw = Regex::new(r#"mk_regex\(\s*r"([^"]*)"\s*,?\s*\)"#).unwrap();
+        let plain = Regex::new(r#"mk_regex\(\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)"#).unwrap();
         let mut calls = 0;
         let mut patterns = Vec::new();
         for text in &files {

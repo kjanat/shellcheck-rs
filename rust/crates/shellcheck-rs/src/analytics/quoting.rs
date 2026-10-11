@@ -552,25 +552,15 @@ fn matches_expansion_re(s: &str) -> bool {
     false
 }
 
-/// `sedContra = \$[{dpsaic]($|[^a-zA-Z])`
+/// Upstream's sed address/command exceptions to SC2016.
 fn matches_sed_contra(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    for i in 0..bytes.len() {
-        if bytes[i] == b'$'
-            && let Some(&c) = bytes.get(i + 1)
-            && matches!(c, b'{' | b'd' | b'p' | b's' | b'a' | b'i' | b'c')
-        {
-            match bytes.get(i + 2) {
-                None => return true,
-                Some(&after) => {
-                    if !(after as char).is_ascii_alphabetic() {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        crate::regex_lib::mk_regex(
+            r"\$[acdgGilpPsxy]($|[^a-zA-Z])|\$\{[[:space:]]*($|/|[acdgGilpPsxy]($|[^a-zA-Z]))",
+        )
+    })
+    .is_match(s)
 }
 
 fn get_find_command(cmd: &Token) -> String {
@@ -972,6 +962,20 @@ mod tests {
             "$foo=42",
         ] {
             assert!(!emits(check_variable_braces, s), "{s}");
+        }
+    }
+
+    #[test]
+    fn sed_end_address_blocks_do_not_expand_variables() {
+        for script in [
+            "sed -n -e '/foo/h; ${ g; }'",
+            "sed -e '${a\\\nEOF' -e '}'",
+            "sed -n -e '/0$/h; 42,${' -e G -e '}'",
+        ] {
+            assert!(!emits(check_single_quoted_variables, script), "{script}");
+        }
+        for script in ["sed -n '$pattern'", "sed '${variable}'"] {
+            assert!(emits(check_single_quoted_variables, script), "{script}");
         }
     }
 

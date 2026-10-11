@@ -13,6 +13,9 @@ use crate::data::{COMMON_COMMANDS, INTERNAL_VARIABLES, SPECIAL_VARIABLES_WITHOUT
 use std::collections::BTreeMap;
 
 pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: &mut Out) {
+    if params.has_allexport() {
+        return;
+    }
     let flow = &params.variable_flow;
 
     // references: stripSuffix of every Reference name, plus internalVariables.
@@ -1068,6 +1071,21 @@ mod tests {
         // The genuine forms still are.
         assert!(tree_emits(check_unused_assignments, "f() { declare a=b; }"));
         assert!(tree_emits(check_unused_assignments, "f() { declare a; }"));
+    }
+
+    #[test]
+    fn allexport_suppresses_unused_assignments() {
+        for script in [
+            "set -o allexport\nfoo=bar",
+            "set -a\nfoo=bar",
+            "set -ua\nfoo=bar",
+            "#!/bin/sh -a\nfoo=bar",
+        ] {
+            assert!(!tree_emits(check_unused_assignments, script), "{script}");
+        }
+        for script in ["foo=bar", "set -- -a; foo=bar", "echo set -a; foo=bar"] {
+            assert!(tree_emits(check_unused_assignments, script), "{script}");
+        }
     }
 
     #[test]

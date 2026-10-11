@@ -7,6 +7,9 @@ die() {
 	exit 1
 }
 
+[[ "$1" == "--do-invoke" ]] || die "Don't invoke. See test/distrotest."
+set -x
+
 [ -e "ShellCheck.cabal" ] \
 	|| die "ShellCheck.cabal not in current dir"
 command -v cabal \
@@ -22,7 +25,17 @@ fi
 
 if [ -e /etc/arch-release ]; then
 	# Arch has an unconventional packaging setup
-	flags=(--disable-library-vanilla --enable-shared --enable-executable-dynamic --ghc-options=-dynamic)
+	flags=()
+	# Arch requires dynamic linking in the Cabal config, not just flags.
+	# See https://wiki.archlinux.org/title/Haskell
+	mkdir -p ~/.config/cabal/ || die "creating config dir"
+	printf '%s\n' '
+library-vanilla: False
+shared: True
+executable-dynamic: True
+program-default-options
+  ghc-options: -dynamic
+  ' >>~/.config/cabal/config || die "writing config"
 else
 	flags=()
 fi
