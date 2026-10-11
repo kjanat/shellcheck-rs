@@ -343,6 +343,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shellcheck-wasm"
+version = "0.11.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shellcheck-rs",
+]
+
+[[package]]
 name = "sized-chunks"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

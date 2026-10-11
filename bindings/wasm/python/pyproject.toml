@@ -1,0 +1,14 @@
+[project]
+name            = "rshellcheck-wasm"
+version         = "0.11.0"
+description     = "ShellCheck core WASM bindings for Python"
+requires-python = ">=3.10"
+license         = "GPL-3.0-or-later"
+dependencies    = ["wasmtime==38.0.0"]
+
+[build-system]
+requires      = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["rshellcheck_wasm"]

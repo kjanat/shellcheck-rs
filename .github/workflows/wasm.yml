@@ -1,0 +1,77 @@
+name: WASM core
+
+on:
+  pull_request:
+    paths: ["rust/**", "Cargo.*", ".cargo/**", "bindings/wasm/**", ".github/workflows/wasm.yml"]
+  push:
+    branches: [master]
+    paths: ["rust/**", "Cargo.*", ".cargo/**", "bindings/wasm/**", ".github/workflows/wasm.yml"]
+  workflow_dispatch:
+
+permissions: { contents: read }
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: One module, Go / Python / browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "1.99.0", targets: wasm32-unknown-unknown }
+      - uses: actions/setup-node@v7
+        with: { node-version: "24", cache: npm, cache-dependency-path: bindings/wasm/js/package-lock.json }
+      - uses: actions/setup-go@v7
+        with: { go-version: "1.25", cache-dependency-path: bindings/wasm/go/go.sum }
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.13" }
+      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wasm-1.99-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('rust/**') }}
+          restore-keys: wasm-1.99-${{ hashFiles('Cargo.lock', '.cargo/**') }}-
+      - name: Build core module and native parity reference
+        run: |
+          cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
+          cargo build --release --locked -p shellcheck-wasm --example check
+          cargo test --locked -p shellcheck-wasm
+          python bindings/wasm/fixtures.py
+      - name: Node ABI, reuse and native parity
+        run: node bindings/wasm/js/test.mjs
+      - name: Python parity and fuel limits
+        run: uv run --locked --project bindings/wasm/python python -m unittest discover -s bindings/wasm/python -v
+      - name: Go parity and cancellation
+        working-directory: bindings/wasm/go
+        run: go test -race -v ./...
+      - name: Browser worker parity
+        working-directory: bindings/wasm/js
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium
+          npx playwright test browser.spec.mjs
+      - name: Assemble portable library artifact
+        run: |
+          mkdir -p dist/wasm
+          cp target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm dist/wasm/
+          cp LICENSE bindings/wasm/README.md dist/wasm/
+          mkdir dist/wasm/go dist/wasm/js dist/wasm/python
+          cp bindings/wasm/go/go.mod bindings/wasm/go/go.sum bindings/wasm/go/shellcheck.go dist/wasm/go/
+          cp bindings/wasm/js/shellcheck.mjs bindings/wasm/js/worker.mjs dist/wasm/js/
+          cp bindings/wasm/python/rshellcheck_wasm.py bindings/wasm/python/pyproject.toml bindings/wasm/python/uv.lock dist/wasm/python/
+          git rev-parse HEAD > dist/wasm/SOURCE_COMMIT
+          cd dist/wasm
+          sha256sum shellcheck_wasm.wasm > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shellcheck-wasm-${{ github.sha }}
+          path: dist/wasm/
+          if-no-files-found: error
+          retention-days: 14
