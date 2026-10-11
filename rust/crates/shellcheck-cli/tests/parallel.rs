@@ -13,11 +13,13 @@ impl Fixture {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::create_dir(&path).unwrap();
+        std::fs::create_dir(&path)
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
         Self(path)
     }
     fn write(&self, name: &str, text: &str) {
-        std::fs::write(self.0.join(name), text).unwrap();
+        std::fs::write(self.0.join(name), text)
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
     }
     fn run(&self, jobs: &str, args: &[&str], stdin: &str) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
@@ -29,14 +31,16 @@ impl Fixture {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .unwrap();
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
         child
             .stdin
             .take()
-            .unwrap()
+            .unwrap_or_else(|| panic!("stdin pipe missing"))
             .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
+        child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"))
     }
     fn compare(&self, args: &[&str], stdin: &str) -> Output {
         let serial = self.run("1", args, stdin);
@@ -144,17 +148,24 @@ fn quiet_workers_do_not_read_stdin_after_a_finding() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap();
+        .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
     // Keep stdin open: reading it would block. Bound the test and reap on failure.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child
+            .try_wait()
+            .unwrap_or_else(|error| panic!("fixture operation failed: {error}"))
+        {
             assert_eq!(status.code(), Some(1));
             break;
         }
         if std::time::Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
+            child
+                .kill()
+                .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
+            child
+                .wait()
+                .unwrap_or_else(|error| panic!("fixture operation failed: {error}"));
             panic!("quiet mode read later stdin");
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -167,4 +178,25 @@ fn worker_count_must_be_positive() {
     for value in ["0", "-1", "no", "99999999999999999999999999"] {
         assert_eq!(f.run(value, &["--norc", "-"], "").status.code(), Some(3));
     }
+}
+
+#[test]
+fn more_inputs_than_queue_slots_keep_their_order() {
+    let f = Fixture::new();
+    let names: Vec<String> = (0..40).map(|i| format!("input-{i}.sh")).collect();
+    for (i, name) in names.iter().enumerate() {
+        let script = if i == 0 {
+            format!(
+                "#!/bin/bash\n{}echo $first\n{}",
+                "if true; then\n".repeat(800),
+                "fi\n".repeat(800)
+            )
+        } else {
+            format!("#!/bin/bash\necho $value_{i}\n")
+        };
+        f.write(name, &script);
+    }
+    let mut args = vec!["--norc", "-f", "json1"];
+    args.extend(names.iter().map(String::as_str));
+    assert_eq!(f.compare(&args, "").status.code(), Some(1));
 }

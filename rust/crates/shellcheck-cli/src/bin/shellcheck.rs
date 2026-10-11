@@ -132,8 +132,11 @@ impl System for IoSystem {
     ) -> Result<String, ErrorMessage> {
         // Hold the cache lock through a stdin read so workers share the same
         // cached contents rather than racing to consume the stream.
-        let mut cache = self.cache.lock().expect("input cache lock poisoned");
-        if let Some(hit) = cache.get(file) {
+        let mut cache = (file == "-")
+            .then(|| self.cache.lock())
+            .transpose()
+            .map_err(|_| "Input cache lock poisoned".to_string())?;
+        if let Some(hit) = cache.as_ref().and_then(|cache| cache.get(file)) {
             return Ok(hit.clone());
         }
         if !self.allowable(external_sources, file) {
@@ -143,9 +146,10 @@ impl System for IoSystem {
             ));
         }
         let (contents, should_cache) = input_file(file, self.os_path(file).as_os_str())?;
-        if should_cache {
+        if should_cache && let Some(cache) = &mut cache {
             cache.insert(file.to_string(), contents.clone());
         }
+        drop(cache);
         Ok(contents)
     }
 
@@ -336,9 +340,9 @@ fn analyze_input(spec: CheckSpec, sys: Rc<IoSystem>) -> Input {
     })
 }
 
-/// Read roots and resolve configuration in input order, then analyze with
-/// worker-local ASTs. Only plain diagnostics cross thread boundaries; formatters
-/// retain each input's native-path system and the shared stream cache.
+/// Resolve roots and configuration in input order while workers analyze the
+/// preceding inputs. The bounded queue holds at most two specs per worker;
+/// only diagnostics accumulate for the ordered formatter, never worker ASTs.
 fn load_parallel(
     inputs: &[PathBuf],
     template: &CheckSpec,
@@ -346,56 +350,78 @@ fn load_parallel(
     sys: &IoSystem,
     jobs: usize,
 ) -> Vec<Input> {
-    let mut loaded: Vec<Option<Input>> = (0..inputs.len()).map(|_| None).collect();
-    let mut pending = Vec::new();
-    for (index, path) in inputs.iter().enumerate() {
-        match prepare_spec(path, template, config, &sys.for_input(path)) {
-            Ok(spec) => pending.push((index, spec)),
-            Err(error) => loaded[index] = Some(error),
-        }
-    }
     let worker_count = jobs
-        .min(pending.len())
+        .min(inputs.len())
         .min(std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get));
-    // A shared queue balances large scripts against collections of tiny ones.
-    let pending = Mutex::new(pending.into_iter());
-    let (send, receive) = std::sync::mpsc::channel();
+    let (tasks, pending) = std::sync::mpsc::sync_channel::<(usize, CheckSpec)>(worker_count * 2);
+    let pending = Mutex::new(pending);
+    let (results, completed) = std::sync::mpsc::channel();
+    let mut loaded: Vec<Input> = inputs
+        .iter()
+        .map(|path| Input::Err {
+            name: path.to_string_lossy().into_owned(),
+            message: "Analysis worker returned no result".to_string(),
+        })
+        .collect();
     std::thread::scope(|scope| {
+        let mut started = 0;
         for _ in 0..worker_count {
             let pending = &pending;
-            let send = send.clone();
-            std::thread::Builder::new()
+            let results = results.clone();
+            let worker = std::thread::Builder::new()
                 .stack_size(8 * 1024 * 1024)
                 .spawn_scoped(scope, move || {
                     loop {
-                        let Some((index, spec)) =
-                            pending.lock().expect("work queue lock poisoned").next()
-                        else {
-                            break;
-                        };
+                        // Release the receiver lock before doing any analysis.
+                        let task = pending
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .recv();
+                        let Ok((index, spec)) = task else { break };
                         let system = Rc::new(sys.for_input(&inputs[index]));
                         let result = shellcheck_rs::checker::check_script_with(system, &spec);
-                        if send.send((index, result)).is_err() {
+                        if results.send((index, result)).is_err() {
                             break;
                         }
                     }
-                })
-                .expect("could not start analysis worker");
+                });
+            if worker.is_err() {
+                break;
+            }
+            started += 1;
         }
-        drop(send);
-        for (index, result) in receive {
-            loaded[index] = Some(Input::Ok(Loaded {
+        drop(results);
+        // Resource limits may prevent spawning threads. Existing workers can
+        // drain the queue; if none started, retain the sequential behavior.
+        if started == 0 {
+            let sys = Rc::new(sys.clone());
+            loaded = inputs
+                .iter()
+                .map(|path| load(path, template, config, &sys))
+                .collect();
+            return;
+        }
+        for (index, path) in inputs.iter().enumerate() {
+            match prepare_spec(path, template, config, &sys.for_input(path)) {
+                Ok(spec) => {
+                    if tasks.send((index, spec)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => loaded[index] = error,
+            }
+        }
+        drop(tasks);
+        for (index, result) in completed {
+            loaded[index] = Input::Ok(Loaded {
                 name: inputs[index].to_string_lossy().into_owned(),
                 sys: Rc::new(sys.for_input(&inputs[index])),
                 comments: result.comments,
                 failure: result.dataflow_error.map(dataflow_failure),
-            }));
+            });
         }
     });
     loaded
-        .into_iter()
-        .map(|input| input.expect("worker returned no result"))
-        .collect()
 }
 
 /// `NE.groupWith sourceFile`: split the comments into runs that share a start
@@ -736,6 +762,29 @@ mod tests {
         assert_eq!(adjust_path("x/SCRIPTDIR", "dir/"), "x/SCRIPTDIR");
         assert_eq!(adjust_path("SCRIPTDIRish", "dir/"), "SCRIPTDIRish");
         assert_eq!(adjust_path("inc", "dir/"), "inc");
+    }
+
+    #[test]
+    fn regular_file_reads_do_not_wait_for_the_stdin_cache() {
+        let sys = IoSystem {
+            inputs: Arc::new(HashSet::new()),
+            external_sources: true,
+            source_paths: Vec::new(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            input: None,
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let cache = Arc::clone(&sys.cache);
+        let guard = cache.lock().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _ = send.send(sys.read_file(None, &path.to_string_lossy()));
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(2));
+        // Unlock before joining, so a regression fails instead of hanging.
+        drop(guard);
+        thread.join().unwrap();
+        assert!(result.unwrap().unwrap().contains("[package]"));
     }
 
     #[test]

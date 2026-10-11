@@ -12,9 +12,9 @@ use crate::ast_lib::is_annotation_ignoring_code;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::{CFGParameters, InternalError};
 use crate::cfg_analysis::{self, CFGAnalysis};
+use crate::idhash::IdMap;
 use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
 use crate::regex_lib::mk_regex;
-use std::collections::BTreeMap;
 
 /// Precomputed analysis context (`ShellCheck.AnalyzerLib.Parameters`).
 ///
@@ -29,10 +29,11 @@ pub struct Parameters {
     pub root: Token,
     /// `tokenPositions`: map from token id to start and end position.
     pub token_positions: PositionMap,
-    /// Id -> parent Id.
-    pub parent_map: BTreeMap<Id, Id>,
+    /// Id -> parent Id. Iteration order is unspecified.
+    pub parent_map: IdMap<Id, Id>,
     /// Id -> a clone of that token (for parent/ancestor inspection).
-    pub id_map: BTreeMap<Id, Token>,
+    /// Iteration order is unspecified; diagnostic ordering must not use it.
+    pub id_map: IdMap<Id, Token>,
     /// `hasSetE`, `hasPipefail`, `hasLastpipe`, `hasInheritErrexit`, `hasNoglob` and `hasExecfail`,
     /// read through the methods of the same names.
     pub options: ShellOptions,
@@ -482,16 +483,16 @@ fn from_shebang(shebang: &Token) -> String {
 
 /// Build Id -> parent-Id and Id -> token maps.
 #[must_use]
-pub fn build_maps(root: &Token) -> (BTreeMap<Id, Id>, BTreeMap<Id, Token>) {
-    fn go(t: &Token, parent: &mut BTreeMap<Id, Id>, id_map: &mut BTreeMap<Id, Token>) {
+pub fn build_maps(root: &Token) -> (IdMap<Id, Id>, IdMap<Id, Token>) {
+    fn go(t: &Token, parent: &mut IdMap<Id, Id>, id_map: &mut IdMap<Id, Token>) {
         id_map.insert(t.id(), t.clone());
         t.inner.for_each_child(|c| {
             parent.insert(c.id(), t.id());
             go(c, parent, id_map);
         });
     }
-    let mut parent = BTreeMap::new();
-    let mut id_map = BTreeMap::new();
+    let mut parent = IdMap::default();
+    let mut id_map = IdMap::default();
     go(root, &mut parent, &mut id_map);
     (parent, id_map)
 }
@@ -1262,8 +1263,8 @@ fn get_variables_from_literal_token(t: &Token) -> Vec<String> {
 // ===========================================================================
 
 struct FlowCtx<'a> {
-    parent_map: &'a BTreeMap<Id, Id>,
-    id_map: &'a BTreeMap<Id, Token>,
+    parent_map: &'a IdMap<Id, Id>,
+    id_map: &'a IdMap<Id, Token>,
     // The only shell-dependent decision in this flow (whether the last pipeline
     // element runs in a subshell) is captured by `has_lastpipe`, computed
     // upstream exactly as Haskell's `hasLastpipe`; `shellType` itself is not used
@@ -1302,8 +1303,8 @@ fn data_type_from(def: &DefCtor, value: &Token) -> DataType {
 }
 
 pub(crate) fn get_variable_flow(
-    parent_map: &BTreeMap<Id, Id>,
-    id_map: &BTreeMap<Id, Token>,
+    parent_map: &IdMap<Id, Id>,
+    id_map: &IdMap<Id, Token>,
     has_lastpipe: bool,
     root: &Token,
 ) -> Vec<StackData> {

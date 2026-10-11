@@ -2,6 +2,70 @@
 
 Measured facts, the fast loops, and the work packages, in that order. Each measurement section names its baseline and method; compare within a section rather than across machines.
 
+## 2026-10-11: bounded workers, shared snapshots and fewer parser allocations
+
+Compared with our own release binary at [3ad86e18](https://github.com/kjanat/shellcheck-rs/commit/3ad86e183c3662a142cff5909a9d03b1498daaab). Five shuffled before/after runs per workload, one warm-up per binary, pinned to CPU 0; full analysis with `--norc`. Times are medians, with no confidence intervals or significance claim. Every measured output and exit status agrees with the baseline. Omarchy is pinned to [077ac1da939d](https://github.com/omacom/omarchy/commit/077ac1da939de00d061c1035e1a1d00587a119b8): **1,228 shell files, 119,468 lines**.
+
+| Workload                      |    Before |     After | Before / after | Peak RSS before → after |
+| ----------------------------- | --------: | --------: | -------------: | ----------------------: |
+| **Ordinary scripts**          |           |           |                |                         |
+| 2-line script                 |   2.28 ms |   2.32 ms |          0.98× |           6.2 → 6.1 MiB |
+| 170-line script               |  10.41 ms |  10.02 ms |          1.04× |           9.1 → 9.2 MiB |
+| 1,632-line script             | 115.34 ms | 102.50 ms |          1.13× |         42.9 → 41.4 MiB |
+| 4,337-line script             | 277.60 ms | 281.35 ms |          0.99× |        100.8 → 97.9 MiB |
+| 120 scripts / 9,107 lines     | 289.99 ms | 264.16 ms |          1.10× |           9.0 → 9.0 MiB |
+| **Nested control flow**       |           |           |                |                         |
+| 200 nested if statements      |  13.23 ms |  11.62 ms |          1.14× |         11.6 → 11.3 MiB |
+| 400 nested if statements      |  26.67 ms |  22.86 ms |          1.17× |         17.0 → 17.5 MiB |
+| 800 nested if statements      |  56.20 ms |  46.82 ms |          1.20× |         31.8 → 29.7 MiB |
+| **Full Omarchy corpus**       |           |           |                |                         |
+| All Omarchy, GCC diagnostics  |   4.292 s |   3.483 s |          1.23× |         54.0 → 51.9 MiB |
+| All Omarchy, JSON diagnostics |   3.581 s |   3.385 s |          1.06× |         54.2 → 52.0 MiB |
+
+RSS above is a separate GNU `time` run per binary/workload, not Python's launcher-contaminated `wait4` reading. The 4,337-line script and startup show no wall-time gain in this sample; fewer instructions do not guarantee a faster observed run.
+
+### Worker throughput and memory
+
+The same complete Omarchy sweep, five shuffled runs per binary/worker count and one warm-up. Each process has the same eight-CPU affinity set; `--jobs 1` can migrate among those CPUs, so compare within this table rather than against the CPU-0 table above. RSS is the median of the five isolated GNU `time` process peaks, including all worker threads. Both GCC and JSON output and exit status match the serial baseline for every sample.
+
+| Format | Jobs |  Before |   After | Before RSS | After RSS |
+| ------ | ---: | ------: | ------: | ---------: | --------: |
+| GCC    |    1 | 3.539 s | 3.204 s |   54.6 MiB |  51.9 MiB |
+| GCC    |    2 | 1.847 s | 1.681 s |   84.9 MiB |  76.6 MiB |
+| GCC    |    4 | 0.980 s | 0.892 s |  128.7 MiB | 119.7 MiB |
+| GCC    |    8 | 0.591 s | 0.540 s |  208.6 MiB | 203.7 MiB |
+| JSON   |    1 | 3.694 s | 3.387 s |   54.5 MiB |  52.0 MiB |
+| JSON   |    2 | 2.000 s | 1.740 s |   84.5 MiB |  70.8 MiB |
+| JSON   |    4 | 1.017 s | 0.958 s |  127.0 MiB | 119.5 MiB |
+| JSON   |    8 | 0.600 s | 0.558 s |  215.9 MiB | 215.9 MiB |
+
+Implemented:
+
+- Ordinary file reads bypass the stdin-cache mutex. Stdin remains protected and cached; native path identity and source-access checks are preserved.
+- The producer resolves roots/configuration in input order while workers analyze earlier files. A bounded queue holds at most two pending specs per requested worker, plus active work and the producer's current spec. Completed diagnostics still accumulate for ordered formatting; this is not a constant-memory claim. Thread creation failure uses fewer workers or falls back to serial execution.
+- Public CFG snapshots share immutable exit-code sets through `Rc`; checks borrow them instead of cloning. Copy-on-write mutation of a snapshot does not modify another snapshot.
+- Token and parent maps use the existing integer-keyed `IdMap`. Current consumers use keyed lookups; no diagnostic ordering depends on map iteration.
+- Remove the parser's write-only `reach_pos` field. Updating it copied the filename at every furthest cursor advance, even though diagnostics use the separate failure coordinates. Keep the `reach` index and all failure/recovery behavior.
+
+`--jobs` remains opt-in and defaults to 1. Quiet mode and invocations with non-regular root inputs keep sequential behavior. Worker ASTs stay local to each worker; output order, source resolution, rc warnings and native filename handling remain covered by integration tests.
+
+**Rust API compatibility:** `ProgramState::exit_codes` is now `Rc<BTreeSet<Id>>`; direct mutations use `Rc::make_mut`. The `exit_codes()` accessor still returns `&BTreeSet<Id>`, but is no longer `const`. `Parameters::{parent_map,id_map}` and `build_maps()` now expose `IdMap` rather than `BTreeMap`; their iteration order is unspecified. External constructors and callers requiring ordered map iteration must adapt. The CLI diagnostic contract is unchanged.
+
+### Profile evidence
+
+| Workload                     | Before instructions | After instructions | Reduction | Before malloc calls | After malloc calls |
+| ---------------------------- | ------------------: | -----------------: | --------: | ------------------: | -----------------: |
+| 4,337-line script            |       1,120,917,884 |      1,024,351,575 |      8.6% |           1,865,907 |          1,715,297 |
+| 400 nested if statements     |         125,389,287 |        109,198,019 |     12.9% |             168,543 |            137,851 |
+| 800 nested if statements     |         293,559,182 |        242,151,773 |     17.5% |             378,668 |            288,099 |
+| All 1,228 Omarchy files, GCC |      22,898,695,974 |     20,825,126,279 |      9.1% |          39,924,750 |         34,094,238 |
+
+Callgrind runs are separate from native timing and produce identical output. The intermediate `snapshots-profile/` excludes the final parser cleanup, allowing its allocation effect to be inspected separately. The initial Omarchy profile attributed 0.14% of instructions to `get_command_basename` and 0.70% to `is_command` (inclusive); those helpers were left unchanged. The parser's repeated filename allocation was the stronger measured string target.
+
+Validation: **2,145 workspace tests**, strict Clippy with warnings denied, rustfmt and dprint; **2,086 oracle comparisons**, **2,000 seeded fuzz inputs**, all with zero divergences; **4,062 snapshot entries unchanged**. New regression tests hold the stdin lock during a regular-file read and send 40 inputs, including an 800-level nested first input, through the bounded queue while checking exact serial output order.
+
+Local evidence (not published artifacts): `.cache/optimize-workers/{comparison,jobs,rss}.json`, their Python drivers, `*.callgrind`, `*.metrics.json`, `after-profile/` and validation logs. Drivers record hashes, arguments, affinity, shuffled run orders and individual samples. Baseline binary SHA-256: `a981b2ffec0c497770976bc4f4783fce58dad13a23189d42437e2aefa50cb979`; final binary SHA-256: `d62e2d074d7351f2ebde116261a38ab7fd5e959af891ff49b1ea5f7a5f63a461`.
+
 ## 2026-10-11: lazy CFG associations and allocation-free traversal
 
 Compared with our own Rust release binary at [c0e72e70](https://github.com/kjanat/shellcheck-rs/commit/c0e72e70ce09d83193de087a3eed4e2edea3fba0). Five shuffled before/after process runs per workload, one warm-up per binary, pinned to CPU 0; full analysis, `--norc -s bash`. Times are medians. Every measured output is byte-identical, including complete GCC and JSON sweeps of pinned Omarchy [077ac1da939d](https://github.com/omacom/omarchy/commit/077ac1da939de00d061c1035e1a1d00587a119b8). These are local observations without confidence intervals; startup is effectively unchanged.

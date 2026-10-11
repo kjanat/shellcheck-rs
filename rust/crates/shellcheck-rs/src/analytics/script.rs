@@ -681,19 +681,19 @@ fn overwritten_check(params: &Parameters, t: &Token, out: &mut Out) {
     (|| {
         let cfga = params.cfg_analysis.as_ref()?;
         let state = cfga.get_incoming_state(id)?;
-        let exit_code_ids = state.exit_codes().clone();
+        let exit_code_ids = state.exit_codes();
         if exit_code_ids.is_empty() {
             return None;
         }
         // traverse (Map.lookup) — all must be present.
         let mut exit_code_tokens: Vec<Token> = Vec::new();
-        for k in &exit_code_ids {
+        for k in exit_code_ids {
             let tok = params.id_map.get(k)?;
             exit_code_tokens.push(tok.clone());
         }
 
         if exit_code_tokens.iter().all(is_condition)
-            && !used_unconditionally(params, t, &exit_code_ids)
+            && !used_unconditionally(params, t, exit_code_ids)
         {
             warn(
                 out,

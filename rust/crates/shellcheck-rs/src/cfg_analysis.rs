@@ -105,8 +105,9 @@ pub struct ProgramState {
     global_values: ScopeValues,
     local_values: ScopeValues,
     prefix_values: ScopeValues,
-    /// The tokens whose exit code `$?` may hold.
-    pub exit_codes: BTreeSet<Id>,
+    /// The tokens whose exit code `$?` may hold, shared between snapshots.
+    /// Use `Rc::make_mut` when modifying an owned snapshot.
+    pub exit_codes: Rc<BTreeSet<Id>>,
     /// Whether any execution path reaches this state.
     pub state_is_reachable: bool,
 }
@@ -219,7 +220,7 @@ impl ProgramState {
     }
     /// `exitCodes`.
     #[must_use]
-    pub const fn exit_codes(&self) -> &BTreeSet<Id> {
+    pub fn exit_codes(&self) -> &BTreeSet<Id> {
         &self.exit_codes
     }
 
@@ -1851,7 +1852,7 @@ fn internal_to_external(s: &InternalState) -> ProgramState {
         global_values: ScopeValues::flat(&s.s_global_values),
         local_values: ScopeValues::flat(&s.s_local_values),
         prefix_values: ScopeValues::flat(&s.s_prefix_values),
-        exit_codes: s.s_exit_codes.as_deref().cloned().unwrap_or_default(),
+        exit_codes: s.s_exit_codes.clone().unwrap_or_default(),
         state_is_reachable: s.s_is_reachable.unwrap_or(true),
     }
 }
@@ -1875,7 +1876,7 @@ fn patched_to_external(base: &InternalState, diff: &InternalState) -> ProgramSta
             .s_exit_codes
             .as_ref()
             .or(base.s_exit_codes.as_ref())
-            .map(|codes| (**codes).clone())
+            .cloned()
             .unwrap_or_default(),
         state_is_reachable: diff.s_is_reachable.or(base.s_is_reachable).unwrap_or(true),
     }
@@ -2031,9 +2032,19 @@ mod tests {
             original.s_exit_codes.as_ref().unwrap(),
             snapshot.s_exit_codes.as_ref().unwrap()
         ));
+        let mut external = internal_to_external(&snapshot);
+        assert!(Rc::ptr_eq(
+            &external.exit_codes,
+            snapshot.s_exit_codes.as_ref().unwrap()
+        ));
+        Rc::make_mut(&mut external.exit_codes).insert(Id(3));
+        assert_eq!(external.exit_codes(), &[Id(1), Id(3)].into());
         let changed = set_exit_code(Id(2), &snapshot);
-        assert_eq!(internal_to_external(&original).exit_codes, [Id(1)].into());
-        assert_eq!(internal_to_external(&changed).exit_codes, [Id(2)].into());
+        assert_eq!(
+            internal_to_external(&original).exit_codes(),
+            &[Id(1)].into()
+        );
+        assert_eq!(internal_to_external(&changed).exit_codes(), &[Id(2)].into());
     }
 
     #[test]

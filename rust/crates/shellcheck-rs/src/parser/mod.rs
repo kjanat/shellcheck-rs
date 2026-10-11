@@ -314,8 +314,6 @@ pub struct Parser {
     /// the error from the furthest failing alternative, not the last one
     /// tried, so failures are ranked by this rather than by the live cursor.
     reach: usize,
-    /// The source position of [`Parser::reach`].
-    reach_pos: Position,
     /// The deepest failure seen, which is the one a fatal parse reports.
     failure: Option<Failure>,
     /// The `ContextAnnotation` / `ContextSource` frames in scope, outermost
@@ -519,11 +517,6 @@ impl Parser {
             commitment_backtracks: std::collections::BTreeSet::new(),
             frozen_contexts: None,
             reach: 0,
-            reach_pos: Position {
-                file: filename.to_string(),
-                line: 1,
-                column: 1,
-            },
             failure: None,
         }
     }
@@ -617,13 +610,6 @@ impl Parser {
                 self.col += 8 - ((self.col - 1) % 8);
             }
             _ => self.col += 1,
-        }
-        if self.idx >= self.reach {
-            self.reach_pos = Position {
-                file: self.filename.clone(),
-                line: self.line,
-                column: self.col,
-            };
         }
         Some(c)
     }
