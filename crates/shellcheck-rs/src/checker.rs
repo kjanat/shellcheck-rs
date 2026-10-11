@@ -375,6 +375,27 @@ mod source_tests {
     }
 
     #[test]
+    fn completed_statement_notes_survive_later_failures() {
+        for script in ["echo $10\nif\n", "echo $10; if", "echo $arr[0]\nif\n"] {
+            let found = check(script);
+            assert!(found.contains(&1072), "{script}: {found:?}");
+            assert!(
+                found.contains(&1037) || found.contains(&1087),
+                "{script}: {found:?}"
+            );
+        }
+        for script in [
+            "if true; then echo $10; if",
+            "echo $(echo $10; if)",
+            "echo $10 | if",
+            "# shellcheck disable=SC1037\necho $10\nif\n",
+            "cat <<EOF $10\n",
+        ] {
+            assert!(!check(script).contains(&1037), "{script}");
+        }
+    }
+
+    #[test]
     fn clearer_parse_errors_are_opt_in() {
         for script in ["${ ", "((())"] {
             let mut spec = CheckSpec {

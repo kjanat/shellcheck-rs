@@ -297,6 +297,8 @@ pub struct Parser {
     next_id: i32,
     positions: BTreeMap<Id, (Position, Position)>,
     notes: Vec<ParseNote>,
+    /// Notes from complete, separated top-level statements survive later failures.
+    completed_notes: usize,
     problems: Vec<ParseNote>,
     pending_heredocs: Vec<PendingHereDoc>,
     // body text collected for each pending heredoc, keyed by id
@@ -507,6 +509,7 @@ impl Parser {
             next_id: 0,
             positions: BTreeMap::new(),
             notes: Vec::new(),
+            completed_notes: 0,
             problems: Vec::new(),
             pending_heredocs: Vec::new(),
             heredoc_bodies: BTreeMap::new(),
@@ -1779,9 +1782,10 @@ fn parse_to_output(p: &mut Parser) -> ParseOutput {
     }
     if root.is_none() || committed_failure {
         // Haskell `parseShell`'s `Left err` branch: prRoot = Nothing, so no
-        // analysis runs at all, the buffered parse *notes* are discarded, and
-        // only the fatal *problems* survive alongside the failure itself.
+        // analysis runs at all. Retain notes only from completed top-level
+        // statements; speculative notes from the failing statement are discarded.
         let mut notes = p.problems.clone();
+        notes.extend(p.notes.iter().take(p.completed_notes).cloned());
         notes.extend(p.failure_notes());
         return ParseOutput {
             root: None,

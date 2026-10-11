@@ -558,3 +558,27 @@ The `interpreter-path-typo` conformance class permits only added SC9001 findings
 reproducible from the shebang alone; all body diagnostics must still match or
 independently satisfy another documented class. The rule uses spelling distance
 on directory components, not a list of known misspellings.
+
+## October 11 follow-up: stable traps and useful fatal-parser diagnostics
+
+The Rust port intentionally differs from upstream in three additional cases:
+
+- SC2064 is suppressed for simple trap variables whose visible assignments all
+  precede registration, with conservative barriers for dynamic shell execution,
+  scope changes and implicit writes. The original issue #4 script retains SC9002
+  and SC2162 but no longer receives the two unnecessary SC2064 findings.
+- An unfinished quoted test operator reports the missing end of the quoted
+  string. For `[* '` this replaces the misleading comparison-operator message;
+  valid quoted operators still parse normally.
+- Parse notes from complete, separated root statements survive a later fatal
+  parse. `echo $10` followed by an incomplete `if` retains SC1037. No analysis
+  runs on the incomplete AST, and notes inside unfinished compounds or unread
+  heredocs are not promoted.
+
+The conformance harness requires exact independent prefix diagnostics for added
+parse notes, and Bash syntax-only confirmation of an unterminated quote for the
+changed test-operator error. Other diagnostic differences remain failures.
+Seven snapshot inputs change: six retain earlier source-resolution notes and one
+identifies the actual unterminated quote at EOF. Zero-width insertion-point spans
+remain unchanged. Haskell crashes and valid-Bash negation handling still require
+upstream follow-up; no upstream source is patched here.

@@ -47,6 +47,128 @@ const FUNCTION_TAIL_CD: Deviation = Deviation {
     what: "upstream suppresses unchecked directory changes inside a final compound statement",
 };
 
+const COMPLETED_PARSE_NOTES: Deviation = Deviation {
+    id: "completed-statement-notes",
+    what: "parse notes from complete top-level statements survive a later fatal parse",
+};
+const UNCLOSED_TEST_QUOTE: Deviation = Deviation {
+    id: "unclosed-test-quote",
+    what: "the port identifies an unterminated quote instead of a missing test operator",
+};
+
+fn completed_statement_notes(
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+) -> bool {
+    if !oracle.iter().any(|k| k.code == 1072) {
+        return false;
+    }
+    let extra: Vec<_> = port.iter().filter(|k| !oracle.contains(k)).collect();
+    if extra.is_empty()
+        || extra
+            .iter()
+            .any(|k| !(1000..2000).contains(&k.code) || FATAL_PARSE_CODES.contains(&k.code))
+    {
+        return false;
+    }
+    if !port.iter().filter(|k| !extra.contains(k)).eq(oracle.iter()) {
+        return false;
+    }
+    // Demand a complete, independently parsable prefix that reproduces every
+    // extra finding exactly. Never waive an arbitrary added SC1xxx diagnostic.
+    script
+        .char_indices()
+        .filter(|(_, c)| matches!(c, ';' | '\n' | '&'))
+        .any(|(i, c)| {
+            let prefix = &script[..i + c.len_utf8()];
+            let parsed = shellcheck_rs::parser::parse_script_with(
+                "-",
+                prefix,
+                shell.is_some(),
+                shell.and_then(crate::parse_shell),
+            );
+            if parsed.root.is_none()
+                || parsed
+                    .notes
+                    .iter()
+                    .any(|n| FATAL_PARSE_CODES.contains(&n.code))
+            {
+                return false;
+            }
+            crate::port_keys(prefix, "-", shell)
+                .is_ok_and(|keys| extra.iter().all(|k| keys.contains(k)))
+        })
+}
+
+fn unclosed_test_quote(script: &str, port: &[CommentKey], oracle: &[CommentKey]) -> bool {
+    let removed: Vec<_> = oracle.iter().filter(|k| !port.contains(k)).collect();
+    let added: Vec<_> = port.iter().filter(|k| !oracle.contains(k)).collect();
+    if removed.len() != 1 || added.len() != 1 {
+        return false;
+    }
+    let old = removed[0];
+    let new = added[0];
+    if old.code != 1072
+        || new.code != 1072
+        || old.level != new.level
+        || old.fix != new.fix
+        || !matches!(
+            old.message.as_str(),
+            "Expected comparison operator (don't wrap commands in []/[[]]). Fix any mentioned problems and try again."
+                | " Fix any mentioned problems and try again."
+        )
+        || !matches!(
+            new.message.as_str(),
+            "Expected end of single quoted string. Fix any mentioned problems and try again."
+                | "Expected end of double quoted string. Fix any mentioned problems and try again."
+        )
+        || !oracle
+            .iter()
+            .any(|k| k.code == 1073 && k.message.contains("test expression"))
+        || !port
+            .iter()
+            .filter(|k| *k != new)
+            .eq(oracle.iter().filter(|k| *k != old))
+    {
+        return false;
+    }
+    let eof = script.chars().fold((1, 1), |(line, col), c| match c {
+        '\n' => (line + 1, 1),
+        '\t' => (line, col + 8 - ((col - 1) % 8)),
+        _ => (line, col + 1),
+    });
+    if (new.line, new.column) != eof || (new.end_line, new.end_column) != eof {
+        return false;
+    }
+    // Independent syntax-only shell evidence, never execute the input.
+    let Ok(mut child) = Command::new("bash")
+        .args(["--noprofile", "--norc", "-n"])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return false;
+    };
+    let Some(mut input) = child.stdin.take() else {
+        return false;
+    };
+    if input.write_all(script.as_bytes()).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    }
+    drop(input);
+    child.wait_with_output().is_ok_and(|out| {
+        !out.status.success()
+            && String::from_utf8_lossy(&out.stderr)
+                .contains("unexpected EOF while looking for matching")
+    })
+}
+
 // Recognize the old upstream predicate AND an ancestor that can overwrite the
 // command's status. Match the precise diagnostic span; never waive SC2164 by code.
 fn function_tail_cd(
@@ -244,6 +366,12 @@ pub fn sanctioned(
         }
         return None;
     }
+    if completed_statement_notes(script, shell, port, oracle) {
+        return Some(&COMPLETED_PARSE_NOTES);
+    }
+    if unclosed_test_quote(script, port, oracle) {
+        return Some(&UNCLOSED_TEST_QUOTE);
+    }
     if function_tail_cd(script, shell, port, oracle) {
         return Some(&FUNCTION_TAIL_CD);
     }
@@ -279,6 +407,52 @@ mod tests {
             message: String::new(),
             fix: None,
         }
+    }
+
+    #[test]
+    fn completed_notes_require_exact_independent_prefix_evidence() {
+        let script = "echo $10\nif\n";
+        let port = crate::port_keys(script, "-", Some("bash")).expect("port");
+        let oracle: Vec<_> = port.iter().filter(|k| k.code != 1037).cloned().collect();
+        assert!(completed_statement_notes(
+            script,
+            Some("bash"),
+            &port,
+            &oracle
+        ));
+        let mut shifted = port.clone();
+        shifted.iter_mut().find(|k| k.code == 1037).unwrap().column += 1;
+        assert!(!completed_statement_notes(
+            script,
+            Some("bash"),
+            &shifted,
+            &oracle
+        ));
+        let mut unrelated = port;
+        unrelated.push(key(1100));
+        assert!(!completed_statement_notes(
+            script,
+            Some("bash"),
+            &unrelated,
+            &oracle
+        ));
+    }
+
+    #[test]
+    fn quote_explanation_requires_an_unterminated_quote_and_exact_span() {
+        let script = "[* '";
+        let port = crate::port_keys(script, "-", Some("bash")).expect("port");
+        let mut oracle = port.clone();
+        oracle.iter_mut().find(|k| k.code == 1072).unwrap().message =
+            "Expected comparison operator (don't wrap commands in []/[[]]). Fix any mentioned problems and try again.".into();
+        if Command::new("bash").arg("--version").output().is_err() {
+            return;
+        }
+        assert!(unclosed_test_quote(script, &port, &oracle));
+        assert!(!unclosed_test_quote("echo ok", &port, &oracle));
+        let mut shifted = port;
+        shifted.iter_mut().find(|k| k.code == 1072).unwrap().column += 1;
+        assert!(!unclosed_test_quote(script, &shifted, &oracle));
     }
 
     #[test]

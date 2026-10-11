@@ -30,8 +30,184 @@ use crate::interface::Code;
 use crate::interface::Shell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+// Suppress only plain variable expansions whose lifetime is visibly stable.
+// Unknown shell execution and scopes fail closed: this is not a general proof
+// about arbitrary eval/source/function code or asynchronously installed traps.
+fn stable_trap_variables(params: &Parameters, trap: &Token, action: &Token) -> HashSet<String> {
+    let Some((trap_start, _)) = params.token_positions.get(&trap.id()) else {
+        return HashSet::new();
+    };
+    if get_path(params, trap).iter().any(|t| {
+        matches!(
+            t.inner(),
+            InnerToken::T_Function { .. }
+                | InnerToken::T_ForIn { .. }
+                | InnerToken::T_ForArithmetic { .. }
+                | InnerToken::T_WhileExpression { .. }
+                | InnerToken::T_UntilExpression { .. }
+                | InnerToken::T_SelectIn { .. }
+                | InnerToken::T_Subshell(_)
+                | InnerToken::T_Backgrounded(_)
+        )
+    }) {
+        return HashSet::new();
+    }
+    let mut assigned = HashSet::new();
+    let mut changed = HashSet::new();
+    let mut commands: HashMap<String, Vec<String>> = HashMap::new();
+    for event in &params.variable_flow {
+        if let StackData::Assignment(_, token, name, _) = event {
+            let before = params
+                .token_positions
+                .get(&token.id())
+                .is_some_and(|(_, end)| end.file == trap_start.file && end <= trap_start);
+            if before {
+                assigned.insert(name.clone());
+            } else {
+                changed.insert(name.clone());
+            }
+            let value = match token.inner() {
+                InnerToken::T_Assignment { value, .. } => get_literal_string(value),
+                _ => None,
+            };
+            commands
+                .entry(name.clone())
+                .or_default()
+                .push(value.unwrap_or_default());
+        }
+    }
+    params.root.visit_preorder(&mut |t| {
+        if let InnerToken::T_Assignment { var, .. } = t.inner()
+            && params
+                .token_positions
+                .get(&t.id())
+                .is_none_or(|(_, end)| end > trap_start)
+        {
+            changed.insert(var.clone());
+        }
+    });
+    assigned.retain(|n| {
+        !changed.contains(n)
+            && !n.starts_with("BASH")
+            && !matches!(
+                n.as_str(),
+                "RANDOM"
+                    | "SRANDOM"
+                    | "SECONDS"
+                    | "EPOCHSECONDS"
+                    | "EPOCHREALTIME"
+                    | "LINENO"
+                    | "_"
+                    | "REPLY"
+                    | "OPTIND"
+                    | "OPTARG"
+                    | "PIPESTATUS"
+                    | "PWD"
+                    | "OLDPWD"
+                    | "DIRSTACK"
+                    | "FUNCNAME"
+                    | "GROUPS"
+                    | "SHELLOPTS"
+            )
+    });
+    if trap_execution_is_visible(params, trap, action, &assigned, &commands) {
+        assigned
+    } else {
+        HashSet::new()
+    }
+}
+
+fn trap_execution_is_visible(
+    params: &Parameters,
+    trap: &Token,
+    action: &Token,
+    assigned: &HashSet<String>,
+    commands: &HashMap<String, Vec<String>>,
+) -> bool {
+    let action = ast_lib::get_literal_string_ext(action, &|t| {
+        let InnerToken::T_DollarBraced { op, .. } = t else {
+            return None;
+        };
+        let name = get_literal_string(op)?;
+        is_variable_name(&name).then(|| format!("${{{name}}}"))
+    });
+    let Some(action) = action else {
+        return false;
+    };
+    let parsed = crate::parser::parse_script_with("-", &action, true, Some(params.shell));
+    let Some(action_root) = parsed.root else {
+        return false;
+    };
+    let safe_command = |name: &str, words: &[Token]| {
+        match name {
+            "eval" | "." | "source" | "unset" | "declare" | "typeset" | "local" | "export"
+            | "readonly" | "getopts" | "let" | "builtin" | "enable" | "alias" | "unalias"
+            | "trap" | "mapfile" | "readarray" | "wait" | "bind" => false,
+            "read" => words.len() == 1, // only the excluded implicit REPLY
+            "command" => words
+                .get(1)
+                .and_then(get_literal_string)
+                .is_some_and(|s| matches!(s.as_str(), "-v" | "-V")),
+            "printf" => words
+                .get(1)
+                .and_then(get_literal_string)
+                .is_some_and(|s| !s.starts_with('-')),
+            _ => !name.is_empty(),
+        }
+    };
+    let mut opaque = false;
+    for (root, in_action) in [(&params.root, false), (&action_root, true)] {
+        root.visit_preorder(&mut |t| {
+            if t.id() == trap.id() && !in_action {
+                return;
+            }
+            match t.inner() {
+                InnerToken::T_Function { .. } | InnerToken::T_SourceCommand { .. } => opaque = true,
+                InnerToken::T_Assignment { var, .. } if var == "IFS" => opaque = true,
+                InnerToken::T_DollarBraced { op, .. } if in_action => {
+                    opaque |= !get_literal_string(op).is_some_and(|name| is_variable_name(&name));
+                }
+                InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => {
+                    if let Some(name) = get_literal_string(&words[0]) {
+                        opaque |= !safe_command(&name, words);
+                    } else {
+                        // An engine selected from literal alternatives is still
+                        // resolvable; an arbitrary variable command may be eval.
+                        let name = ast_lib::get_literal_string_ext(&words[0], &|part| {
+                            let InnerToken::T_DollarBraced { op, .. } = part else {
+                                return None;
+                            };
+                            get_literal_string(op).filter(|n| assigned.contains(n))
+                        });
+                        opaque |= !name.and_then(|n| commands.get(&n)).is_some_and(|values| {
+                            !values.is_empty()
+                                && values.iter().all(|v| {
+                                    v.chars()
+                                        .all(|c| c.is_ascii_alphanumeric() || "_-/.".contains(c))
+                                        && safe_command(v, words)
+                                })
+                        });
+                    }
+                }
+                // Trap actions must not change state themselves.
+                InnerToken::T_Assignment { .. }
+                | InnerToken::TA_Assignment { .. }
+                | InnerToken::TA_Unary { .. }
+                | InnerToken::T_ForIn { .. }
+                | InnerToken::T_SelectIn { .. }
+                    if in_action =>
+                {
+                    opaque = true;
+                }
+                _ => {}
+            }
+        });
+    }
+    !opaque
+}
+
 pub(super) fn check_trap_quotes() -> CommandCheck {
-    CommandCheck::new(Exactly("trap"), |_params, t, out| {
+    CommandCheck::new(Exactly("trap"), |params, t, out| {
         let Some(words) = simple_command_words(t) else {
             return;
         };
@@ -48,7 +224,13 @@ pub(super) fn check_trap_quotes() -> CommandCheck {
         let InnerToken::T_DoubleQuoted(rs) = &*parts[0].inner else {
             return;
         };
+        let stable = stable_trap_variables(params, t, arg);
         for r in rs {
+            if let InnerToken::T_DollarBraced { op, .. } = r.inner()
+                && get_literal_string(op).is_some_and(|name| stable.contains(&name))
+            {
+                continue;
+            }
             let hit = matches!(
                 &*r.inner,
                 InnerToken::T_DollarExpansion(_)
@@ -914,6 +1096,43 @@ mod tests {
     use super::*;
     use crate::interface::Shell;
     use crate::test_support::*;
+
+    #[test]
+    fn stable_trap_values_need_no_delayed_expansion_advice() {
+        for script in [
+            r#"value=old; trap "echo $value" EXIT"#,
+            r#"if true; then ENGINE=docker; else ENGINE=podman; fi
+CONTAINER_ID="$($ENGINE run image)"
+trap "${ENGINE} stop \"$CONTAINER_ID\"; exit 1" INT
+read
+cargo run
+$ENGINE stop "$CONTAINER_ID""#,
+        ] {
+            assert!(!emits(check_trap_quotes(), script), "{script}");
+        }
+        for script in [
+            r#"value=old; trap "echo $value" EXIT; value=new"#,
+            r#"value=old; trap "echo $value" EXIT; value=new sleep 1"#,
+            r#"value=old; trap "echo $value" EXIT; eval "$code""#,
+            r#"value=old; trap "echo $value" EXIT; source config"#,
+            r#"value=old; trap "echo $value" EXIT; read value"#,
+            r#"value=old; trap "echo $value" EXIT; printf -v value new"#,
+            r#"value=old; trap "echo $value" EXIT; fn() { value=new; }; fn"#,
+            r#"f() { local value=old; trap "echo $value" EXIT; }; f"#,
+            r#"for value in a b; do trap "echo $value" EXIT; done"#,
+            r#"RANDOM=1; trap "echo $RANDOM" EXIT"#,
+            r#"value=old; trap "value=new; echo $value" EXIT"#,
+            r#"value=old; trap "echo $value" EXIT; $unknown"#,
+            r#"cmd='read -r'; value=old; trap "echo $value" EXIT; $cmd value"#,
+            r#"IFS=a; cmd=aread; value=old; trap "echo $value" EXIT; $cmd value"#,
+            r#"value=old; trap "echo $value" EXIT; mapfile value"#,
+            r#"PWD=/tmp; trap "echo $PWD" EXIT; cd /"#,
+            r#"value=old; trap "echo $value; echo \${value:=new}" EXIT"#,
+            r#"value=old; trap "echo $(date) $value" EXIT"#,
+        ] {
+            assert!(emits(check_trap_quotes(), script), "{script}");
+        }
+    }
 
     #[test]
     fn prop_checkLetUsage1() {

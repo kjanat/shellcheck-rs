@@ -779,6 +779,20 @@ impl Parser {
         }
         self.reset(m);
         self.restore_failure(saved);
+        // A quoted operator attempt can hide the real error in an unfinished
+        // quoted word. Let the word parser diagnose it without consuming input.
+        if matches!(self.peek(), Some('\'' | '"')) {
+            let operator_failure = self.failure.clone();
+            self.peek_ahead(Self::read_normal_word);
+            if !self.failure.as_ref().is_some_and(|f| {
+                matches!(
+                    f.message.as_str(),
+                    "Expected end of single quoted string" | "Expected end of double quoted string"
+                )
+            }) {
+                self.failure = operator_failure;
+            }
+        }
         None
     }
 

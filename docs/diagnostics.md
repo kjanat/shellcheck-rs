@@ -75,12 +75,31 @@ ANSI-C escape cases. Those escapes still use the documented lossy string decoder
 this is not a byte-exact emulation of Bash's non-Unicode strings. The existing
 Bash `! # comment` correction remains covered by conformance tests.
 
-The remaining quote-position, zero-width-span, and discarded-note behaviors in
-[PARITY-NOTES.md](../PARITY-NOTES.md) were reviewed and retain their compatibility
-semantics. In particular, discarding speculative notes after a fatal parse avoids
-reporting findings from an abandoned interpretation. This work does not alter or
-claim to fix upstream Haskell itself.
+Unterminated quotes in a test's operator position now name the missing closing
+quote instead of asking for a comparison operator. Parse notes from complete,
+separated top-level statements survive a later fatal parse; notes from unfinished
+compound statements and speculative alternatives remain discarded. These fixes
+apply by default. Zero-width insertion-point diagnostics retain their existing
+spans. This work does not alter or claim to fix upstream Haskell itself.
 
 For [#4](https://github.com/kjanat/shellcheck-rs/issues/4), SC9002 addresses the
 signal-only cleanup-trap pattern. General resource-lifetime analysis remains
 outside this check's scope.
+
+## Trap expansion timing (SC2064)
+
+Early expansion of a plain variable in a double-quoted trap action no longer
+warns when its assignments precede the trap and no later writes are visible.
+This includes a container engine selected by an earlier `if` and a container ID
+captured before installing cleanup. Command substitutions and complex parameter
+expansions in the action still warn.
+
+The exemption is conservative: functions, loop-local traps, additional trap
+registrations, source/eval, unresolved variable commands and variable-writing
+builtins retain the warning. Resolvable variable commands must have only literal,
+non-mutating command alternatives. Shell-maintained values such as `RANDOM`,
+`SECONDS`, `PWD` and `REPLY` are not treated as stable. This is static analysis of
+the visible script, not a guarantee about an externally customized shell environment.
+
+SC2162 remains enabled for bare `read`, including discarded input: a trailing
+backslash continues onto another line and changes how much input is consumed.

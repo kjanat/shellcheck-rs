@@ -992,7 +992,12 @@ mod coproc_glob_dollar_tests {
         // not the error: nothing later gets further, so that is the failure.
         let notes = fatal_notes("[x '>");
         assert!(
-            notes.contains(&(1072, 6, " Fix any mentioned problems and try again.".into())),
+            notes.contains(&(
+                1072,
+                6,
+                "Expected end of single quoted string. Fix any mentioned problems and try again."
+                    .into()
+            )),
             "{notes:?}"
         );
         assert!(
@@ -1005,15 +1010,13 @@ mod coproc_glob_dollar_tests {
 
     #[test]
     fn a_failed_escaped_paren_merges_with_the_operator_message_before_it() {
-        // Two failures at the end of `[(z "`: the operator attempt's "Expected
-        // comparison operator", then `readEscaped (string ")")`, which reads
-        // the quote and fails at the same position. Both sit behind a `try`,
-        // so Parsec merges them, and the message is the one that survives.
+        // The unfinished quoted word takes precedence over the speculative
+        // comparison-operator failure, even after an escaped-paren attempt.
         let notes = fatal_notes("[(z \"");
         assert!(
             notes.iter().any(|(c, col, m)| *c == 1072
                 && *col == 6
-                && m.starts_with("Expected comparison operator")),
+                && m.starts_with("Expected end of double quoted string")),
             "{notes:?}"
         );
     }

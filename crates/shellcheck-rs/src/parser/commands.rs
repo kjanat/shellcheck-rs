@@ -351,9 +351,13 @@ impl Parser {
     // ---- terms / and-or / pipelines ---------------------------------------
 
     pub(super) fn read_compound_list_or_empty(&mut self) -> Vec<Token> {
+        self.read_compound_list(false)
+    }
+
+    fn read_compound_list(&mut self, top_level: bool) -> Vec<Token> {
         self.allspacing();
         let m = self.mark();
-        if let Some(t) = self.read_term() {
+        if let Some(t) = self.read_term_inner(top_level) {
             t
         } else {
             // `readTerm <|> return []` only recovers a failure that
@@ -368,12 +372,20 @@ impl Parser {
     }
 
     pub(super) fn read_term(&mut self) -> Option<Vec<Token>> {
+        self.read_term_inner(false)
+    }
+
+    fn read_term_inner(&mut self, top_level: bool) -> Option<Vec<Token>> {
         self.allspacing();
         let first = self.read_and_or().ok()?;
-        self.read_term_more(first).ok()
+        self.read_term_more_inner(first, top_level).ok()
     }
 
     pub(super) fn read_term_more(&mut self, current: Token) -> PResult<Vec<Token>> {
+        self.read_term_more_inner(current, false)
+    }
+
+    fn read_term_more_inner(&mut self, current: Token, top_level: bool) -> PResult<Vec<Token>> {
         if let Some((sep, (start, end))) = self.read_separator() {
             let id = self.next_id_between(start, end);
             let node = if sep == '&' {
@@ -381,11 +393,16 @@ impl Parser {
             } else {
                 current
             };
+            // Only complete root statements are safe to retain after a fatal error.
+            // Nested/unfinished compounds and unread here-documents are not committed.
+            if top_level && !self.committed && self.pending_heredocs.is_empty() {
+                self.completed_notes = self.notes.len();
+            }
             // try to read another and-or
             let m = self.mark();
             if let Ok(next) = self.read_and_or() {
                 let mut v = vec![node];
-                v.extend(self.read_term_more(next)?);
+                v.extend(self.read_term_more_inner(next, top_level)?);
                 Ok(v)
             } else {
                 // `option (T_EOF id) readAndOr`: a failure that consumed
@@ -2885,7 +2902,7 @@ impl Parser {
             ));
         }
 
-        let commands = self.read_compound_list_or_empty();
+        let commands = self.read_compound_list(true);
         self.read_pending_heredocs().ok()?;
         // verify EOF: if not at end, it's a parse problem (SC1072-ish). For the
         // slice we record a generic problem but still return the tree.
