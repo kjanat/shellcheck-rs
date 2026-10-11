@@ -1,4 +1,5 @@
 #:schema https://dprint.dev/schemas/v0.json
+#:tombi toml-version = "v1.1.0"
 
 extends  = "https://raw.githubusercontent.com/kjanat/kjanat/refs/heads/master/configs/dprint.remote.json"
 plugins  = ["npm:@dprint/exec@0.7.3/plugin.json@704701df449dd7e942a71144773778ac529d68c2e4657bfc236d393b898b9a67"]
@@ -10,26 +11,21 @@ cacheKey = "1"
 timeout  = 30
 
 [[exec.commands]]
-command       = "mise exec -- tombi format - --stdin-filename {{file_path}}"
-exts          = ["toml"]
-cacheKeyFiles = ["tombi.toml", "mise.toml"]
+command = "tombi format - --stdin-filename {{file_path}}"
+exts    = ["toml"]
 
 [[exec.commands]]
-command       = "mise exec -- rustfmt"
-exts          = ["rs"]
-cacheKeyFiles = ["rustfmt.toml", "mise.toml"]
+command = "rustfmt"
+exts    = ["rs"]
 
 [shfmt]
 associations = [
   "test/*",
   "!test/shellcheck.hs",
-  ".github_deploy",
-  ".multi_arch_docker",
-  ".prepare_deploy",
   "manpage",
   "nextnumber",
   "quickrun",
   "quicktest",
   "setgitversion",
-  "striptests"
+  "striptests",
 ]

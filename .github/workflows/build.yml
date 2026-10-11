@@ -11,41 +11,44 @@ on:
       - "ShellCheck.cabal"
       - "setgitversion"
       - "builders/**"
-      - ".prepare_deploy"
-      - ".github_deploy"
-      - ".multi_arch_docker"
       - "test/**"
       - ".github/workflows/build.yml"
 
 concurrency: { group: "build-${{ github.ref }}", cancel-in-progress: true }
-
+permissions:
+  contents: read
+  id-token: write
+defaults: { run: { shell: "node {0}" } }
 jobs:
   package_source:
     name: Package Source Code
     runs-on: ubuntu-latest
     steps:
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-mark manual ghc # Don't bother installing ghc just to tar up source
-          sudo apt-get install cabal-install
-
       - name: Checkout repository
         uses: actions/checkout@v7
         with: { fetch-depth: 0 }
 
-      - name: Deduce tags
-        run: |
-          mkdir source
-          echo "latest" > source/tags
-          if tag="$(git describe --exact-match --tags)"; then { echo "stable"; echo "${tag}"; } >> source/tags; fi
-          cat source/tags
-
       - name: Package Source
         run: |
-          grep "stable" source/tags || ./setgitversion
-          cabal sdist
-          mv dist-newstyle/sdist/*.tar.gz source/source.tar.gz
+          const fs = require("node:fs");
+          const { execFileSync, spawnSync } = require("node:child_process");
+
+          execFileSync("sudo", ["apt-get", "update"], { stdio: "inherit" });
+          execFileSync("sudo", ["apt-get", "install", "-y", "ghc", "cabal-install"], { stdio: "inherit" });
+
+          // this basically means, always "latest", and
+          // if the current commit is tagged, also "stable" and the tag name
+          const tags = ["latest"];
+          const describe = spawnSync("git", ["describe", "--exact-match", "--tags"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+          if (describe.status === 0) tags.push("stable", describe.stdout.trim());
+          fs.mkdirSync("source");
+          fs.writeFileSync("source/tags", tags.map((tag) => `${tag}\n`).join(""));
+          console.log(tags.join("\n"));
+
+          if (!tags.includes("stable")) execFileSync("./setgitversion", { stdio: "inherit" });
+          execFileSync("cabal", ["sdist"], { stdio: "inherit" });
+          const [tarball] = fs.readdirSync("dist-newstyle/sdist").filter((file) => file.endsWith(".tar.gz"));
+          fs.renameSync(`dist-newstyle/sdist/${tarball}`, "source/source.tar.gz");
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -60,6 +63,8 @@ jobs:
         ghc: ["8.0", "8.10", "9.0.1", "9.4.7", "9.6.6", "latest"]
         include: [{ ghc: "latest", cabal_flags: "--allow-newer" }]
       fail-fast: false
+    defaults: { run: { working-directory: source } }
+    env: { CABAL_FLAGS: "${{ matrix.cabal_flags }}" }
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -70,13 +75,12 @@ jobs:
         uses: haskell-actions/setup@v2
         with: { ghc-version: "${{ matrix.ghc }}" }
 
-      - name: Unpack source
-        working-directory: source
-        run: tar xvf source.tar.gz --strip-components=1
-
-      - name: Plan test build
-        working-directory: source
-        run: "cabal build test-shellcheck --enable-tests --dry-run ${{ matrix.cabal_flags }}"
+      - name: Unpack source and plan test build
+        run: |
+          const { execFileSync } = require("node:child_process");
+          const flags = process.env.CABAL_FLAGS.split(" ").filter(Boolean);
+          execFileSync("tar", ["xvf", "source.tar.gz", "--strip-components=1"], { stdio: "inherit" });
+          execFileSync("cabal", ["build", "test-shellcheck", "--enable-tests", "--dry-run", ...flags], { stdio: "inherit" });
 
       - name: Cache Haskell build
         uses: actions/cache@v6
@@ -92,52 +96,50 @@ jobs:
             ${{ env.CACHE_PREFIX }}-
 
       - name: Build and run tests
-        working-directory: source
-        run: "cabal test ${{ matrix.cabal_flags }}"
+        run: |
+          const { execFileSync } = require("node:child_process");
+          const flags = process.env.CABAL_FLAGS.split(" ").filter(Boolean);
+          execFileSync("cabal", ["test", ...flags], { stdio: "inherit" });
 
   build_source:
     name: Build
     needs: package_source
     strategy: { matrix: { build: [linux.x86_64, linux.aarch64, linux.armv6hf, linux.riscv64, darwin.x86_64, darwin.aarch64, windows.x86_64] } }
     runs-on: ubuntu-latest
-    env: { BUILDER: "${{ matrix.build }}", BUILDER_DIR: "bin/${{ matrix.build }}" }
+    env: { BUILDER: "${{ matrix.build }}" }
     steps:
+      - name: Free disk space
+        background: true
+        run: |
+          const { spawnSync } = require("node:child_process");
+          const quiet = { stdio: ["ignore", "inherit", "ignore"] };
+          spawnSync("sudo", [
+            "rm",
+            "-rf",
+            "/usr/share/dotnet",
+            "/usr/local/lib/android",
+            "/opt/ghc",
+            "/opt/hostedtoolcache/CodeQL",
+            "/usr/local/share/boost",
+            process.env.AGENT_TOOLSDIRECTORY || "/opt/hostedtoolcache",
+          ], quiet);
+          spawnSync("sudo", ["docker", "image", "prune", "--all", "--force"], quiet);
+
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Install pandoc
-        uses: kjanat/actionlint/.github/actions/setup-pandoc@v1
-        with: { version: "3.12" }
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with: *Source
 
-      - name: Delete unnecessary files
-        background: true
-        run: |
-          sudo rm -rf \
-            /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/boost \
-            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" \
-            2>/dev/null || true
-
-      - name: Prune Docker images
-        background: true
-        run: sudo docker image prune --all --force 2>/dev/null || true
-
-      - name: Create bin directory
-        run: mkdir -p "${BUILDER_DIR}"
-
       - name: Build source
-        working-directory: bin
-        run: ( ../builders/run_builder ../source/source.tar.gz ../builders/"${BUILDER}" )
-
-      - name: Show disk space
-        run: df -h /
+        run: |
+          const fs = require("node:fs");
+          const { execFileSync } = require("node:child_process");
+          const builder = process.env.BUILDER;
+          fs.mkdirSync(`bin/${builder}`, { recursive: true });
+          execFileSync("../builders/run_builder", ["../source/source.tar.gz", `../builders/${builder}`], { cwd: "bin", stdio: "inherit" });
+          execFileSync("df", ["-h", "/"], { stdio: "inherit" });
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -151,71 +153,156 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Install pandoc
+        uses: kjanat/actionlint/.github/actions/setup-pandoc@v1
+        with: { version: "3.12" }
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
 
-      - name: List files for debugging
-        run: find .
-
-      - name: Work around GitHub permissions bug
-        run: chmod +x ./*.bin/*/shellcheck*
-
       - name: Package binaries and man
         run: |
-          TAGS="$(cat source/tags)"
-          export TAGS
-          mkdir -p deploy
-          cp -R ./*.bin/* deploy
-          ./manpage
-          cd deploy
-          ../.prepare_deploy
-          rm -rf ./*/ ./README* ./LICENSE*
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const { createHash } = require("node:crypto");
+          const { execFileSync } = require("node:child_process");
+          const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: "inherit" });
+          const ls = (dir) => fs.readdirSync(dir).map((name) => `${dir}/${name}`);
+
+          console.log(fs.readdirSync(".", { recursive: true }).join("\n"));
+          const tags = fs.readFileSync("source/tags", "utf8").split("\n").filter(Boolean);
+          run("./manpage", []);
+          const readme = [
+            "This is a precompiled ShellCheck binary.",
+            "      https://www.shellcheck.net/",
+            "",
+            "ShellCheck is a static analysis tool for shell scripts.",
+            "It's licensed under the GNU General Public License v3.0.",
+            "Information and source code is available on the website.",
+            "",
+            `This binary was compiled on ${new Date().toUTCString()}.`,
+            "",
+            "",
+            "",
+            "      ====== Latest commits ======",
+            "",
+            ...execFileSync("git", ["log", "-n", "3"], { encoding: "utf8" }).trimEnd().split("\n"),
+          ].map((line) => `${line}\r\n`).join("");
+
+          const deploy = path.resolve("deploy");
+          fs.mkdirSync(deploy);
+          for (const dir of ls(".").filter((name) => name.endsWith(".bin")).flatMap(ls)) {
+            // Work around GitHub permissions bug
+            for (const file of ls(dir)) fs.chmodSync(file, 0o755);
+            fs.copyFileSync("LICENSE", `${dir}/LICENSE.txt`);
+            fs.writeFileSync(`${dir}/README.txt`, readme);
+            fs.copyFileSync("shellcheck.1", `${dir}/shellcheck.1`);
+            const files = fs.readdirSync(dir).sort();
+            const platform = path.basename(dir);
+            for (const tag of tags) {
+              if (platform.startsWith("windows.")) {
+                run("zip", [`${deploy}/shellcheck-${tag}.zip`, ...files], dir);
+                continue;
+              }
+              const transform = `--transform=s:^:shellcheck-${tag}/:`;
+              run("tar", ["-cJf", `${deploy}/shellcheck-${tag}.${platform}.tar.xz`, transform, ...files], dir);
+              run("tar", ["-czf", `${deploy}/shellcheck-${tag}.${platform}.tar.gz`, transform, ...files], dir);
+            }
+          }
+
+          fs.copyFileSync("shellcheck.1", `${deploy}/shellcheck.1`);
+          for (const name of fs.readdirSync(deploy)) {
+            const hash = createHash("sha512").update(fs.readFileSync(`${deploy}/${name}`)).digest("hex");
+            fs.writeFileSync(`${deploy}/${name}.sha512sum`, `${hash}  ./${name}\n`);
+          }
+          run("ls", ["-l", deploy]);
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
-        with: &Deploy { name: deploy, path: deploy/ }
+        with: { name: deploy, path: deploy/ }
 
   deploy:
-    # Only the canonical upstream repository has the `latest` GitHub release and
-    # the Docker Hub secrets this job needs; on a fork `.github_deploy` aborts at
-    # `hub release show latest` (exit 1). Skip deploy anywhere but upstream.
     if: github.event_name == 'push' && github.repository == 'koalaman/shellcheck'
     name: Deploy binaries
     needs: package_binary
     runs-on: ubuntu-latest
     environment: Deploy
     steps:
-      - name: Install Dependencies
-        run: sudo apt-get update && sudo apt-get install hub
-
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Download artifacts (source)
+      - name: Download artifacts
         uses: actions/download-artifact@v8
-        with: *Source
+        with: { pattern: "{source,deploy}" }
 
-      - name: Download artifacts (binaries)
-        uses: actions/download-artifact@v8
-        with: *Deploy
-
-      - name: Tags
-        working-directory: source
-        run: |
-          SEED="(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)"
-          { echo "TAGS<<${SEED}"; cat tags; echo "${SEED}"; } >> "${GITHUB_ENV}"
-
-      - name: Upload to GitHub
-        env: { GITHUB_TOKEN: "${{ github.token }}" }
-        run: ./.github_deploy
-
-      - name: Waiting for GitHub to replicate uploaded releases
-        run: sleep 300
-
-      - name: Upload to Docker Hub
+      - name: Upload to GitHub and Docker Hub
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DOCKER_EMAIL: ${{ secrets.DOCKER_EMAIL }}
           DOCKER_BASE: ${{ secrets.DOCKER_USERNAME }}/shellcheck
-        run: ( source ./.multi_arch_docker && set -eux && multi_arch_docker::main )
+        run: |
+          const fs = require("node:fs");
+          const os = require("node:os");
+          const path = require("node:path");
+          const { execFileSync, spawnSync } = require("node:child_process");
+          const tags = fs.readFileSync("source/tags", "utf8").split("\n").filter(Boolean);
+          const gh = (...args) => execFileSync("gh", args, { stdio: "inherit" });
+          const docker = (...args) => execFileSync("docker", args, { stdio: "inherit" });
+          const commit = (format) => execFileSync("git", ["show", "--no-patch", `--format=${format}`], { encoding: "utf8" }).trimEnd();
+
+          gh("release", "view", "latest");
+          for (const tag of tags) {
+            if (spawnSync("gh", ["release", "view", tag], { stdio: "inherit" }).status !== 0) {
+              console.log(`Creating new release ${tag}`);
+              gh("release", "create", tag, "--title", commit("%s"), "--notes", commit("%b"));
+            }
+            const files = fs.readdirSync("deploy").filter((name) => /\.(xz|gz|zip)$/.test(name) && name.includes(tag));
+            gh("release", "upload", tag, ...files.map((name) => `deploy/${name}`), "--clobber");
+          }
+
+          console.log("Waiting for GitHub to replicate uploaded releases");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300_000);
+
+          const base = process.env.DOCKER_BASE;
+          const platforms = ["linux/amd64", "linux/arm64", "linux/arm/v6", "linux/riscv64"];
+          docker("run", "--rm", "--privileged", "multiarch/qemu-user-static", "--reset", "-p", "yes");
+          docker("buildx", "create", "--name", "mybuilder");
+          docker("buildx", "use", "mybuilder");
+          docker("buildx", "inspect", "--bootstrap");
+          execFileSync("docker", ["login", `-u=${process.env.DOCKER_USERNAME}`, "--password-stdin"], {
+            input: process.env.DOCKER_PASSWORD,
+            stdio: ["pipe", "inherit", "inherit"],
+          });
+
+          const empty = fs.mkdtempSync(path.join(os.tmpdir(), "empty-"));
+          const buildx = (...args) =>
+            docker("buildx", "build", "--platform", platforms.join(","), "--push", "--progress", "plain", "-f", "Dockerfile.multi-arch", ...args, empty);
+          for (const tag of tags) {
+            buildx("-t", `${base}:${tag}`, "--build-arg", `tag=${tag}`);
+            buildx("-t", `${base}-alpine:${tag}`, "--build-arg", `tag=${tag}`, "--target", "alpine");
+          }
+          fs.rmdirSync(empty);
+
+          fs.writeFileSync("myscript", "#!/bin/sh\necho 'hello world'\n");
+          for (const platform of platforms) {
+            for (const tag of tags) {
+              for (const alpine of [true, false]) {
+                const image = `${base}${alpine ? "-alpine" : ""}:${tag}`;
+                const message = `Testing docker image ${image} on platform ${platform}`;
+                const line = "=".repeat(message.length);
+                console.log(`\n${line}\n${message}\n${line}`);
+                docker("pull", "-q", "--platform", platform, image);
+                if (alpine) {
+                  process.stdout.write("Image architecture: ");
+                  docker("run", "--rm", "--entrypoint", "/bin/sh", image, "-c", "uname -m");
+                }
+                const output = execFileSync("docker", ["run", "--rm", image, ...(alpine ? ["shellcheck"] : []), "--version"], { encoding: "utf8" });
+                const version = output.split("\n").find((text) => text.startsWith("version:")).replace(/^version: /, "v");
+                console.log(`shellcheck version: ${version}`);
+                if (!["latest", "stable"].includes(tag) && tag !== version) throw new Error(`Version mismatch: shellcheck ${version} tagged as ${tag}`);
+                docker("run", "--rm", "-v", `${process.cwd()}:/mnt`, ...(alpine ? ["-w", "/mnt", image, "shellcheck"] : [image]), "myscript");
+              }
+            }
+          }
