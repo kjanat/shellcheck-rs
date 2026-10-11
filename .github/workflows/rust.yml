@@ -16,14 +16,14 @@ on:
   pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
-
+permissions: { contents: read }
 env: { ghc-version: "${{ vars.GHC_VERSION || '9.6.6' }}" }
 
 jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    steps: [uses: actions/checkout@v7, uses: kjanat/actionlint@v1]
+    steps: [uses: &CO actions/checkout@v7, uses: kjanat/actionlint@v1]
 
   lint:
     name: "Format, clippy, workflows"
@@ -34,13 +34,13 @@ jobs:
     env: { MISE_DISABLE_TOOLS: "ghc,ghcup,cabal,python" }
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: *CO
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@v5.1.1
 
       - name: Check formatting
-        uses: kjanat/dprint-check@v3
+        uses: kjanat/dprint-check@v3.1
 
       - name: Clippy
         run: cargo lint
@@ -51,7 +51,7 @@ jobs:
     steps:
       - parallel:
           - name: Checkout repository
-            uses: actions/checkout@v7
+            uses: *CO
           - name: Remove shellcheck from runner
             run: sudo apt-get remove -y shellcheck 2>/dev/null || true
 
@@ -60,7 +60,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: &CA actions/cache@v6
         env: { CACHE_PREFIX: "${{ format('{0}-{1}-cargo-{2}', runner.os, runner.arch, steps.rust.outputs.cachekey) }}" }
         with:
           path: |
@@ -74,7 +74,7 @@ jobs:
 
       - name: Cache Haskell oracle
         id: oracle
-        uses: actions/cache@v6
+        uses: *CA
         with:
           path: .cache
           key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs')) }}
@@ -91,7 +91,7 @@ jobs:
 
       - name: Cache Haskell build
         if: *NoCacheHit
-        uses: actions/cache@v6 # pretty-yaml-ignore
+        uses: *CA # pretty-yaml-ignore
         env: { CACHE_PREFIX: "${{ format('{0}-{1}-cabal-oracle-{2}-{3}', runner.os, runner.arch, steps.haskell.outputs.ghc-version, steps.haskell.outputs.cabal-version) }}" }
         with:
           path: |
