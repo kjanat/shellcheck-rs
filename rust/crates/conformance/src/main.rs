@@ -543,9 +543,13 @@ pub struct Args {
     #[arg(long, env = "ORACLE")]
     oracle: Option<String>,
 
-    /// The ShellCheck source tree to take properties and versions from.
+    /// Corpus root: frozen Rust fixtures by default, or an upstream source checkout.
     #[arg(long, env = "REPO", default_value = ".")]
     pub repo: String,
+
+    /// Write extracted properties and coverage metadata as JSON (extract only).
+    #[arg(long)]
+    corpus_output: Option<std::path::PathBuf>,
 
     /// Check only the first N properties (gate), or list N of them (extract).
     #[arg(long, env = "LIMIT")]
@@ -689,12 +693,18 @@ fn main() -> ExitCode {
         Command::Bench => bench::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
-            corpus::extract(&src).map(|e| {
+            corpus::coverage(&src).and_then(|coverage| {
+                if let Some(path) = &args.corpus_output {
+                    let json =
+                        serde_json::to_string_pretty(&coverage).map_err(|e| e.to_string())?;
+                    std::fs::write(path, format!("{json}\n")).map_err(|e| e.to_string())?;
+                }
+                let e = coverage.entries;
                 println!("{} properties", e.len());
                 for entry in e.iter().take(args.limit.unwrap_or(0)) {
                     println!("{}\t{}\t{:?}", entry.id, entry.helper, entry.script);
                 }
-                true
+                Ok(true)
             })
         }
     };

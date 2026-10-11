@@ -2,8 +2,7 @@
 #
 # Unpinned tools track "latest"; mise.lock records exact resolutions.
 # Binding development uses explicit Node, Go and Python versions.
-# Toolchains for the Haskell oracle, Rust port, bindings and Python
-# conformance harness all live here.
+# The optional upstream oracle installs its Haskell tools separately.
 #
 # Do not delete this file: it is the single source of truth for the project's
 # tools and is checked into the repo.
@@ -11,10 +10,7 @@
 min_version = "2026.10.7"
 
 [tools]
-cabal  = "latest"  # Haskell build tool for the oracle (Aqua backend)
 dprint = "latest"  # formatter
-ghc    = "latest"  # GHC 9.x via GHCup; mise's default ghc backend caps at 8.10.7
-ghcup  = "latest"  # GHCup itself, so the compiler is reproducible
 go     = "1.27.2"
 node   = "26"
 python = "latest"  # conformance harness (rust/harness/*.py)
@@ -25,11 +21,7 @@ version    = "latest"
 components = ["rustfmt", "clippy", "rust-src"]
 
 [tool_alias]
-ghc    = "mise-ghcup:ghc"
 dprint = { backend = "github:kjanat/dprint" }
-
-[plugins]
-"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
 
 [settings]
 # Backend plugins are experimental, so they must be enabled explicitly.
@@ -64,6 +56,10 @@ run = [
 # being worked on: `mise run mutants -- --file rust/crates/shellcheck-rs/src/cfg.rs`.
 [tasks.mutants]
 run = "cargo mutants"
+
+[tasks.oracle]
+description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
+run         = "python tools/oracle.py"
 
 [wrappers."rshellcheck"]
 command = "cargo"

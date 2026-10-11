@@ -527,3 +527,18 @@ Those five are worth a bug report against
 Items 6–9 are working as designed, or as Parsec dictates. Changing them would
 change output that existing users, tests and editor integrations depend on, so
 they belong here rather than in an upstream issue.
+
+## SC2164: function-tail directory changes
+
+Rust deliberately warns when a failed `cd` inside a final compound statement can
+be followed by another command or loop iteration. The pinned upstream source
+(`98deabe126a26861fb02aa2b431eaf31e39e6abe`) suppresses some of these warnings by
+checking only whether the enclosing compound statement is last in a function.
+For example, `f() { if true; then cd /missing; echo continued; fi; }` must warn.
+A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt.
+
+The external oracle is pristine and retains this upstream regression. Rust unit
+tests and the frozen snapshot corpus preserve the correction. The differential harness sanctions only additional SC2164 findings at exact
+directory-command spans where the AST proves both upstream's final-compound
+condition and a subsequent command, loop iteration, or case fallthrough. All
+remaining diagnostics must agree exactly; other SC2164 differences still fail.

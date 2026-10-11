@@ -6,8 +6,8 @@
 [alias]
 bwa                  = "build --workspace --all-targets"
 conformance-audit    = "run -q -p conformance -- audit"
-conformance-fuzz     = "run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle"
-conformance-gate     = "run --release -p conformance -- gate --oracle .cache/shellcheck-oracle"
+conformance-fuzz     = "run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck"
+conformance-gate     = "run --release -p conformance -- gate --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck"
 conformance-shells   = "run --release -p conformance -- shells --iterations 300"
 conformance-snapshot = "run --release -q -p conformance -- snapshot"
 fmt-check            = "fmt --check"

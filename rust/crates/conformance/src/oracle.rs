@@ -75,8 +75,8 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     }
     Err(format!(
         "oracle {spec}: not found on PATH. Pass --oracle with a path, or put \
-         shellcheck on PATH, or build one from this tree:\n    \
-         cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle"
+         shellcheck on PATH, or build the pinned upstream oracle:\n    \
+         python tools/oracle.py"
     ))
 }
 
@@ -304,13 +304,25 @@ impl Oracle {
 /// reference: a stale binary, or one built from a different version, turns
 /// every "agrees" into a statement about something else entirely. The version
 /// check below is necessary, not sufficient — the sufficient check is to
-/// rebuild from `src/` and compare behaviour, which `--verify-oracle`
+/// rebuild the pinned upstream checkout and compare behaviour, which `--verify-oracle`
 /// documents how to do. `allow_mismatch` (`--any-oracle-version`) keeps a
 /// differently-versioned binary usable, but says so in the banner every time.
 pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<String, String> {
     let cabal_path = std::path::Path::new(repo).join("ShellCheck.cabal");
-    let cabal = std::fs::read_to_string(&cabal_path)
-        .map_err(|e| format!("{}: {e}", cabal_path.display()))?;
+    let cabal = if cabal_path.is_file() {
+        std::fs::read_to_string(&cabal_path)
+            .map_err(|e| format!("{}: {e}", cabal_path.display()))?
+    } else {
+        let pin = std::path::Path::new(repo).join("tools/oracle.json");
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&pin).map_err(|e| format!("{}: {e}", pin.display()))?,
+        )
+        .map_err(|e| e.to_string())?;
+        format!(
+            "Version: {}",
+            value["version"].as_str().ok_or("missing oracle version")?
+        )
+    };
     let expected = cabal
         .lines()
         .find_map(|l| {
@@ -331,8 +343,8 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
     } else {
         return Err(format!(
             "oracle is version {actual}, but {} says {expected}.\n  \
-             The oracle must be ShellCheck built from this tree:\n    \
-             cabal build shellcheck && cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle\n  \
+             Build the pinned upstream oracle:\n    \
+             python tools/oracle.py\n  \
              To compare against this binary anyway, pass --any-oracle-version.",
             cabal_path.display()
         ));
@@ -366,10 +378,7 @@ mod tests {
         });
         Oracle::new(&spec)
             .inspect_err(|e| {
-                println!(
-                    "skipped: no oracle at {spec}: {e} (build one: cabal build shellcheck && \
-                     cp \"$(cabal list-bin shellcheck)\" .cache/shellcheck-oracle)"
-                );
+                println!("skipped: no oracle at {spec}: {e} (build one: python tools/oracle.py)");
             })
             .ok()
     }

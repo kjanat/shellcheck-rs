@@ -24,7 +24,7 @@
 use std::path::Path;
 
 /// One extracted property: an id, the helper that consumes it, and the script.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     /// The Haskell property name, e.g. `prop_checkEchoWc3`.
     pub id: String,
@@ -377,6 +377,7 @@ fn property_names(text: &str) -> Vec<String> {
 /// Checker's IO, `ASTLib` helpers or the formatters, and there is nothing to
 /// replay through a shell linter. Counting them here keeps the gap visible
 /// rather than leaving "2026 properties" to be read as "all of them".
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Coverage {
     /// Properties with a script, which is what the gate replays.
     pub entries: Vec<Entry>,
@@ -416,8 +417,18 @@ pub fn extract(src_dir: &Path) -> Result<Vec<Entry>, String> {
     Ok(coverage(src_dir)?.entries)
 }
 
-/// As [`extract`], but also reporting the properties it could not extract.
+/// Load frozen corpus data when present, otherwise extract the external Haskell
+/// source, including metadata for properties without replayable scripts.
 pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
+    let frozen = src_dir
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(src_dir)
+        .join("rust/conformance-corpus.json");
+    if frozen.is_file() {
+        let json = std::fs::read_to_string(&frozen).map_err(|e| e.to_string())?;
+        return serde_json::from_str(&json).map_err(|e| format!("{}: {e}", frozen.display()));
+    }
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut stack = vec![src_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -525,42 +536,19 @@ mod tests {
         assert_eq!(at("prop_c"), Some(6));
     }
 
-    // The real tree, because the path has to exist for GitHub to resolve it,
-    // and three modules live under `Checks/` rather than beside the rest.
     #[test]
-    fn every_entry_carries_a_path_that_exists() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../src/ShellCheck");
-        if !src.is_dir() {
-            println!("skipped: no {} in this checkout", src.display());
-            return;
-        }
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let entries = extract(&src).expect("extract");
-        let mut checked = 0;
-        for e in &entries {
-            assert!(
-                e.path.starts_with("src/ShellCheck/"),
-                "{} has path {:?}",
-                e.id,
-                e.path
-            );
-            let full = repo.join(&e.path);
-            assert!(full.is_file(), "{} points at {:?}", e.id, full);
-            // And the line really holds that property.
-            let text = std::fs::read_to_string(&full).expect("read");
-            let line = text.lines().nth(e.line - 1).unwrap_or("");
-            let bare = e.id.rsplit(':').next().unwrap_or(&e.id);
-            assert!(
-                line.starts_with(bare),
-                "{} says {}:{} but that line is {:?}",
-                e.id,
-                e.path,
-                e.line,
-                line
-            );
-            checked += 1;
-        }
-        assert!(checked > 2000, "expected the whole corpus, got {checked}");
+    fn frozen_corpus_retains_snapshot_inputs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let corpus = coverage(&root.join("src/ShellCheck")).expect("frozen corpus");
+        assert_eq!(corpus.entries.len(), 2067);
+        assert_eq!(corpus.skipped.len(), 290);
+        assert!(corpus.entries.windows(2).all(|p| p[0].id < p[1].id));
+        assert!(
+            corpus
+                .entries
+                .iter()
+                .any(|e| e.id.ends_with("prop_checkUncheckedCdInFunction10"))
+        );
     }
 
     #[test]

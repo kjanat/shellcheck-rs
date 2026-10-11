@@ -10,9 +10,8 @@ on:
       - ".cargo/**"
       - "mutants.toml"
       - "rust/**"
-      - "ShellCheck.cabal"
-      - "shellcheck.hs"
-      - "src/**"
+      - "tools/oracle*"
+      - "tools/test_oracle.py"
   pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
@@ -29,9 +28,8 @@ jobs:
     name: "Format, clippy, workflows"
     runs-on: ubuntu-latest
     # dprint formats .rs and .toml through `mise exec -- rustfmt|tombi`, so the
-    # toolchain comes from mise.toml. The oracle's GHC and the harness's Python
-    # are the gate job's business and would take minutes to install here.
-    env: { MISE_DISABLE_TOOLS: "ghc,ghcup,cabal,python" }
+    # toolchain comes from mise.toml. Binding runtimes are tested separately.
+    env: { MISE_DISABLE_TOOLS: "python,node,go" }
     steps:
       - name: Checkout repository
         uses: *CO
@@ -72,12 +70,21 @@ jobs:
             ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**')) }}
             ${{ format('{0}-',     env.CACHE_PREFIX) }}
 
+      - name: Test oracle cache validation
+        run: python3 -m unittest discover -s tools -v
+
+      - name: Fetch pinned upstream source
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: python3 tools/oracle.py --fetch-only
+
       - name: Cache Haskell oracle
         id: oracle
         uses: *CA
         with:
-          path: .cache
-          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs')) }}
+          path: |
+            .cache/shellcheck-oracle
+            .cache/shellcheck-oracle.json
+          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('tools/oracle.json', 'tools/oracle.py')) }}
 
       - name: Setup Haskell
         if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
@@ -85,30 +92,21 @@ jobs:
         uses: haskell-actions/setup@v2
         with: { ghc-version: "${{ env.ghc-version }}" }
 
-      - name: Plan Haskell oracle build
-        if: *NoCacheHit
-        run: cabal build shellcheck --dry-run
-
       - name: Cache Haskell build
         if: *NoCacheHit
-        uses: *CA # pretty-yaml-ignore
-        env: { CACHE_PREFIX: "${{ format('{0}-{1}-cabal-oracle-{2}-{3}', runner.os, runner.arch, steps.haskell.outputs.ghc-version, steps.haskell.outputs.cabal-version) }}" }
+        uses: *CA
         with:
           path: |
             ${{ steps.haskell.outputs.cabal-store }}
-            dist-newstyle
-          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json'), hashFiles('ShellCheck.cabal', 'cabal.project*', 'src/**', '*.hs', '.github/workflows/rust.yml')) }}
-          restore-keys: |
-            ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('dist-newstyle/cache/plan.json')) }}
-            ${{ format('{0}-',     env.CACHE_PREFIX) }}
+            .cache/upstream-shellcheck/dist-newstyle
+          key: ${{ runner.os }}-${{ runner.arch }}-oracle-build-${{ env.ghc-version }}-${{ hashFiles('tools/oracle.json', 'tools/oracle.py') }}
 
       - name: Build Haskell oracle
         if: *NoCacheHit
-        run: cabal install exe:shellcheck -v
-          --program-suffix="-oracle"
-          --installdir="./.cache"
-          --install-method="copy"
-          --overwrite-policy="always"
+        run: python3 tools/oracle.py
+
+      - name: Verify cached oracle identity
+        run: python3 tools/oracle.py --verify-only
 
       - name: Build Rust port (release)
         run: cargo build --release

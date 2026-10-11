@@ -20,16 +20,7 @@ command = "rustfmt"
 exts    = ["rs"]
 
 [shfmt]
-associations = [
-  "test/*",
-  "!test/shellcheck.hs",
-  "manpage",
-  "nextnumber",
-  "quickrun",
-  "quicktest",
-  "setgitversion",
-  "striptests",
-]
+associations = ["manpage"]
 
 [ruff]
 preview = true

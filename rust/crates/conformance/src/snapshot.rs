@@ -25,8 +25,9 @@ use crate::{Args, port_keys};
 ///
 /// Two sources, for two different kinds of coverage: every upstream property
 /// script (what the checks are *for*), and a deterministic slice of the
-/// generator (the parse-recovery paths no property reaches). Both are derived,
-/// so nothing here can go stale against the sources.
+/// generator (the parse-recovery paths no property reaches). The default
+/// property inputs are frozen in rust/conformance-corpus.json; --repo can
+/// explicitly select an upstream checkout instead.
 fn corpus_for(args: &Args) -> Result<Vec<(String, String)>, String> {
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
     let coverage = crate::corpus::coverage(&src)?;

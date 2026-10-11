@@ -7,8 +7,7 @@
 //!
 //! So a deviation is not recognised by matching text. It is recognised by a
 //! *class*, and each class is decided by evidence the harness can gather at
-//! comparison time — for the one class that exists today, by asking the shell
-//! itself. If the evidence is unavailable (no such shell installed), the
+//! comparison time — by examining the AST or asking the shell itself. If the evidence is unavailable (no such shell installed), the
 //! difference counts as a divergence: this fails closed, never open.
 //!
 //! Adding a deviation means adding a class here, an entry in `PARITY-NOTES.md`
@@ -37,6 +36,99 @@ const FALSE_PARSE_ERROR: Deviation = Deviation {
     what: "the shell accepts this script, so the port analyses it instead of \
            rejecting the whole file",
 };
+
+const FUNCTION_TAIL_CD: Deviation = Deviation {
+    id: "upstream-function-tail-cd",
+    what: "upstream suppresses unchecked directory changes inside a final compound statement",
+};
+
+// Recognize the old upstream predicate AND an ancestor that can overwrite the
+// command's status. Match the precise diagnostic span; never waive SC2164 by code.
+fn function_tail_cd(script: &str, port: &[CommentKey], oracle: &[CommentKey]) -> bool {
+    use shellcheck_rs::ast::InnerToken;
+    let extra: Vec<_> = port.iter().filter(|k| !oracle.contains(k)).collect();
+    if extra.is_empty() || extra.iter().any(|k| k.code != 2164) {
+        return false;
+    }
+    let remaining: Vec<_> = port.iter().filter(|k| !extra.contains(k)).collect();
+    if !remaining.iter().copied().eq(oracle.iter()) {
+        return false;
+    }
+    let parsed = shellcheck_rs::parser::parse_script("-", script);
+    let Some(root) = parsed.root else {
+        return false;
+    };
+    let (parents, tokens) = shellcheck_rs::analyzer_lib::build_maps(&root);
+    extra.iter().all(|finding| {
+        tokens.values().any(|command| {
+            if !matches!(&*command.inner, InnerToken::T_SimpleCommand { .. })
+                || !(match &*command.inner {
+                    InnerToken::T_SimpleCommand { words, .. } => words
+                        .first()
+                        .and_then(shellcheck_rs::ast_lib::get_literal_string),
+                    _ => None,
+                })
+                .is_some_and(|name| matches!(name.as_str(), "cd" | "pushd" | "popd"))
+            {
+                return false;
+            }
+            let Some((start, end)) = parsed.positions.get(&command.id()) else {
+                return false;
+            };
+            if (start.line, start.column, end.line, end.column)
+                != (
+                    finding.line,
+                    finding.column,
+                    finding.end_line,
+                    finding.end_column,
+                )
+            {
+                return false;
+            }
+            let mut child = command;
+            let mut overwritten = false;
+            while let Some(parent) = parents.get(&child.id()).and_then(|id| tokens.get(id)) {
+                let follows = |commands: &[shellcheck_rs::ast::Token]| {
+                    commands.iter().any(|t| t.id() == child.id())
+                        && commands.last().is_some_and(|t| t.id() != child.id())
+                };
+                match &*parent.inner {
+                    InnerToken::T_BraceGroup(commands) => {
+                        if parents
+                            .get(&parent.id())
+                            .and_then(|id| tokens.get(id))
+                            .is_some_and(|t| matches!(&*t.inner, InnerToken::T_Function { .. }))
+                        {
+                            return overwritten
+                                && commands.last().is_some_and(|t| t.id() == child.id());
+                        }
+                        overwritten |= follows(commands);
+                    }
+                    InnerToken::T_Subshell(commands) => overwritten |= follows(commands),
+                    InnerToken::T_IfExpression { clauses, elses } => {
+                        overwritten |=
+                            clauses.iter().any(|(_, body)| follows(body)) || follows(elses);
+                    }
+                    InnerToken::T_CaseExpression { cases, .. } => {
+                        overwritten |= cases.iter().any(|(kind, _, body)| {
+                            follows(body)
+                                || (*kind != shellcheck_rs::ast::CaseType::CaseBreak
+                                    && body.iter().any(|t| t.id() == child.id()))
+                        });
+                    }
+                    InnerToken::T_ForIn { .. }
+                    | InnerToken::T_ForArithmetic { .. }
+                    | InnerToken::T_WhileExpression { .. }
+                    | InnerToken::T_UntilExpression { .. } => overwritten = true,
+                    InnerToken::T_Function { .. } => return false,
+                    _ => {}
+                }
+                child = parent;
+            }
+            false
+        })
+    })
+}
 
 /// The interpreter to check a script against: what `--shell` said, else what the
 /// shebang says, else bash — the dialect ShellCheck itself assumes.
@@ -87,7 +179,7 @@ fn codes(keys: &[CommentKey]) -> Vec<i64> {
 
 /// Is this difference one the port is entitled to?
 ///
-/// Only one class so far: the oracle rejects the file outright, the port does
+/// The parse-error class: the oracle rejects the file outright, the port does
 /// not, and the shell being checked agrees with the port that the script parses.
 /// Whatever else the oracle reported before it gave up, the port must report
 /// too. A script no shell accepts is not covered, and neither is any difference
@@ -98,6 +190,9 @@ pub fn sanctioned(
     port: &[CommentKey],
     oracle: &[CommentKey],
 ) -> Option<&'static Deviation> {
+    if function_tail_cd(script, port, oracle) {
+        return Some(&FUNCTION_TAIL_CD);
+    }
     let port_codes = codes(port);
     let oracle_rejected = codes(oracle).contains(&1072)
         && oracle
@@ -129,6 +224,36 @@ mod tests {
             code,
             message: String::new(),
             fix: None,
+        }
+    }
+
+    #[test]
+    fn only_proven_function_tail_cd_differences_are_sanctioned() {
+        for script in [
+            "f() { if true; then cd /missing; echo continued; fi; }",
+            "f() { for x in a b; do cd /missing; done; }",
+            "f() { case x in x) cd /missing; echo continued;; esac; }",
+        ] {
+            let port = crate::port_keys(script, "-", Some("bash")).expect("port");
+            let oracle: Vec<_> = port.iter().filter(|k| k.code != 2164).cloned().collect();
+            assert!(function_tail_cd(script, &port, &oracle), "{script}");
+            let mut unrelated = oracle.clone();
+            unrelated.push(key(9999));
+            assert!(!function_tail_cd(script, &port, &unrelated));
+            let mut shifted = port.clone();
+            shifted
+                .iter_mut()
+                .filter(|k| k.code == 2164)
+                .for_each(|k| k.column += 1);
+            assert!(!function_tail_cd(script, &shifted, &oracle));
+        }
+        for script in [
+            "cd /missing; echo continued",
+            "f() { cd /missing; echo continued; }",
+        ] {
+            let port = crate::port_keys(script, "-", Some("bash")).expect("port");
+            let oracle: Vec<_> = port.iter().filter(|k| k.code != 2164).cloned().collect();
+            assert!(!function_tail_cd(script, &port, &oracle), "{script}");
         }
     }
 

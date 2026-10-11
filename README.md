@@ -1,6 +1,6 @@
-[![Build Status](https://github.com/koalaman/shellcheck/actions/workflows/build.yml/badge.svg)](https://github.com/koalaman/shellcheck/actions/workflows/build.yml)
+[![Rust conformance](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml)
 
-# ShellCheck - A shell script static analysis tool
+# rshellcheck — ShellCheck in Rust
 
 ShellCheck is a GPLv3 tool that gives warnings and suggestions for bash/sh shell scripts:
 
@@ -28,9 +28,6 @@ See [the gallery of bad code](README.md#user-content-gallery-of-bad-code) for ex
   - [In your build or test suites](#in-your-build-or-test-suites)
 - [Installing](#installing)
 - [Compiling from source](#compiling-from-source)
-  - [Installing Cabal](#installing-cabal)
-  - [Compiling ShellCheck](#compiling-shellcheck)
-  - [Running tests](#running-tests)
 - [Gallery of bad code](#gallery-of-bad-code)
   - [Quoting](#quoting)
   - [Conditionals](#conditionals)
@@ -130,15 +127,13 @@ GCC compatible warnings as well as human readable text (with or without ANSI col
 
 The easiest way to install ShellCheck locally is through your package manager.
 
-On systems with Cabal (installs to `~/.cabal/bin`):
+To install this Rust port from the checkout:
 
-    cabal update
-    cabal install ShellCheck
+```sh
+cargo install --locked --path rust/crates/shellcheck-cli --bin rshellcheck
+```
 
-On systems with Stack (installs to `~/.local/bin`):
-
-    stack update
-    stack install ShellCheck
+The other installation methods below describe the original upstream ShellCheck.
 
 On Debian based distros:
 
@@ -296,63 +291,30 @@ shellcheck --version
 
 ## Compiling from source
 
-This section describes how to build ShellCheck from a source directory. ShellCheck is written in Haskell and requires 2GB of RAM to compile.
-
-### Installing Cabal
-
-ShellCheck is built and packaged using Cabal. Install the package `cabal-install` from your system's package manager (with e.g. `apt-get`, `brew`, `emerge`, `yum`, or `zypper`).
-
-On macOS (OS X), you can do a fast install of Cabal using brew, which takes a couple of minutes instead of more than 30 minutes if you try to compile it from source.
-
-    $ brew install cabal-install
-
-On MacPorts, the package is instead called `hs-cabal-install`, while native Windows users should install the latest version of the Haskell platform from <https://www.haskell.org/platform/>
-
-Verify that `cabal` is installed and update its dependency list with
-
-    $ cabal update
-
-### Compiling ShellCheck
-
-`git clone` this repository, and `cd` to the ShellCheck source directory to build/install:
-
-    $ cabal install
-
-This will compile ShellCheck and install it to your `~/.cabal/bin` directory.
-
-Add this directory to your `PATH` (for bash, add this to your `~/.bashrc`):
+The CLI and analysis library build with Rust; no Haskell toolchain is required.
 
 ```sh
-export PATH="$HOME/.cabal/bin:$PATH"
+cargo build --release --locked -p shellcheck-cli
+cargo test --workspace --locked --lib --bins
+cargo conformance-snapshot
 ```
 
-Log out and in again, and verify that your PATH is set up correctly:
+The executable is `target/release/rshellcheck`. See [WASM bindings](bindings/wasm/README.md)
+for Go, Python and JavaScript/browser embedding and workspace setup.
+
+Conformance against upstream is optional locally and required in CI. With GHC,
+Cabal and authenticated `gh` available, run:
 
 ```sh
-$ which shellcheck
-~/.cabal/bin/shellcheck
+python tools/oracle.py
+cargo conformance-gate
+cargo conformance-fuzz
 ```
 
-On native Windows, the `PATH` should already be set up, but the system
-may use a legacy codepage. In `cmd.exe`, `powershell.exe` and Powershell ISE,
-make sure to use a TrueType font, not a Raster font, and set the active
-codepage to UTF-8 (65001) with `chcp`:
-
-```cmd
-chcp 65001
-```
-
-In Powershell ISE, you may need to additionally update the output encoding:
-
-```powershell
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-```
-
-### Running tests
-
-To run the unit test suite:
-
-    $ cabal test
+The helper fetches the exact revision in [tools/oracle.json](tools/oracle.json)
+into `.cache/upstream-shellcheck` and builds `.cache/shellcheck-oracle`.
+Haskell source and build products remain in ignored cache directories.
+See [UPSTREAM.md](UPSTREAM.md) for provenance and intentional differences.
 
 ## Gallery of bad code
 

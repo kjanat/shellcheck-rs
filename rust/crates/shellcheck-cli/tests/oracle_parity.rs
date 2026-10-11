@@ -50,7 +50,7 @@ fn oracle() -> io::Result<PathBuf> {
         Ok(path)
     } else {
         Err(io::Error::other(format!(
-            "no oracle at {}; build it with `cabal build shellcheck` and copy `cabal list-bin shellcheck` there",
+            "no oracle at {}; build it with `python tools/oracle.py`",
             path.display()
         )))
     }
