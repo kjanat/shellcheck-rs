@@ -1,0 +1,202 @@
+name: Release rshellcheck
+
+on:
+  push:
+    tags: ["rshellcheck-v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/release/**"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust/**"
+  workflow_dispatch:
+
+permissions: { contents: read }
+concurrency:
+  group: "release-${{ github.ref }}"
+  # A new PR revision may replace an old build; a release must finish intact.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults: { run: { shell: bash } }
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  plan:
+    name: Validate version and plan targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      rust: ${{ steps.plan.outputs.rust }}
+      cross: ${{ steps.plan.outputs.cross }}
+      ndk: ${{ steps.plan.outputs.ndk }}
+      label: ${{ steps.plan.outputs.label }}
+      tag: ${{ steps.plan.outputs.tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.14" }
+      - name: Test release tooling
+        run: python -m unittest discover -s .github/release -p 'test_*.py' -v
+      - name: Resolve once
+        id: plan
+        run: python .github/release/release.py plan
+
+  check:
+    name: Rust tests and behavior snapshot
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ needs.plan.outputs.rust }}" }
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('rust/**') }}
+          restore-keys: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-
+      - run: cargo test --workspace --locked
+      - run: cargo run --release --locked -p conformance -- snapshot
+
+  build:
+    name: ${{ matrix.target }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      TARGET: ${{ matrix.target }}
+      LABEL: ${{ needs.plan.outputs.label }}
+      CROSS_VERSION: ${{ needs.plan.outputs.cross }}
+      NDK_VERSION: ${{ needs.plan.outputs.ndk }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.14" }
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.plan.outputs.rust }}
+          targets: ${{ matrix.target }}
+      - name: Cache Rust compilation
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-${{ hashFiles('rust/**') }}
+          restore-keys: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-
+      - name: Cache cross
+        if: matrix.backend == 'cross'
+        id: cross
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cross
+          key: release-cross-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.cross }}
+      - name: Install cross
+        if: matrix.backend == 'cross' && steps.cross.outputs.cache-hit != 'true'
+        run: cargo install cross --locked --version "${CROSS_VERSION}"
+      - name: Install Android NDK
+        if: matrix.backend == 'android'
+        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"'
+      - name: Build and smoke-test
+        run: python .github/release/release.py build --target "${TARGET}"
+      - name: Package binary, license and build metadata
+        run: python .github/release/release.py pack --target "${TARGET}" --label "${LABEL}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*
+          overwrite: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  assemble:
+    name: Verify complete release payload
+    needs: [plan, check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env: { LABEL: "${{ needs.plan.outputs.label }}" }
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.13" }
+      - uses: actions/download-artifact@v8
+        with: { pattern: "binary-*", path: dist, merge-multiple: true }
+      - name: Check every target and add source archive and checksums
+        run: python .github/release/release.py assemble --label "${LABEL}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rshellcheck-${{ needs.plan.outputs.label }}
+          path: dist/*
+          overwrite: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish complete GitHub release
+    needs: [plan, assemble]
+    if: needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: { contents: write }
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      LABEL: ${{ needs.plan.outputs.label }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Upload to a draft, then publish
+        run: |
+          set -euo pipefail
+          # Recover an interrupted draft; never overwrite a published release.
+          if gh release view "${TAG}" --json isDraft > release.json 2> release-error.txt; then
+            jq -e '.isDraft == true' release.json
+          else
+            # An auth/network error must not be mistaken for a missing release.
+            if ! grep -qi 'release not found' release-error.txt; then
+              cat release-error.txt >&2
+              exit 1
+            fi
+            flags=()
+            if [[ "${LABEL}" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "${TAG}" --verify-tag --draft \
+              --title "rshellcheck ${LABEL}" --generate-notes "${flags[@]}"
+          fi
+          gh release upload "${TAG}" dist/* --clobber
+          gh release view "${TAG}" --json assets > release.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          expected = {p.name for p in Path("dist").iterdir()}
+          actual = {asset["name"] for asset in json.loads(Path("release.json").read_text())["assets"]}
+          if actual != expected:
+              raise SystemExit(f"Release assets differ: missing={expected - actual}, extra={actual - expected}")
+          PY
+          # Publication happens only after every upload completes.
+          gh release edit "${TAG}" --draft=false
+          gh release view "${TAG}" --json url,isDraft > release.json
+          jq -e '.isDraft == false' release.json
+          jq -r '.url' release.json

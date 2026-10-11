@@ -1,4 +1,5 @@
-#:schema https://dprint.kjanat.dev/schemas/v0.json
+#:schema dprint.schema.json
+# https://dprint.kjanat.dev/schemas/v0.json
 #:tombi toml-version = "v1.1.0"
 
 extends  = "https://raw.githubusercontent.com/kjanat/kjanat/refs/heads/master/configs/dprint.remote.json"
@@ -29,3 +30,6 @@ associations = [
   "setgitversion",
   "striptests",
 ]
+
+[ruff]
+preview = true

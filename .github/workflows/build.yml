@@ -3,7 +3,7 @@ name: Build ShellCheck
 on:
   push:
     branches: [master]
-    tags: ["*"]
+    tags: ["*", "!rshellcheck-v*"]
   pull_request:
     paths:
       - "src/**"
