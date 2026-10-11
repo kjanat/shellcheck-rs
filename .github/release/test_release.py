@@ -3,6 +3,7 @@
 import hashlib
 import io
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -42,6 +43,31 @@ def executable(target):
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_smoke_preserves_lf_input_on_windows(self):
+        def invoke(command, **kwargs):
+            script = kwargs["input"]
+            self.assertIsInstance(script, bytes)
+            self.assertNotIn("text", kwargs)
+            self.assertNotIn(b"\r", script)
+            dirty = b"$release_probe" in script
+            return subprocess.CompletedProcess(
+                command,
+                int(dirty),
+                b'{"comments":[{"code":2086}]}' if dirty else b'{"comments":[]}',
+                b"",
+            )
+
+        with (
+            patch.object(
+                release,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, "version: 0.11.0\n"),
+            ),
+            patch.object(release.subprocess, "run", side_effect=invoke) as probe,
+        ):
+            release.smoke(["rshellcheck.exe"], "0.11.0")
+        self.assertEqual(probe.call_count, 2)
+
     def test_only_exact_push_tag_publishes(self):
         tag = "refs/tags/" + release.PREFIX + release.metadata()["version"]
         self.assertTrue(release.plan(tag, "push")["publish"])

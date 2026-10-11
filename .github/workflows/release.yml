@@ -65,7 +65,9 @@ jobs:
             target
           key: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('rust/**') }}
           restore-keys: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-
-      - run: cargo test --workspace --locked
+      # Oracle-dependent CLI integration tests run in rust.yml, which builds
+      # the Haskell oracle. This job gates releases on unit tests and snapshots.
+      - run: cargo test --workspace --locked --lib --bins
       - run: cargo run --release --locked -p conformance -- snapshot
 
   build:

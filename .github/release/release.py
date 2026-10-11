@@ -162,16 +162,20 @@ def smoke(command, version):
     ]:
         result = subprocess.run(
             [*command, "--norc", "-s", "sh", "-f", "json1", "-"],
-            input=script,
+            # Text-mode stdin translates LF to CRLF on Windows, changing the
+            # shell script and producing SC1017 even for the clean fixture.
+            input=script.encode("utf-8"),
             capture_output=True,
-            text=True,
             env=env,
             cwd=ROOT,
             timeout=60,
             check=False,
         )
         if result.returncode != status or result.stderr:
-            raise ValueError(f"Smoke test failed: {result.returncode}: {result.stderr}")
+            raise ValueError(
+                f"Smoke test failed: expected {status}, got {result.returncode}; "
+                f"stdout={result.stdout!r}; stderr={result.stderr!r}"
+            )
         comments = json.loads(result.stdout)["comments"]
         if (status == 0 and comments) or (
             status == 1 and not any(c["code"] == 2086 for c in comments)
