@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members  = ["rust/crates/*"]
+members  = ["crates/*"]
 
 [workspace.package]
 edition      = "2024"
@@ -9,8 +9,8 @@ repository   = "https://github.com/kjanat/shellcheck-rs"
 license      = "GPL-3.0-or-later"
 
 [workspace.dependencies]  # workspace
-shellcheck-cli = { path = "rust/crates/shellcheck-cli" }
-shellcheck-rs  = { path = "rust/crates/shellcheck-rs" }
+shellcheck-cli = { path = "crates/shellcheck-cli" }
+shellcheck-rs  = { path = "crates/shellcheck-rs" }
 
 # own shit
 actions-rs = "0.1.2"

@@ -844,8 +844,12 @@ fn is_last_command_in_function(params: &Parameters, t: &Token) -> bool {
             InnerToken::T_Function { body, .. } => return body.id() == cur.id(),
             InnerToken::T_Redirecting { cmd, .. } => cmd.id() == cur.id(),
             InnerToken::T_Annotation { token, .. } => token.id() == cur.id(),
+            InnerToken::T_SimpleCommand { words, .. } => {
+                get_command_name(parent).as_deref() == Some("time") && ends_with(words, cur)
+            }
             InnerToken::T_Pipeline { commands, .. } => {
-                commands.len() == 1 && ends_with(commands, cur)
+                // A failed last command makes the pipeline fail, with or without pipefail.
+                ends_with(commands, cur)
             }
             InnerToken::T_BraceGroup(commands) | InnerToken::T_Subshell(commands) => {
                 ends_with(commands, cur)

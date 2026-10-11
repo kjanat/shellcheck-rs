@@ -10,6 +10,7 @@ on:
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/**"
       - "rust/**"
   workflow_dispatch:
 
@@ -63,7 +64,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('rust/**') }}
+          key: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('crates/**', 'rust/**') }}
           restore-keys: release-check-${{ runner.os }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**') }}-
       # Oracle-dependent CLI integration tests run in rust.yml, which builds
       # the Haskell oracle. This job gates releases on unit tests and snapshots.
@@ -100,7 +101,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-${{ hashFiles('rust/**') }}
+          key: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-${{ hashFiles('crates/**', 'rust/**') }}
           restore-keys: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-
       - name: Cache cross
         if: matrix.backend == 'cross'

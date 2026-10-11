@@ -9,7 +9,7 @@ a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
 is one class, `upstream-false-parse-error`: the oracle rejects the file, the port
 does not, and `<shell> -n` agrees with the port. See
-`rust/crates/conformance/src/deviations.rs`; no shell to ask means the difference
+`crates/conformance/src/deviations.rs`; no shell to ask means the difference
 counts as a divergence, so it fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
@@ -540,5 +540,8 @@ A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt
 The external oracle is pristine and retains this upstream regression. Rust unit
 tests and the frozen snapshot corpus preserve the correction. The differential harness sanctions only additional SC2164 findings at exact
 directory-command spans where the AST proves both upstream's final-compound
-condition and a subsequent command, loop iteration, or case fallthrough. All
+condition and a subsequent command, loop iteration (including `select`), non-final
+pipeline position, negation, asynchronous execution, command substitution, or
+case fallthrough. A final pipeline command propagates its
+failure and does not earn an extra SC2164 warning. All
 remaining diagnostics must agree exactly; other SC2164 differences still fail.

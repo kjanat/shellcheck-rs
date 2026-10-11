@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn frozen_corpus_retains_snapshot_inputs() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let corpus = coverage(&root.join("src/ShellCheck")).expect("frozen corpus");
         assert_eq!(corpus.entries.len(), 2067);
         assert_eq!(corpus.skipped.len(), 290);

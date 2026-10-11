@@ -2658,6 +2658,7 @@ impl Parser {
     pub(super) fn read_here_data(&mut self, body: &str, start: &Position) -> PResult<Vec<Token>> {
         let mut sub = self.sub_parser(body, start);
         let r = sub.read_here_data_parts();
+        let failed = sub.has_committed_failure();
         // The stack the sub-parse reports from: the one it froze when it
         // committed, or the live one if nothing did.
         let contexts = sub
@@ -2666,7 +2667,7 @@ impl Parser {
             .unwrap_or_else(|| sub.contexts.clone());
         let failure = sub.failure.clone();
         self.merge_sub(sub);
-        if let Ok(parts) = r {
+        if let Ok(parts) = if failed { Err(()) } else { r } {
             Ok(parts)
         } else {
             // A plain `subParse`, not `tryWithErrors`: the failure comes

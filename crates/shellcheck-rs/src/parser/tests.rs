@@ -872,6 +872,54 @@ mod coproc_glob_dollar_tests {
         }
     }
 
+    #[test]
+    fn fuzzed_lookahead_failures_preserve_context_and_commitment() {
+        let regex = fatal_notes("[o =~\\");
+        assert!(
+            regex
+                .iter()
+                .any(|(code, _, message)| *code == 1073 && message.contains("test expression"))
+        );
+        assert!(!regex.iter().any(|(code, _, _)| *code == 1009));
+        let index = parse_script("-", "a[$(e())]=");
+        assert!(index.root.is_none());
+        assert!(index.notes.iter().any(|note| note.code == 1072));
+        let case = parse_script("-", "case o in n);;esac!");
+        assert!(
+            case.notes
+                .iter()
+                .any(|note| note.code == 1129 && note.start.column == 19)
+        );
+    }
+
+    #[test]
+    fn malformed_expansions_in_parameters_and_heredocs_are_fatal() {
+        for script in ["coproc {${!(}$();}", "t<<foo\n$( ()\nfoo"] {
+            let parsed = parse_script("-", script);
+            assert!(parsed.root.is_none(), "{script}");
+            assert!(
+                parsed.notes.iter().any(|note| note.code == 1072),
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn annotation_survives_a_failed_coproc_alternative() {
+        let parsed = parse_script("-", "f(){#shellcheck disable=all\ncoproc {");
+        assert!(parsed.root.is_none());
+        assert_eq!(
+            parsed
+                .notes
+                .iter()
+                .map(|note| note.code)
+                .collect::<Vec<_>>(),
+            vec![1054]
+        );
+        let outside = parse_script("-", "echo first\n# shellcheck disable=all\necho ok\nif");
+        assert!(outside.notes.iter().any(|note| note.code == 1072));
+    }
+
     fn fatal_notes(script: &str) -> Vec<(i64, i64, String)> {
         parse_script("-", script)
             .notes

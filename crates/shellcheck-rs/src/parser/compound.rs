@@ -1117,6 +1117,10 @@ impl Parser {
 
     fn read_case_item(&mut self) -> PResult<CaseClause> {
         self.called("case item", |p| {
+            // g_Esac reports glued punctuation even when the keyword is rejected.
+            if p.word_matches("esac") {
+                p.warn_keyword_needs_space("esac");
+            }
             // `notFollowedBy2 g_Esac`
             if p.keyword_ahead("esac") {
                 return Err(());

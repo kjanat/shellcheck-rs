@@ -289,6 +289,13 @@ mod source_tests {
             "case x in x) cd /missing; echo continued;; esac",
             "for x in a b; do cd /missing; echo continued; done",
             "for x in a b; do cd /missing; done",
+            "select x in a b; do cd /missing; done",
+            "! cd /missing",
+            "coproc { cd /missing; }",
+            "cd /missing & :",
+            "cd /missing | cat",
+            "cd /missing | cat | cat",
+            "printf x | cd /missing; echo continued",
             "while true; do cd /missing; echo continued; done",
             "until false; do cd /missing; echo continued; done",
             "{ cd /missing; echo continued; }",
@@ -309,11 +316,28 @@ mod source_tests {
             "case x in x) cd /missing;; esac",
             "{ cd /missing; }",
             "( cd /missing )",
+            "time cd /missing",
+            "time -p cd /missing",
+            "printf x | cd /missing",
+            "printf x | cat | cd /missing",
+            "set -o pipefail; printf x | cd /missing",
             "cd /missing || return 1; echo continued",
             "if cd /missing; then echo succeeded; fi",
         ] {
             let script = format!("#!/bin/bash\nf() {{ {body}; }}\n");
             assert!(!check(&script).contains(&2164), "{script}");
+        }
+    }
+
+    #[test]
+    fn unchecked_cd_pipeline_and_select_fuzz_regressions() {
+        for (script, warns) in [
+            (r#"b(){cd|"";}"#, true),
+            ("function a{cd|t;}", true),
+            ("f(){select x in do cd \"\"''$;done\n}", true),
+            ("c(){]|cd;}", false),
+        ] {
+            assert_eq!(check(script).contains(&2164), warns, "{script}");
         }
     }
 

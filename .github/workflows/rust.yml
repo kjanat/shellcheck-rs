@@ -9,6 +9,7 @@ on:
       - "**/Cargo.*"
       - ".cargo/**"
       - "mutants.toml"
+      - "crates/**"
       - "rust/**"
       - "tools/oracle*"
       - "tools/test_oracle.py"
@@ -65,7 +66,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**'), hashFiles('rust/crates/**')) }}
+          key: ${{ format('{0}-{1}-{2}', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**'), hashFiles('crates/**')) }}
           restore-keys: |
             ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**')) }}
             ${{ format('{0}-',     env.CACHE_PREFIX) }}

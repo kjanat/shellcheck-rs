@@ -958,32 +958,8 @@ impl Parser {
     /// escapes verbatim (e.g. a regex RHS `\*` stays `\*`, not `*`), and drops
     /// any notes the lookahead would have produced.
     pub(super) fn read_literal_for_parser_normal(&mut self, custom_end: &str) -> PResult<Token> {
-        let m = self.mark();
         let start = self.pos();
-        // Lookahead: find where readNormalLiteral would stop. Preserve notes by
-        // snapshotting and restoring them (read_normal_literal itself emits none
-        // today, but be robust to that changing).
-        let notes_len = self.notes.len();
-        let problems_len = self.problems.len();
-        if self.read_normal_literal(custom_end).is_err() {
-            self.reset(m);
-            self.notes.truncate(notes_len);
-            self.problems.truncate(problems_len);
-            return Err(());
-        }
-        let end_idx = self.idx;
-        self.reset(m);
-        self.notes.truncate(notes_len);
-        self.problems.truncate(problems_len);
-        // Read raw characters up to the discovered end.
-        let mut s = String::new();
-        while self.idx < end_idx {
-            if let Some(c) = self.bump() {
-                s.push(c);
-            } else {
-                break;
-            }
-        }
+        let s = self.read_string_for_parser(|p| p.read_normal_literal(custom_end).map(|_| ()))?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal(s)))
     }

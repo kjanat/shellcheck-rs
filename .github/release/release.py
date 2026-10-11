@@ -50,7 +50,7 @@ def git(*args):
 
 def metadata():
     manifests = [
-        ROOT / "rust/crates" / crate / "Cargo.toml"
+        ROOT / "crates" / crate / "Cargo.toml"
         for crate in ("shellcheck-cli", "shellcheck-rs")
     ]
     versions = [

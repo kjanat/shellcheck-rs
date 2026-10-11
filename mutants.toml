@@ -8,7 +8,7 @@
 # the list worth working from, rather than a coverage percentage.
 #
 # Run it scoped, not whole-tree: 7499 mutants at ~10s each is days, not hours.
-# `mise run mutants -- --file rust/crates/shellcheck-rs/src/ast_lib.rs`, or
+# `mise run mutants -- --file crates/shellcheck-rs/src/ast_lib.rs`, or
 # `-- --shard k/n` to sweep the lot across runs. Paths in filters are relative
 # to the repository root, which is what the tool prints.
 
@@ -16,7 +16,7 @@
 # `conformance` proves nothing about the port, and mutating the test support
 # only breaks the tests themselves.
 exclude_globs = [
-  "rust/crates/conformance/**",
+  "crates/conformance/**",
   "**/test_support.rs",
   "**/tests.rs",
 ]

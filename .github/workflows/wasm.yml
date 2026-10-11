@@ -3,6 +3,7 @@ name: WASM core
 on:
   pull_request:
     paths: &PATHS [
+      "crates/**",
       "rust/**",
       "Cargo.*",
       ".cargo/**",
@@ -47,7 +48,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wasm-1.99-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('rust/**') }}
+          key: wasm-1.99-${{ hashFiles('Cargo.lock', '.cargo/**') }}-${{ hashFiles('crates/**', 'rust/**') }}
           restore-keys: wasm-1.99-${{ hashFiles('Cargo.lock', '.cargo/**') }}-
       - name: Build core module and native parity reference
         run: |

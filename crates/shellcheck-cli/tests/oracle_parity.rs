@@ -45,7 +45,7 @@ struct Run {
 }
 
 fn oracle() -> io::Result<PathBuf> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.cache/shellcheck-oracle");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cache/shellcheck-oracle");
     if path.is_file() {
         Ok(path)
     } else {

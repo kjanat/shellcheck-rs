@@ -478,7 +478,8 @@ impl Shrinker<'_> {
         if keys_match(&pk, &ok) {
             return Ok(false);
         }
-        Ok(signature(&pk, &ok, self.shell) == self.want)
+        Ok(signature(&pk, &ok, self.shell) == self.want
+            && crate::deviations::sanctioned(cand, self.shell, &pk, &ok).is_none())
     }
 
     fn shrink(&self, start: &str) -> Result<String, String> {

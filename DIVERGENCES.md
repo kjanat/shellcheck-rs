@@ -56,7 +56,7 @@ The other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the like,
 and have no shell snippet to replay.
 
 Where an entry's port-side half can be checked without the oracle, it gets a
-`#[should_panic]` test in `rust/crates/shellcheck-rs/src/parser/tests.rs`, which
+`#[should_panic]` test in `crates/shellcheck-rs/src/parser/tests.rs`, which
 asserts what upstream does. Fixing the port makes the assertion pass, which
 makes the test *fail* — the reminder to delete the marker and the entry here in
 the same commit. That is how A1, A3, B1, B2 and E1 came to be closed. There are
@@ -94,7 +94,7 @@ runs it, and `bash -n` agrees with the port. Unlike Z3 this one is kept, because
 the harness can justify it from a shell's verdict rather than from taste — and
 only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
 is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
-`rust/crates/conformance/src/deviations.rs`.
+`crates/conformance/src/deviations.rs`.
 
 ### Z5. A filename that starts with `-`
 
@@ -117,7 +117,7 @@ A section such as `[[z-a]]` ends upstream with regex-tdfa's
 `parseRegex ... failed` error and no output, for every input under that
 `.editorconfig`. The port reports SC1134 at the section header and exits 4, as
 for any other rejected EditorConfig file. Its globs compile through
-`rust/crates/shellcheck-rs/src/tdfa.rs`, which accepts and rejects exactly what
+`crates/shellcheck-rs/src/tdfa.rs`, which accepts and rejects exactly what
 regex-tdfa's parser does, so this applies only to the globs upstream dies on.
 
 ### Z7. An internal error in the dataflow analysis

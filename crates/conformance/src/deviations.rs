@@ -104,7 +104,9 @@ fn function_tail_cd(script: &str, port: &[CommentKey], oracle: &[CommentKey]) ->
                         }
                         overwritten |= follows(commands);
                     }
-                    InnerToken::T_Subshell(commands) => overwritten |= follows(commands),
+                    InnerToken::T_Subshell(commands) | InnerToken::T_Pipeline { commands, .. } => {
+                        overwritten |= follows(commands);
+                    }
                     InnerToken::T_IfExpression { clauses, elses } => {
                         overwritten |=
                             clauses.iter().any(|(_, body)| follows(body)) || follows(elses);
@@ -116,7 +118,13 @@ fn function_tail_cd(script: &str, port: &[CommentKey], oracle: &[CommentKey]) ->
                                     && body.iter().any(|t| t.id() == child.id()))
                         });
                     }
-                    InnerToken::T_ForIn { .. }
+                    InnerToken::T_DollarExpansion(_)
+                    | InnerToken::T_Backticked(_)
+                    | InnerToken::T_Banged(_)
+                    | InnerToken::T_Backgrounded(_)
+                    | InnerToken::T_CoProc { .. }
+                    | InnerToken::T_SelectIn { .. }
+                    | InnerToken::T_ForIn { .. }
                     | InnerToken::T_ForArithmetic { .. }
                     | InnerToken::T_WhileExpression { .. }
                     | InnerToken::T_UntilExpression { .. } => overwritten = true,
@@ -232,6 +240,15 @@ mod tests {
         for script in [
             "f() { if true; then cd /missing; echo continued; fi; }",
             "f() { for x in a b; do cd /missing; done; }",
+            "f() { select x in a b; do cd /missing; done; }",
+            "f() { cd /missing | cat; }",
+            "function f{1|cd !()'t'|o;}",
+            "f() { ! cd /missing; }",
+            "r(){!cd;}",
+            "r(){coproc N select x in `` do cd<'';done;}",
+            "f() { echo $(cd /missing); }",
+            "f() { coproc { cd /missing; }; }",
+            "f() { cd /missing & }",
             "f() { case x in x) cd /missing; echo continued;; esac; }",
         ] {
             let port = crate::port_keys(script, "-", Some("bash")).expect("port");
@@ -248,6 +265,7 @@ mod tests {
             assert!(!function_tail_cd(script, &shifted, &oracle));
         }
         for script in [
+            "f() { printf x | cd /missing; }",
             "cd /missing; echo continued",
             "f() { cd /missing; echo continued; }",
         ] {

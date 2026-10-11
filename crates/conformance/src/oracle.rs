@@ -372,7 +372,7 @@ mod tests {
     fn oracle() -> Option<Oracle> {
         let spec = std::env::var("CONFORMANCE_ORACLE").unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../.cache/shellcheck-oracle")
+                .join("../../.cache/shellcheck-oracle")
                 .to_string_lossy()
                 .into_owned()
         });

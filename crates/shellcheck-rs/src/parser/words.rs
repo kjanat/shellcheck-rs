@@ -1447,6 +1447,9 @@ impl Parser {
                 Some(c) if PARAM_SUB_SPECIAL_CHARS.contains(c) => {
                     self.read_param_sub_special_char()
                 }
+                Some(c) if "?*@!+".contains(c) && self.peek_at(1) == Some('(') => {
+                    self.read_extglob()
+                }
                 Some(_) => self.read_braced_literal(),
             };
             if let Ok(t) = r {

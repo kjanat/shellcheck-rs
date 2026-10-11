@@ -391,6 +391,8 @@ pub(super) struct Context {
     /// Identifies this entry into the production, so a frame kept in a
     /// failure snapshot can be told apart from a later one at the same depth.
     serial: u64,
+    /// Annotation depth to restore only when this exact frame is popped.
+    annotation_depth: Option<usize>,
 }
 
 /// The deepest parse failure, with the context stack as it stood at the time.
@@ -625,12 +627,20 @@ impl Parser {
         let pos = self.pos();
         self.next_serial += 1;
         let serial = self.next_serial;
-        self.contexts
-            .push_back(Rc::new(Context { pos, name, serial }));
+        self.contexts.push_back(Rc::new(Context {
+            pos,
+            name,
+            serial,
+            annotation_depth: None,
+        }));
     }
 
     fn pop_ctx(&mut self) {
-        let _ = self.contexts.pop_back();
+        if let Some(context) = self.contexts.pop_back()
+            && let Some(depth) = context.annotation_depth
+        {
+            self.ann_contexts.truncate(depth);
+        }
     }
 
     /// Run `body` as the named production, so that a failure inside it can
@@ -711,6 +721,7 @@ impl Parser {
         // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
+        let annotations = self.ann_contexts.clone();
         if let Ok(t) = alternative(self)
             && self.committed == committed
         {
@@ -720,6 +731,7 @@ impl Parser {
         self.notes.truncate(notes);
         self.problems.truncate(problems);
         self.contexts = contexts;
+        self.ann_contexts = annotations;
         // Both attempts sat behind `try`, so neither error escapes; the last
         // run consumes input and its error alone is what Parsec propagates.
         self.failure = failure;
@@ -867,6 +879,7 @@ impl Parser {
         let notes = self.notes.len();
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
+        let annotations = self.ann_contexts.clone();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
         let failure = self.failure.clone();
@@ -880,6 +893,7 @@ impl Parser {
         self.notes.truncate(notes);
         self.problems.truncate(problems);
         self.contexts = contexts;
+        self.ann_contexts = annotations;
         self.committed = committed;
         self.frozen_contexts = frozen;
         self.pending_heredocs = pending;
@@ -921,13 +935,13 @@ impl Parser {
         // command makes to what SC1073 names.
         if !anns.is_empty() {
             self.push_ctx("");
+            if let Some(context) = self.contexts.back_mut() {
+                Rc::make_mut(context).annotation_depth = Some(from);
+            }
         }
         let r = f(self);
-        if r.is_ok() || self.idx == start_idx {
-            self.ann_contexts.truncate(from);
-            if !anns.is_empty() {
-                self.pop_ctx();
-            }
+        if (r.is_ok() || self.idx == start_idx) && !anns.is_empty() {
+            self.pop_ctx();
         }
         r
     }
@@ -1013,18 +1027,21 @@ impl Parser {
         let notes = self.notes.len();
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
+        let annotations = self.ann_contexts.clone();
         let failure = self.failure.clone();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
         let r = f(self);
+        let failed = r.is_err() || self.committed != committed;
         let end = self.idx;
         self.reset(m);
         self.notes.truncate(notes);
         self.problems.truncate(problems);
         self.contexts = contexts;
+        self.ann_contexts = annotations;
         self.committed = committed;
         self.frozen_contexts = frozen;
-        if r.is_err() {
+        if failed {
             // `parseForgettingContext`'s failure branch is `Ms.put c >> fail
             // ""`, and the `<|>` above it merges that error with the one from
             // the `try parser` branch: Parsec keeps whichever reached further,
