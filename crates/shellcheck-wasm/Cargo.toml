@@ -1,0 +1,21 @@
+[package]
+name                   = "shellcheck-wasm"
+version                = "0.11.0"
+edition.workspace      = true
+rust-version.workspace = true
+description            = "Portable JSON ABI for the ShellCheck analysis core"
+license.workspace      = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde.workspace         = true
+serde_json.workspace    = true
+shellcheck-rs.workspace = true
+
+# Export attributes require an unsafe-code lint exception in the ABI module.
+# The core retains its workspace-wide unsafe_code = forbid policy.
+[lints.rust]
+missing_docs = "warn"
+unsafe_code  = "deny"

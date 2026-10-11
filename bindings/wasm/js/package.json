@@ -1,0 +1,15 @@
+{
+	"name": "@kjanat/rshellcheck-wasm",
+	"version": "0.11.0",
+	"private": true,
+	"license": "GPL-3.0-or-later",
+	"type": "module",
+	"exports": { ".": "./shellcheck.mjs", "./worker": "./worker.mjs" },
+	"files": ["shellcheck.mjs", "worker.mjs"],
+	"scripts": {
+		"install:browser": "playwright install chromium",
+		"test": "node test.mjs",
+		"test:browser": "playwright test browser.spec.mjs"
+	},
+	"devDependencies": { "@playwright/test": "1.64.0" }
+}

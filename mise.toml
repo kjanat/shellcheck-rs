@@ -1,0 +1,74 @@
+#:tombi toml-version = "v1.1.0"
+# Project toolchain, managed by mise (https://mise.jdx.dev).
+#
+# Unpinned tools track "latest"; mise.lock records exact resolutions.
+# Binding development uses explicit Node, Go and Python versions.
+# The optional upstream oracle installs its Haskell tools separately.
+#
+# Do not delete this file: it is the single source of truth for the project's
+# tools and is checked into the repo.
+
+min_version = "2026.10.7"
+
+[tools]
+dprint = "latest"  # formatter
+go     = "1.27.2"
+node   = "26"
+python = "latest"  # conformance harness (rust/harness/*.py)
+tombi  = "1.8.0"   # Exact version avoids release-age range resolution failures.
+
+[tools.rust]  # Rust port (edition 2024)
+version    = "latest"
+components = ["rustfmt", "clippy", "rust-src"]
+
+[tool_alias]
+dprint = { backend = "github:kjanat/dprint" }
+
+[settings]
+# Backend plugins are experimental, so they must be enabled explicitly.
+experimental                        = true
+idiomatic_version_file_enable_tools = ["python"]
+
+[tasks]
+[tasks.format]
+alias = ["f", "fmt"]
+tools = { tombi = "1.8.0" }
+run   = "dprint fmt"
+
+# --- Refactor safety net -----------------------------------------------------
+# The oracle answers "does the port agree with ShellCheck?". These three answer
+# the questions a refactor asks instead: did anything change, is any of it
+# untested, and would the tests have noticed?
+
+# Characterization: fail if the port's own output moved anywhere in the corpus.
+# Needs no oracle. `mise run snapshot -- --write` re-freezes it.
+[tasks.snapshot]
+run = "cargo conformance-snapshot"
+
+# What the snapshot corpus actually exercises, per file.
+[tasks.coverage]
+run = [
+  "cargo llvm-cov clean --workspace",
+  "cargo llvm-cov --no-report run --release -p conformance -- snapshot",
+  "cargo llvm-cov report --release --summary-only",
+]
+
+[tasks.check-py]
+run = [
+  "uv run ruff check",
+  "uv run ty check",
+  "uv run basedpyright",
+]
+
+# Whether the tests would catch a behaviour change at all. Scope it to the file
+# being worked on: `mise run mutants -- --file crates/shellcheck-rs/src/cfg.rs`.
+[tasks.mutants]
+run = "cargo mutants"
+
+[tasks.oracle]
+description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
+run         = "python tools/oracle.py"
+
+[wrappers."rshellcheck"]
+command = "cargo"
+args    = ["rshellcheck"]
