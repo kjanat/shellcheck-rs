@@ -1,6 +1,7 @@
 """Release-contract tests: wrong versions, architectures and incomplete payloads."""
 
 import hashlib
+import io
 import struct
 import tarfile
 import tempfile
@@ -117,6 +118,19 @@ class ReleaseTests(unittest.TestCase):
                             ).mode,
                             0o755,
                         )
+
+    def test_archive_member_must_be_regular_file(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            info = tarfile.TarInfo("rshellcheck")
+            info.type = tarfile.DIRTYPE
+            archive.addfile(info)
+        buffer.seek(0)
+        with (
+            tarfile.open(fileobj=buffer) as archive,
+            self.assertRaisesRegex(ValueError, "not a regular file"),
+        ):
+            release.read_member(archive, "rshellcheck")
 
     def test_assembly_requires_every_target(self):
         with tempfile.TemporaryDirectory() as temp:

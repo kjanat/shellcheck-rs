@@ -310,6 +310,13 @@ def pack(target, label, binary=None, dest=None):
     return archive
 
 
+def read_member(archive, name):
+    file = archive.extractfile(name)
+    if file is None:
+        raise ValueError(f"{name} is not a regular file")
+    return file.read()
+
+
 def assemble(label, dest=None):
     """Check every target and source identity before making the release payload."""
     dest = dest or ROOT / "dist"
@@ -330,8 +337,8 @@ def assemble(label, dest=None):
                 data = source.read(prefix + binary)
         else:
             with tarfile.open(archive) as source:
-                build_meta = json.load(source.extractfile(prefix + "BUILD.json"))
-                data = source.extractfile(prefix + binary).read()
+                build_meta = json.loads(read_member(source, prefix + "BUILD.json"))
+                data = read_member(source, prefix + binary)
         for key, value in {
             **meta,
             "label": label,
