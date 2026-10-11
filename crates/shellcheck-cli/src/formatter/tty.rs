@@ -196,7 +196,15 @@ pub fn render_wiki(entries: &[WikiEntry], wiki_link_count: usize, out: &mut Stri
     }
     out.push_str("For more information:\n");
     for e in issues {
-        let _ = writeln!(out, "  {WIKI_LINK}SC{} -- {}", e.code, shorten(&e.message));
+        let link = if matches!(e.code, 9001 | 9002) {
+            format!(
+                "https://github.com/kjanat/shellcheck-rs/blob/rust-port/docs/diagnostics.md#sc{}",
+                e.code
+            )
+        } else {
+            format!("{WIKI_LINK}SC{}", e.code)
+        };
+        let _ = writeln!(out, "  {link} -- {}", shorten(&e.message));
     }
 }
 

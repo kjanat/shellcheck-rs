@@ -525,3 +525,8 @@ Happy ShellChecking!
 
 - The wiki has [long form descriptions](https://github.com/koalaman/shellcheck/wiki/Checks) for each warning, e.g. [SC2221](https://github.com/koalaman/shellcheck/wiki/SC2221).
 - ShellCheck does not attempt to enforce any kind of formatting or indenting style, so also check out [shfmt](https://github.com/mvdan/sh)!
+
+### Additional diagnostics
+
+See [additional diagnostics](docs/diagnostics.md) for default interpreter-path and cleanup-trap warnings,
+and optional clearer parser-error messages beyond upstream ShellCheck.

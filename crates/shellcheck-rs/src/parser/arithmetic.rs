@@ -53,13 +53,30 @@ impl Parser {
         Ok((id, op))
     }
 
+    /// Recover a pasted Unicode dash as minus while retaining an error.
+    fn arith_unicode_minus(&mut self) -> bool {
+        if !self.peek().is_some_and(|c| "֊־‐‑‒–—―﹣－−".contains(c)) {
+            return false;
+        }
+        let start = self.pos();
+        self.bump();
+        self.problem_at(
+            start,
+            self.pos(),
+            Severity::ErrorC,
+            1100,
+            "This is a unicode dash. Delete and retype as ASCII minus.",
+        );
+        true
+    }
+
     /// `readMinusOp`: binary `-`, but warn (SC1106) for `-lt`/`-gt`/&c.
     pub(super) fn arith_read_minus_op(&mut self) -> PResult<(Id, String)> {
         let start = self.pos();
         let pos = self.pos();
         let outer = self.mark();
         // try (char '-' >> failIfIncompleteOp)
-        if self.char('-').is_err() {
+        if !self.arith_unicode_minus() && self.char('-').is_err() {
             self.reset(outer);
             return Err(());
         }
@@ -318,8 +335,11 @@ impl Parser {
     pub(super) fn read_arith_signed(&mut self) -> PResult<Token> {
         let start = self.pos();
         let outer = self.mark();
-        let mut got: Option<char> = None;
+        let mut got = self.arith_unicode_minus().then_some('-');
         for c in ['+', '-'] {
+            if got.is_some() {
+                break;
+            }
             let m = self.mark();
             if self.char(c).is_ok() {
                 // notFollowedBy2 (char c)
@@ -510,7 +530,7 @@ impl Parser {
                     let lid = self.next_id_between(s, self.pos());
                     Ok(Token::new(lid, InnerToken::T_Literal("#".to_string())))
                 }
-                _ => self.read_normal_literal("+-*/=%^,]?:"),
+                _ => self.read_normal_literal("+-*/=%^,]?:֊־‐‑‒–—―﹣－−"),
             };
             match piece {
                 Ok(t) => pieces.push(t),

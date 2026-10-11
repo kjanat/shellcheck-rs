@@ -24,7 +24,7 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 /// supplies a default so that an embedder that never sources anything does not
 /// have to.
 pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
-    let parse = parser::parse_script_spec(&parser::ParseSpec {
+    let mut parse = parser::parse_script_spec(&parser::ParseSpec {
         filename: spec.filename.clone(),
         script: spec.script.clone(),
         check_sourced: spec.check_sourced,
@@ -39,6 +39,19 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
             .unwrap_or_default(),
         sys,
     });
+
+    // Keep upstream-compatible wording by default; callers can opt into more
+    // useful fatal-error context without changing diagnostic codes or spans.
+    let clarify = |name: &str| matches!(name, "all" | "clarify-parse-errors");
+    let clarify_enabled = spec.optional_checks.iter().any(|name| clarify(name))
+        || spec.rc.as_ref().is_some_and(|rc| {
+            rc.annotations
+                .iter()
+                .any(|a| matches!(a, crate::ast::Annotation::EnableComment(name) if clarify(name)))
+        });
+    if clarify_enabled {
+        clarify_parse_errors(&mut parse.notes);
+    }
 
     // Parse comments (SC1xxx): already positioned.
     let mut positioned: Vec<PositionedComment> =
@@ -88,6 +101,38 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         filename: spec.filename.clone(),
         comments: positioned,
         dataflow_error,
+    }
+}
+
+/// Improve presentation only: diagnostic positions and parsing decisions stay
+/// unchanged, and no new finding is introduced by this optional check.
+fn clarify_parse_errors(notes: &mut Vec<ParseNote>) {
+    let failed_at: Vec<_> = notes
+        .iter()
+        .filter(|n| n.code == 1073)
+        .map(|n| n.start.clone())
+        .collect();
+    // Failed alternatives can leave two context frames at the same opening
+    // token. Naming a nonexistent enclosing command is less useful than just
+    // showing the actual failing construct there.
+    notes.retain(|n| n.code != 1009 || !failed_at.contains(&n.start));
+    let arithmetic = notes
+        .iter()
+        .any(|n| n.code == 1073 && n.message.contains("((..))"));
+    for note in notes {
+        if note.code == 1073 {
+            note.message = note.message.replace(
+                "ksh-style ${ ..; } command expansion",
+                "${ ..; } command expansion (commands followed by '; }')",
+            );
+        }
+        if note.code == 1072 && note.message.trim() == "Fix any mentioned problems and try again." {
+            note.message = if arithmetic {
+                "Incomplete arithmetic expression. Check for a missing operand or closing parenthesis."
+            } else {
+                "Unexpected token or end of input. Check the syntax of the construct identified above."
+            }.into();
+        }
     }
 }
 
@@ -326,6 +371,70 @@ mod source_tests {
         ] {
             let script = format!("#!/bin/bash\nf() {{ {body}; }}\n");
             assert!(!check(&script).contains(&2164), "{script}");
+        }
+    }
+
+    #[test]
+    fn clearer_parse_errors_are_opt_in() {
+        for script in ["${ ", "((())"] {
+            let mut spec = CheckSpec {
+                filename: "test.bash".into(),
+                script: script.into(),
+                ..CheckSpec::default()
+            };
+            let baseline = check_script(&spec);
+            spec.optional_checks.push("clarify-parse-errors".into());
+            let improved = check_script(&spec);
+            assert!(baseline.comments.iter().any(|c| c.comment.code == 1009));
+            assert!(!improved.comments.iter().any(|c| c.comment.code == 1009));
+            assert!(improved.comments.iter().any(|c| c.comment.code == 1072));
+            for finding in &improved.comments {
+                assert!(
+                    baseline
+                        .comments
+                        .iter()
+                        .any(|old| old.comment.code == finding.comment.code
+                            && old.start == finding.start
+                            && old.end == finding.end)
+                );
+            }
+            assert!(
+                !improved
+                    .comments
+                    .iter()
+                    .any(|c| c.comment.message.starts_with(" Fix"))
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_arithmetic_minus_gets_the_relevant_error() {
+        for script in [
+            "echo $((1 – 2))",
+            "echo $((1–2))",
+            "echo $((−2))",
+            "((1 — 2))",
+        ] {
+            let found = check(script);
+            assert!(found.contains(&1100), "{script}: {found:?}");
+            assert!(
+                !found.contains(&1102) && !found.contains(&2005),
+                "{found:?}"
+            );
+        }
+        assert!(!check("echo '1 – 2'").contains(&1100));
+    }
+
+    #[test]
+    fn upstream_crash_inputs_do_not_crash_the_port() {
+        for script in [
+            "x=$(coproc foo)",
+            r"echo $'\U110000'",
+            r"echo $'\uD800'",
+            r"echo $'\uDFFF'",
+        ] {
+            let found = check(script);
+            assert!(!found.contains(&1072), "{script}: {found:?}");
         }
     }
 

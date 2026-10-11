@@ -37,6 +37,11 @@ const FALSE_PARSE_ERROR: Deviation = Deviation {
            rejecting the whole file",
 };
 
+const INTERPRETER_PATH_TYPO: Deviation = Deviation {
+    id: "interpreter-path-typo",
+    what: "the port diagnoses a likely misspelling in the interpreter directory",
+};
+
 const FUNCTION_TAIL_CD: Deviation = Deviation {
     id: "upstream-function-tail-cd",
     what: "upstream suppresses unchecked directory changes inside a final compound statement",
@@ -44,7 +49,12 @@ const FUNCTION_TAIL_CD: Deviation = Deviation {
 
 // Recognize the old upstream predicate AND an ancestor that can overwrite the
 // command's status. Match the precise diagnostic span; never waive SC2164 by code.
-fn function_tail_cd(script: &str, port: &[CommentKey], oracle: &[CommentKey]) -> bool {
+fn function_tail_cd(
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+) -> bool {
     use shellcheck_rs::ast::InnerToken;
     let extra: Vec<_> = port.iter().filter(|k| !oracle.contains(k)).collect();
     if extra.is_empty() || extra.iter().any(|k| k.code != 2164) {
@@ -54,7 +64,12 @@ fn function_tail_cd(script: &str, port: &[CommentKey], oracle: &[CommentKey]) ->
     if !remaining.iter().copied().eq(oracle.iter()) {
         return false;
     }
-    let parsed = shellcheck_rs::parser::parse_script("-", script);
+    let parsed = shellcheck_rs::parser::parse_script_with(
+        "-",
+        script,
+        shell.is_some(),
+        shell.and_then(crate::parse_shell),
+    );
     let Some(root) = parsed.root else {
         return false;
     };
@@ -198,7 +213,38 @@ pub fn sanctioned(
     port: &[CommentKey],
     oracle: &[CommentKey],
 ) -> Option<&'static Deviation> {
-    if function_tail_cd(script, port, oracle) {
+    // SC9001 is a documented extension. Require the exact finding to be
+    // reproducible from the shebang alone; unrelated body diagnostics must
+    // still agree, or independently satisfy an existing structural sanction.
+    let added_paths: Vec<_> = port
+        .iter()
+        .filter(|k| k.code == 9001 && !oracle.contains(k))
+        .collect();
+    if !added_paths.is_empty() {
+        let header_lines = usize::try_from(added_paths.iter().map(|k| k.end_line).max()?).ok()?;
+        let header = format!(
+            "{}\n",
+            script
+                .lines()
+                .take(header_lines)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let expected = crate::port_keys(&header, "-", shell).ok()?;
+        if !added_paths.iter().all(|k| expected.contains(k)) {
+            return None;
+        }
+        let remaining: Vec<_> = port
+            .iter()
+            .filter(|k| !added_paths.contains(k))
+            .cloned()
+            .collect();
+        if remaining == oracle || sanctioned(script, shell, &remaining, oracle).is_some() {
+            return Some(&INTERPRETER_PATH_TYPO);
+        }
+        return None;
+    }
+    if function_tail_cd(script, shell, port, oracle) {
         return Some(&FUNCTION_TAIL_CD);
     }
     let port_codes = codes(port);
@@ -236,6 +282,27 @@ mod tests {
     }
 
     #[test]
+    fn interpreter_path_extension_does_not_hide_other_differences() {
+        let script = "#!/usr/bni/env bash\necho ok";
+        let port = crate::port_keys(script, "-", Some("bash")).expect("port");
+        let oracle: Vec<_> = port.iter().filter(|k| k.code != 9001).cloned().collect();
+        assert_eq!(
+            sanctioned(script, Some("bash"), &port, &oracle).map(|d| d.id),
+            Some("interpreter-path-typo")
+        );
+        let mut unrelated = port.clone();
+        unrelated.push(key(9999));
+        assert!(sanctioned(script, Some("bash"), &unrelated, &oracle).is_none());
+        let mut shifted = port;
+        for k in &mut shifted {
+            if k.code == 9001 {
+                k.line += 1;
+            }
+        }
+        assert!(sanctioned(script, Some("bash"), &shifted, &oracle).is_none());
+    }
+
+    #[test]
     fn only_proven_function_tail_cd_differences_are_sanctioned() {
         for script in [
             "f() { if true; then cd /missing; echo continued; fi; }",
@@ -245,6 +312,9 @@ mod tests {
             "function f{1|cd !()'t'|o;}",
             "f() { ! cd /missing; }",
             "r(){!cd;}",
+            "!/zsh\nf(){!cd;}",
+            "!/zsh\nfunction f{cd |o;}",
+            "!/zsh\nf(){coproc select x in `` do cd<'';done }",
             "r(){coproc N select x in `` do cd<'';done;}",
             "f() { echo $(cd /missing); }",
             "f() { coproc { cd /missing; }; }",
@@ -253,16 +323,19 @@ mod tests {
         ] {
             let port = crate::port_keys(script, "-", Some("bash")).expect("port");
             let oracle: Vec<_> = port.iter().filter(|k| k.code != 2164).cloned().collect();
-            assert!(function_tail_cd(script, &port, &oracle), "{script}");
+            assert!(
+                function_tail_cd(script, Some("bash"), &port, &oracle),
+                "{script}"
+            );
             let mut unrelated = oracle.clone();
             unrelated.push(key(9999));
-            assert!(!function_tail_cd(script, &port, &unrelated));
+            assert!(!function_tail_cd(script, Some("bash"), &port, &unrelated));
             let mut shifted = port.clone();
             shifted
                 .iter_mut()
                 .filter(|k| k.code == 2164)
                 .for_each(|k| k.column += 1);
-            assert!(!function_tail_cd(script, &shifted, &oracle));
+            assert!(!function_tail_cd(script, Some("bash"), &shifted, &oracle));
         }
         for script in [
             "f() { printf x | cd /missing; }",
@@ -271,7 +344,10 @@ mod tests {
         ] {
             let port = crate::port_keys(script, "-", Some("bash")).expect("port");
             let oracle: Vec<_> = port.iter().filter(|k| k.code != 2164).cloned().collect();
-            assert!(!function_tail_cd(script, &port, &oracle), "{script}");
+            assert!(
+                !function_tail_cd(script, Some("bash"), &port, &oracle),
+                "{script}"
+            );
         }
     }
 

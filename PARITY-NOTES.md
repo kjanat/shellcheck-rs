@@ -92,8 +92,9 @@ reports that residue as if it were live nesting.
 
 **Port.** `((())` matches. `${ ` does **not** yet: the port names "parameter
 expansion" in SC1073 and the `${ ..; }` expansion in SC1009, i.e. it leaves a
-different pair of frames behind. Reproducing the exact residue here is an open
-divergence, not a decision to differ.
+different pair of frames behind in the historical results below. This parity
+gap was subsequently fixed (DIVERGENCES C1). For clearer messages, opt into
+`clarify-parse-errors`; see [additional diagnostics](docs/diagnostics.md).
 
 ---
 
@@ -545,3 +546,15 @@ pipeline position, negation, asynchronous execution, command substitution, or
 case fallthrough. A final pipeline command propagates its
 failure and does not earn an extra SC2164 warning. All
 remaining diagnostics must agree exactly; other SC2164 differences still fail.
+
+## Follow-up diagnostics
+
+The Unicode arithmetic-dash case now emits SC1100 at the operator and preserves
+arithmetic structure. Default checks address interpreter-path typos and
+signal-only cleanup traps; clearer fatal parse context remains optional. See
+[additional diagnostics](docs/diagnostics.md) for usage, coverage, and limitations.
+
+The `interpreter-path-typo` conformance class permits only added SC9001 findings
+reproducible from the shebang alone; all body diagnostics must still match or
+independently satisfy another documented class. The rule uses spelling distance
+on directory components, not a list of known misspellings.

@@ -10,6 +10,7 @@ pub(crate) mod arithmetic;
 pub(crate) mod commands;
 pub(crate) mod common;
 pub(crate) mod conditions;
+mod extensions;
 pub(crate) mod flow;
 pub(crate) mod loops;
 pub(crate) mod quoting;
@@ -30,6 +31,8 @@ const TREE_CHECKS: &[CheckPtr] = &[
     script::check_unpassed_in_functions,
     variables::check_array_without_index,
     script::check_shebang,
+    extensions::check_interpreter_path,
+    extensions::check_cleanup_traps,
     flow::check_unassigned_references,
     variables::check_array_assignment_indices,
     script::check_use_before_definition,

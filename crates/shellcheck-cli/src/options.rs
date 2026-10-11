@@ -321,10 +321,15 @@ pub fn usage() -> String {
     )
 }
 
-/// The optional checks the analyzer knows about, in the order the Haskell
-/// `optionalChecks` list defines them. Each tuple is (name, description,
-/// example, fix), matching the `--list-optional` catalog emitted by the oracle.
+/// Optional checks, with Rust extensions followed by the upstream catalog.
+/// Each tuple is (name, description, example, fix).
 const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
+    (
+        "clarify-parse-errors",
+        "Clarify fatal parser context and empty error messages (Rust extension)",
+        "((())",
+        "((1))",
+    ),
     (
         "add-default-case",
         "Suggest adding a default case in `case` statements",
@@ -1065,8 +1070,8 @@ mod tests {
 
     /// Every optional check upstream lists is implemented and reachable.
     #[test]
-    fn list_optional_has_all_twelve_checks() {
-        assert_eq!(list_optional_text().matches("name:").count(), 12);
+    fn list_optional_has_upstream_and_extension_checks() {
+        assert_eq!(list_optional_text().matches("name:").count(), 13);
     }
 
     fn run(a: &[&str]) -> RunConfig {
