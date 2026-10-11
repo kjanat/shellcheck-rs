@@ -135,7 +135,7 @@ The easiest way to install ShellCheck locally is through your package manager.
 To install this Rust port from git:
 
 ```sh
-cargo install --locked --git 'https://github.com/kjanat/shellcheck-rs' 'shellcheck-cli' --bin 'rshellcheck' [--branch rust-port|master]
+cargo install --locked --git 'https://github.com/kjanat/shellcheck-rs' 'shellcheck-cli' --bin 'rshellcheck'
 ```
 
 The other installation methods below describe the original upstream ShellCheck.
