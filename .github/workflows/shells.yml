@@ -10,6 +10,11 @@ on:
       - "docker/shells/**"
       - "validity/**"
       - "crates/conformance/**"
+      - "tools/affected_shell_cells.py"
+      - "tools/test_affected_shell_cells.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
   pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
@@ -23,6 +28,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { fetch-depth: 0 }
+
+      - name: Test affected-cell selection
+        run: python3 -m unittest discover -s tools -p test_affected_shell_cells.py
 
       - name: Install Rust stable
         uses: &RUST dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
@@ -32,9 +41,16 @@ jobs:
 
       - name: List cells
         id: cells
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          cells="$(cargo validity cells)"
+          if [[ -n "${PR_BASE}" ]]; then
+            cells="$(python3 tools/affected_shell_cells.py --base "${PR_BASE}")"
+          else
+            cells="$(cargo validity cells)"
+          fi
           echo "cells=${cells}" >> "${GITHUB_OUTPUT}"
+          echo "Selected shell cells: ${cells}"
 
       - name: Upload matrix
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -43,6 +59,7 @@ jobs:
   build:
     name: "Build ${{ matrix.cell }}"
     needs: pin
+    if: needs.pin.outputs.cells != '[]'
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
     strategy:
@@ -60,7 +77,7 @@ jobs:
         with: { name: matrix, path: validity }
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: &LOGIN docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
 

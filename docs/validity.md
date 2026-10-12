@@ -49,6 +49,22 @@ build environment. The shell sources are unchanged. Tarball downloads use a
 20-second connection timeout, a 10-minute per-attempt limit and up to two retries;
 the pinned SHA-256 is still required before extraction.
 
+## CI build reuse
+
+Published shell builds export a BuildKit registry cache in `mode=max` under
+`<image-tag>-buildcache`. PR builds import that cache without writing it. This
+shares intermediate compilation layers across runners and PRs after the first
+published build warms the cache. A missing cache falls back to a normal build.
+Same-repository PRs authenticate to GHCR; forks can reuse publicly readable caches.
+
+For pull requests, `tools/affected_shell_cells.py` compares the resolved matrix
+and changed build inputs against the PR merge base. A recipe change selects its
+shell versions (including dialects sharing that recipe); VM helpers select guest
+cells. Changed source pins select their cells, while shared build tooling selects
+the full matrix. Documentation, specs and recorded outcomes alone do not rebuild
+images. Empty selections skip the image job. Scheduled, manual and master runs
+still build the full matrix and refresh the cache.
+
 ## Cells
 
 A cell in `matrix.toml`, as `pin` writes it:
