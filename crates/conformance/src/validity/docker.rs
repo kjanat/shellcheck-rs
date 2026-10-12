@@ -56,7 +56,14 @@ fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
         cmd.arg("--label")
             .arg(format!("org.opencontainers.image.{key}={value}"));
     }
+    // Separate tags keep parallel cells from overwriting each other's cache.
+    // PR builds may consume published caches but never replace trusted caches.
+    let cache = format!("{}-buildcache", cell.image);
+    cmd.arg("--cache-from")
+        .arg(format!("type=registry,ref={cache}"));
     if push {
+        cmd.arg("--cache-to")
+            .arg(format!("type=registry,ref={cache},mode=max"));
         cmd.args(["--push", "--provenance=mode=max", "--sbom=true"]);
     } else {
         cmd.arg("--load");
@@ -314,6 +321,29 @@ mod tests {
         let a = args(&cell(), false);
         assert!(a.contains(&"--load".to_string()));
         assert!(!a.contains(&"--push".to_string()));
+        assert!(!a.contains(&"--cache-to".to_string()));
+    }
+
+    #[test]
+    fn published_builds_share_versioned_registry_cache_with_pr_builds() {
+        let first = cell();
+        let mut second = cell();
+        second.image = "ghcr.io/x/shell-bash:4.0".to_string();
+        for c in [&first, &second] {
+            let import = format!("type=registry,ref={}-buildcache", c.image);
+            let export = format!("{import},mode=max");
+            assert!(
+                args(c, false)
+                    .windows(2)
+                    .any(|a| a == ["--cache-from", &import])
+            );
+            assert!(
+                args(c, true)
+                    .windows(2)
+                    .any(|a| a == ["--cache-to", &export])
+            );
+            assert!(!args(c, false).contains(&export));
+        }
     }
 
     #[test]
