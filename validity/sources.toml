@@ -97,6 +97,27 @@ base     = "rust:1-slim-bookworm"
 versions = ["0.4.0"]
 argv     = ["brush"]
 
+[shell.bosh]
+kind     = "git"
+repo     = "https://codeberg.org/schilytools/schilytools"
+tag      = "{version}"
+versions = ["2024-03-21"]
+argv     = ["bosh"]
+
+[shell.freebsd-sh]
+kind     = "image"
+url      = "https://download.freebsd.org/releases/VM-IMAGES/{version}-RELEASE/amd64/Latest/FreeBSD-{version}-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz"
+versions = ["14.5", "15.1"]
+argv     = ["sh"]
+vm       = true
+
+[shell.netbsd-sh]
+kind     = "image"
+url      = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-{version}/images/NetBSD-{version}-amd64-live.img.gz"
+versions = ["10.2", "11.0"]
+argv     = ["sh"]
+vm       = true
+
 [shell.tcsh]
 kind     = "tarball"
 url      = "https://astron.com/pub/tcsh/tcsh-{version}.tar.gz"

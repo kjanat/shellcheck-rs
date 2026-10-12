@@ -21,7 +21,7 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
             continue;
         };
         ran += 1;
-        let container = Container::start(&reference)?;
+        let container = Container::start(cell, &reference)?;
         for (n, s) in specs.iter().enumerate() {
             let result = evaluate(&container, cell, s, n);
             let (outcome, observed) = match result {
@@ -260,6 +260,7 @@ mod tests {
                 argv: vec![],
                 parse: vec![],
                 shipped,
+                vm: false,
                 dialect: None,
                 source: matrix::SourcePin::Crate {
                     version: "1".to_string(),

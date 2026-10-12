@@ -13,4 +13,8 @@ case "$KIND" in
 		git clone --quiet --depth 1 --branch "$TAG" "$SOURCE" .
 		[ "$(git rev-parse HEAD)" = "$COMMIT" ]
 		;;
+	image)
+		curl --silent --show-error --location --fail --output "image.${SOURCE##*.}" "$SOURCE"
+		echo "$SHA256  image.${SOURCE##*.}" | sha256sum -c -
+		;;
 esac

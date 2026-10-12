@@ -21,6 +21,8 @@ pub struct Cell {
     pub argv: Vec<String>,
     pub parse: Vec<String>,
     pub shipped: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vm: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialect: Option<String>,
     pub source: SourcePin,
@@ -41,6 +43,10 @@ pub enum SourcePin {
     Crate {
         version: String,
     },
+    Image {
+        url: String,
+        sha256: String,
+    },
 }
 
 impl SourcePin {
@@ -58,6 +64,9 @@ impl SourcePin {
                 ]
             }
             Self::Crate { .. } => vec![("KIND", "crate")],
+            Self::Image { url, sha256 } => {
+                vec![("KIND", "image"), ("SOURCE", url), ("SHA256", sha256)]
+            }
         }
     }
 }
@@ -149,6 +158,7 @@ mod tests {
             argv: vec![shell.to_string()],
             parse: vec!["-n".to_string()],
             shipped: true,
+            vm: false,
             dialect: Some(shell.to_string()),
             source: SourcePin::Tarball {
                 url: "u".to_string(),
@@ -186,15 +196,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("validity-matrix-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("matrix.toml");
+        let mut guest = cell("netbsd-sh", "11.0");
+        guest.vm = true;
         let mut m = Matrix {
-            cell: vec![cell("dash", "0.5.12"), cell("bash", "5.3")],
+            cell: vec![cell("dash", "0.5.12"), cell("bash", "5.3"), guest],
         };
         m.sort();
         save_to(&path, &m).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
         let back = load_from(&path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(back.cell[0].shell, "bash");
         assert_eq!(back.cell[1].source, m.cell[1].source);
+        assert_eq!(text.matches("vm = true").count(), 1);
+        assert!(back.cell[2].vm);
+        assert!(!back.cell[0].vm);
         assert!(
             load_from(Path::new("/nonexistent/matrix.toml"))
                 .unwrap()

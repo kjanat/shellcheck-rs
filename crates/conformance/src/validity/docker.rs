@@ -1,6 +1,7 @@
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::matrix::{self, Cell};
@@ -161,51 +162,80 @@ pub struct Run {
 
 pub struct Container {
     id: String,
+    vm: bool,
 }
 
+const KVM: &str = "/dev/kvm";
+
 impl Container {
-    pub fn start(reference: &str) -> Result<Self, String> {
-        let out = Command::new("docker")
-            .args([
-                "run",
-                "--detach",
-                "--rm",
-                "--network",
-                "none",
-                "--read-only",
+    pub fn start(cell: &Cell, reference: &str) -> Result<Self, String> {
+        let mut cmd = Command::new("docker");
+        cmd.args([
+            "run",
+            "--detach",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--cpus",
+            "1",
+            "--user",
+            "65534:65534",
+            "--env",
+            "LC_ALL=C",
+            "--env",
+            "TZ=UTC",
+            "--env",
+            "HOME=/tmp",
+        ]);
+        if cell.vm {
+            cmd.args([
+                "--tmpfs",
+                "/tmp:size=1g,exec",
+                "--pids-limit",
+                "128",
+                "--memory",
+                "1g",
+            ]);
+            if Path::new(KVM).exists() {
+                cmd.args(["--device", KVM]);
+            }
+            cmd.args([reference, "vmboot"]);
+        } else {
+            cmd.args([
                 "--tmpfs",
                 "/tmp:size=16m,exec",
-                "--cap-drop",
-                "ALL",
                 "--pids-limit",
                 "64",
                 "--memory",
                 "256m",
-                "--cpus",
-                "1",
-                "--user",
-                "65534:65534",
-                "--env",
-                "LC_ALL=C",
-                "--env",
-                "TZ=UTC",
-                "--env",
-                "HOME=/tmp",
-                reference,
-                "sleep",
-                "infinity",
-            ])
-            .output()
-            .map_err(|e| format!("docker: {e}"))?;
+            ]);
+            cmd.args([reference, "sleep", "infinity"]);
+        }
+        let out = cmd.output().map_err(|e| format!("docker: {e}"))?;
         if !out.status.success() {
             return Err(format!(
                 "{reference}: container did not start: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        Ok(Self {
+        let container = Self {
             id: String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        })
+            vm: cell.vm,
+        };
+        if cell.vm
+            && let Err(e) = container.plain(&["true"])
+        {
+            container.stop();
+            return Err(format!("{reference}: guest did not come up: {e}"));
+        }
+        Ok(container)
+    }
+
+    const fn prefix(&self) -> &'static [&'static str] {
+        if self.vm { &["vmsh"] } else { &[] }
     }
 
     pub fn mkdir(&self, dir: &str) -> Result<(), String> {
@@ -217,25 +247,31 @@ impl Container {
     }
 
     fn plain(&self, argv: &[&str]) -> Result<(), String> {
-        let status = Command::new("docker")
+        let out = Command::new("docker")
             .args(["exec", &self.id])
+            .args(self.prefix())
             .args(argv)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .output()
             .map_err(|e| format!("docker: {e}"))?;
-        if status.success() {
+        if out.status.success() {
             Ok(())
         } else {
-            Err(format!("container {}: {} failed", self.id, argv.join(" ")))
+            Err(format!(
+                "container {}: {} failed: {}",
+                self.id,
+                argv.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
         }
     }
 
     pub fn exec(&self, dir: &str, argv: &[String], stdin: &str) -> Result<Run, String> {
+        let workdir = if self.vm { "/tmp" } else { dir };
         let mut child = Command::new("docker")
-            .args(["exec", "--interactive", "--workdir", dir, "--env"])
+            .args(["exec", "--interactive", "--workdir", workdir, "--env"])
             .arg(format!("TMPDIR={dir}"))
             .args([&self.id, "timeout", TIMEOUT_SECONDS])
+            .args(self.prefix())
             .args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -269,7 +305,7 @@ impl Container {
 #[cfg(test)]
 mod tests {
     use super::super::matrix::SourcePin;
-    use super::{Cell, build_command, in_actions, pick, write_step_output};
+    use super::{Cell, Container, build_command, in_actions, pick, write_step_output};
 
     const PINNED: &str = "ghcr.io/x/shell-bash@sha256:abc";
     const TAG: &str = "ghcr.io/x/shell-bash:5.3";
@@ -285,6 +321,7 @@ mod tests {
             argv: vec!["bash".to_string()],
             parse: vec!["-n".to_string()],
             shipped: true,
+            vm: false,
             dialect: Some("bash".to_string()),
             source: SourcePin::Tarball {
                 url: "u".to_string(),
@@ -298,6 +335,20 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_guest_container_routes_every_command_through_vmsh() {
+        let guest = Container {
+            id: "c".to_string(),
+            vm: true,
+        };
+        let native = Container {
+            id: "c".to_string(),
+            vm: false,
+        };
+        assert_eq!(guest.prefix(), ["vmsh"]);
+        assert_eq!(native.prefix(), [] as [&str; 0]);
     }
 
     #[test]

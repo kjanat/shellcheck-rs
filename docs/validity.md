@@ -91,14 +91,16 @@ sha256 = "…"
 `shipped` says whether the port has a `--shell` value for this cell. `dialect`
 names the port shell the cell stands in for when checking the snippet. An
 unshipped cell with no stand-in leaves `dialect` out and skips the port
-assertions.
+assertions. `vm = true` marks a cell whose shell runs inside a guest
+operating system under QEMU; its source is `kind = "image"`, a disk image
+URL with its SHA-256.
 
 Floor cells, all `shipped = true`: bash 3.2.57 4.0 4.2.53 4.4.18 5.0 5.1.16
 5.2.37 5.3, dash 0.5.8 to 0.5.13, ksh93/ksh 1.0.0 1.0.4 1.0.8 1.0.10,
 busybox 1.30.1 to 1.37.0.
 
 Unshipped cells: zsh native and emulate-sh, mksh, oksh, loksh, yash, posh,
-osh, brush, tcsh.
+osh, brush, bosh, tcsh, FreeBSD sh 14.5 and 15.1, NetBSD sh 10.2 and 11.0.
 
 tcsh is the default root shell on TrueNAS CORE and FreeBSD. Its grammar is
 unrelated to sh, so every POSIX spec records `unparsable` there. The cells
@@ -106,9 +108,26 @@ exist to record what a TrueNAS user running a script under the wrong shell
 sees, and to hold csh specs once the port has a csh parser. TrueNAS SCALE
 ships zsh for the admin account; the zsh cells cover it.
 
-FreeBSD sh, NetBSD sh and bosh have no Dockerfile yet. Their sources are
-BSD and schilytools trees that do not build on a Linux base without their
-own make and libc shims.
+bosh builds from the schilytools tree at a release tag: `psmake/MAKE-all`
+bootstraps smake, then `inc`, the five libraries and `sh` build in order.
+
+FreeBSD sh and NetBSD sh run as `vm` cells. Linux cannot execute their
+binaries, and no port of either shell builds against glibc.
+
+The FreeBSD image is the release `BASIC-CLOUDINIT` UFS qcow2. The Dockerfile
+recompresses it, generates an SSH key pair and writes a NoCloud seed ISO
+whose user-data creates the user `validity` with `/bin/sh` and the public
+key. `vmboot` attaches the seed and sets the SMBIOS serial `ds=nocloud`;
+cloud-init provisions the user on every boot of the throwaway overlay.
+
+The NetBSD image is the release amd64 live image. NetBSD has no cloud-init,
+so the Dockerfile provisions the disk once at build time: `provision.exp`
+boots it under QEMU with the SeaBIOS console redirected to the serial port
+(`etc/sercon-port`), picks "Drop to boot prompt", runs `consdev com0` and
+`boot`, logs in as root on the console, installs the public key, enables
+`dhcpcd` and `sshd` with `PermitRootLogin prohibit-password`, generates the
+host keys and powers off. The provisioned disk is recompressed into the
+image. `docker build` has no KVM, so this step runs under TCG.
 
 ## Specs
 
@@ -204,6 +223,17 @@ cell's tag. A cell with neither is `missing` and the run continues.
 
 Parsing happens with the shell's `-n` first where the shell has one. For
 `emulate-sh` cells the parse step runs the same argv with `-n` appended.
+
+A `vm` cell starts `vmboot` instead of `sleep infinity`, with `--memory 1g`,
+`--pids-limit 128`, a 1 GB `/tmp` and `--device /dev/kvm` when the host has
+it. `vmboot` runs `qemu-system-x86_64` with KVM, or TCG without it, on the
+disk image under `/vm` with a throwaway snapshot overlay, no display, no
+serial, and user-mode networking that forwards container port 2222 to guest
+port 22. Every exec, including `mkdir` and `rm`, goes through `vmsh`, which
+quotes the argv, exports `TMPDIR` in the guest, changes into it and runs the
+command over SSH with the key under `/vm`. `vmsh` retries while the guest
+boots, up to 300 s; the runner calls `vmsh true` once before the first spec.
+The guest has no network beyond the SSH forward.
 
 ## Images
 
