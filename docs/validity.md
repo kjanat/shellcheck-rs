@@ -207,14 +207,26 @@ Parsing happens with the shell's `-n` first where the shell has one. For
 
 ## Images
 
-One Dockerfile per shell under `docker/shells/`. `cargo validity build` passes
-the cell's base digest, version and source pin as build arguments and labels
-the image with the repository URL, which links the GHCR package to this
-repository and gives the workflow token write access. `shells.yml` pushes
-`ghcr.io/kjanat/shellcheck-rs/shell-<shell>:<version>` and writes the digest
-back into `matrix.toml` in a pull request. A package the workflow creates is
-private until its visibility is set to public in the package settings; pulls
-from outside this repository need that.
+One Dockerfile per shell under `docker/shells/`. `cargo validity build` runs
+`docker buildx build` with the cell's base digest, version and source pin as
+build arguments and the OCI labels `source`, `url`, `revision`, `version`,
+`title` and `description`. The `source` label links the GHCR package to this
+repository and gives the workflow token write access.
+
+Publishing happens only in `shells.yml`. `cargo validity build --push`
+refuses to run outside GitHub Actions. The push carries BuildKit provenance
+(`mode=max`) and an SBOM in the image index, and the job signs a build
+provenance attestation for the digest with `actions/attest-build-provenance`
+and stores it in the registry. The image name is
+`ghcr.io/kjanat/shellcheck-rs/shell-<shell>:<version>`; the digest lands in
+`matrix.toml` through the drift pull request. Verify with:
+
+```sh
+gh attestation verify oci://ghcr.io/kjanat/shellcheck-rs/shell-bash:5.3 --owner kjanat
+```
+
+A package the workflow creates is private until its visibility is set to
+public in the package settings; pulls from outside this repository need that.
 
 ## Reproducibility
 

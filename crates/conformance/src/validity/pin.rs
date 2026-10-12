@@ -78,7 +78,7 @@ fn resolve_base(cache: &mut BTreeMap<String, String>, name: &str) -> Result<Stri
     Ok(pinned)
 }
 
-fn manifest_digest(reference: &str) -> Option<String> {
+pub fn manifest_digest(reference: &str) -> Option<String> {
     let out = Command::new("docker")
         .args([
             "buildx",
