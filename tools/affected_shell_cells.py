@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Select validity image cells affected by a pull request.
+"""Plan validity image builds from changed inputs and registry availability.
 
 The selector deliberately works from the checked-in matrix and the matrix at
 the merge base.  This keeps a matrix refresh from accidentally dropping an
 old cell from the build, while the output itself always contains current
-cells (deleted cells therefore disappear naturally).
+cells (deleted cells therefore disappear naturally). Cells without a resolved
+OCI digest are always selected.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ class Cell(TypedDict):
     base: str
     dockerfile: str
     source: object
+    digest: NotRequired[str]
     vm: NotRequired[bool]
 
 
@@ -151,10 +153,14 @@ def build_inputs(cell: Cell) -> dict[str, object]:
 
 
 def affected(
-    base: str, matrix_path: str = DEFAULT_MATRIX, cwd: Path = ROOT
+    base: str | None, matrix_path: str = DEFAULT_MATRIX, cwd: Path = ROOT
 ) -> list[str]:
     current_text = Path(cwd, matrix_path).read_text()
     current = load_matrix(current_text, matrix_path)
+    selected = {cell_id(cell) for cell in current if not cell.get("digest", "").strip()}
+    if base is None:
+        return [cell_id(cell) for cell in current if cell_id(cell) in selected]
+
     ancestor = merge_base(base, cwd)
     old_text, old_exists = show_matrix(ancestor, matrix_path, cwd)
     old = (
@@ -164,7 +170,6 @@ def affected(
     )
     current_by_id = {cell_id(cell): cell for cell in current}
     old_by_id = {cell_id(cell): cell for cell in old}
-    selected: set[str] = set()
     selected.update(
         ident
         for ident, cell in current_by_id.items()
@@ -212,18 +217,7 @@ def affected(
             or path.endswith((".md", ".svg", ".png"))
         ):
             continue
-        elif (
-            path == ".github/workflows/shells.yml"
-            or path.startswith((
-                "crates/conformance/",
-                ".cargo/",
-                "tools/",
-                "scripts/",
-                "Cargo",
-            ))
-            or path in {"rustfmt.toml", "clippy.toml", "build.rs"}
-            or path.endswith((".sh", ".py"))
-        ):
+        elif path == "crates/conformance/src/validity/docker.rs":
             selected.update(current_by_id)
 
     return [cell_id(cell) for cell in current if cell_id(cell) in selected]
@@ -231,12 +225,12 @@ def affected(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    _ = parser.add_argument("--base", required=True, help="merge-base commit SHA")
+    _ = parser.add_argument("--base", help="commit to compare for changed build inputs")
     _ = parser.add_argument(
         "--matrix", default=DEFAULT_MATRIX, help="current matrix path"
     )
     args = parser.parse_args(argv)
-    base = cast(str, args.base)
+    base = cast(str | None, args.base)
     matrix = cast(str, args.matrix)
     try:
         print(json.dumps(affected(base, matrix)))

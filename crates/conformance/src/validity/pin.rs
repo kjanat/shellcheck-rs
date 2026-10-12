@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 use super::matrix::{self, Cell, Matrix, SourcePin};
 use super::sources::{self, Kind, Source};
@@ -10,7 +12,7 @@ pub fn run(refresh: bool) -> Result<(), String> {
     let sources = sources::load()?;
     let previous = matrix::load()?;
     let mut bases: BTreeMap<String, String> = BTreeMap::new();
-    let mut matrix = Matrix::default();
+    let mut plans = Vec::new();
     for (name, source) in &sources.shell {
         let dockerfile = source.image.clone().unwrap_or_else(|| name.clone());
         let file = Path::new(DOCKERFILES).join(&dockerfile).join("Dockerfile");
@@ -24,32 +26,92 @@ pub fn run(refresh: bool) -> Result<(), String> {
                 Some(p) if p.base.starts_with(repo_of(base_name)) => p.base.clone(),
                 _ => resolve_base(&mut bases, base_name)?,
             };
-            let image = format!("{REGISTRY}/shell-{dockerfile}:{version}");
-            let pin = resolve_source(source, version, prev.map(|c| &c.source), refresh)?;
-            let digest = image_digest(&image).unwrap_or_default();
-            matrix.cell.push(Cell {
-                shell: name.clone(),
-                version: version.clone(),
-                image,
-                digest,
+            plans.push(Plan {
+                name,
+                source,
+                version,
+                previous: prev.map(|c| &c.source),
                 base,
                 dockerfile: dockerfile.clone(),
-                argv: source.argv.clone(),
-                parse: source
-                    .parse
-                    .clone()
-                    .unwrap_or_else(|| sources.defaults.parse.clone()),
-                shipped: source.shipped,
-                vm: source.vm,
-                dialect: source.dialect.clone(),
-                source: pin,
             });
-            println!("pinned {name}:{version}");
-            checkpoint(&matrix, &previous)?;
         }
+    }
+
+    let cells = resolve_plans(&plans, &sources.defaults.parse, refresh)?;
+    let mut matrix = Matrix::default();
+    for cell in cells {
+        println!("pinned {}:{}", cell.shell, cell.version);
+        matrix.cell.push(cell);
+        checkpoint(&matrix, &previous)?;
     }
     matrix.sort();
     matrix::save(&matrix)
+}
+
+struct Plan<'a> {
+    name: &'a str,
+    source: &'a Source,
+    version: &'a str,
+    previous: Option<&'a SourcePin>,
+    base: String,
+    dockerfile: String,
+}
+
+fn resolve_plans(
+    plans: &[Plan<'_>],
+    default_parse: &[String],
+    refresh: bool,
+) -> Result<Vec<Cell>, String> {
+    if plans.is_empty() {
+        return Ok(Vec::new());
+    }
+    let workers = plans.len().min(8);
+    let chunk_size = plans.len().div_ceil(workers);
+    thread::scope(|scope| {
+        let handles: Vec<_> = plans
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|plan| resolve_plan(plan, default_parse, refresh))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut cells = Vec::with_capacity(plans.len());
+        for handle in handles {
+            for cell in handle
+                .join()
+                .map_err(|_| "pin worker panicked".to_string())?
+            {
+                cells.push(cell?);
+            }
+        }
+        Ok(cells)
+    })
+}
+
+fn resolve_plan(plan: &Plan<'_>, default_parse: &[String], refresh: bool) -> Result<Cell, String> {
+    let image = format!("{REGISTRY}/shell-{}:{}", plan.dockerfile, plan.version);
+    Ok(Cell {
+        shell: plan.name.to_string(),
+        version: plan.version.to_string(),
+        digest: image_digest(&image).unwrap_or_default(),
+        image,
+        base: plan.base.clone(),
+        dockerfile: plan.dockerfile.clone(),
+        argv: plan.source.argv.clone(),
+        parse: plan
+            .source
+            .parse
+            .clone()
+            .unwrap_or_else(|| default_parse.to_vec()),
+        shipped: plan.source.shipped,
+        vm: plan.source.vm,
+        dialect: plan.source.dialect.clone(),
+        source: resolve_source(plan.source, plan.version, plan.previous, refresh)?,
+    })
 }
 
 fn checkpoint(done: &Matrix, previous: &Matrix) -> Result<(), String> {
@@ -168,7 +230,9 @@ fn resolve_source(
 }
 
 fn sha256_of_url(url: &str) -> Result<String, String> {
-    let file = std::env::temp_dir().join(format!("validity-pin-{}", std::process::id()));
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let file = std::env::temp_dir().join(format!("validity-pin-{}-{sequence}", std::process::id()));
     let status = Command::new("curl")
         .args([
             "--silent",

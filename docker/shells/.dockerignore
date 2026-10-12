@@ -1,0 +1,7 @@
+**
+!fetch.sh
+!*/
+!*/Dockerfile
+!netbsd-sh/provision.exp
+!vm/vmboot
+!vm/vmsh

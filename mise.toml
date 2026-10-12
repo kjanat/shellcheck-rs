@@ -11,14 +11,16 @@
 min_version = "2026.10.7"
 
 [tools]
-dprint         = "latest"                                          # formatter
+dprint         = "latest"                                           # formatter
 go             = { prefix = "1.27" }
 node           = { prefix = "26" }
-python         = "latest"                                          # conformance harness (rust/harness/*.py)
-tombi          = { prefix = "1.8" }                                # Exact version avoids release-age range resolution failures.
+python         = "latest"                                           # conformance harness (rust/harness/*.py)
+tombi          = { prefix = "1.8" }                                 # Exact version avoids release-age range resolution failures.
 uv             = { prefix = "0.13" }
 cargo-binstall = { prefix = "1.23" }
-cargo-mutants  = { prefix = "27", ddepends = ["cargo-binstall"] }
+cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
+droast         = { prefix = "1", depends = ["shellcheck"] }
+shellcheck     = { version = "latest", rename_exe = "shellcheck" }
 
 [tools.rust]
 version    = "latest"
@@ -28,12 +30,17 @@ components = ["rustfmt", "clippy", "rust-src"]
 dprint        = { backend = "github:kjanat/dprint" }
 cargo-mutants = { backend = "cargo:cargo-mutants" }
 tombi         = { backend = "github:tombi-toml/tombi" }
+droast        = { backend = "github:immanuwell/dockerfile-roast" }
+shellcheck    = { backend = "github:kjanat/shellcheck-rs" }
 
 [settings]
 # Backend plugins are experimental, so they must be enabled explicitly.
 experimental                        = true
+minimum_release_age                 = "0s"
 idiomatic_version_file_enable_tools = ["python"]
-python.uv_venv_auto                 = "source"
+
+[settings.python]
+uv_venv_auto = "source"
 
 [tasks]
 [tasks.format]

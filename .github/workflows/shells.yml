@@ -3,6 +3,12 @@ name: Shell images and validity
 on:
   schedule: [{ cron: "0 4 * * 1" }]
   workflow_dispatch:
+    inputs:
+      rebuild-all:
+        description: Rebuild every shell image even when its OCI image exists
+        required: false
+        type: boolean
+        default: false
   push: { branches: [master, "!validity/*"] }
   pull_request:
     branches-ignore: ["validity/*"]
@@ -43,15 +49,24 @@ jobs:
       - name: Pin sources
         run: cargo validity pin
 
-      - name: List cells
+      - name: Plan image builds
         id: cells
         env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PLAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          REBUILD_ALL: ${{ inputs.rebuild-all || false }}
         run: |
-          if [[ -n "${PR_BASE}" ]]; then
-            cells="$(python3 tools/affected_shell_cells.py --base "${PR_BASE}")"
-          else
+          if [[ "${REBUILD_ALL}" == "true" ]]; then
             cells="$(cargo validity cells)"
+          elif [[ -n "${PLAN_BASE}" && ! "${PLAN_BASE}" =~ ^0+$ ]]; then
+            if git cat-file -e "${PLAN_BASE}^{commit}" 2>/dev/null ||
+              git fetch --no-tags origin "${PLAN_BASE}"; then
+              cells="$(python3 tools/affected_shell_cells.py --base "${PLAN_BASE}")"
+            else
+              echo "::warning::Comparison commit ${PLAN_BASE} is unavailable; rebuilding all shell cells."
+              cells="$(cargo validity cells)"
+            fi
+          else
+            cells="$(python3 tools/affected_shell_cells.py)"
           fi
           echo "cells=${cells}" >> "${GITHUB_OUTPUT}"
           echo "Selected shell cells: ${cells}"
@@ -135,7 +150,12 @@ jobs:
   run:
     name: Run the matrix
     needs: [pin, build]
-    if: github.event_name != 'pull_request'
+    if: >-
+      ${{
+        always() && github.event_name != 'pull_request' &&
+        needs.pin.result == 'success' &&
+        (needs.build.result == 'success' || needs.build.result == 'skipped')
+      }}
     runs-on: ubuntu-latest
     concurrency:
       group: "${{ github.workflow }}-matrix"
@@ -158,9 +178,8 @@ jobs:
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
 
       - name: Open /dev/kvm to every user
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
+        run: echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules;
+          sudo udevadm control --reload-rules;
           sudo udevadm trigger --name-match=kvm
 
       - name: Resolve image digests
@@ -169,15 +188,52 @@ jobs:
       - name: Record outcomes
         run: cargo validity --record
 
-      - name: Open drift pull request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+      - name: Record validity drift
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DRIFT_BRANCH: validity/drift
+          PR_TITLE: "🧪 Record shell validity drift"
         with:
-          branch: validity/drift
-          title: Record validity outcomes
-          commit-message: Record validity outcomes
-          body: |
-            `cargo validity --record` on master changed the recorded matrix, outcomes or report. Review the rows that moved.
-          add-paths: |
-            validity/matrix.toml
-            validity/outcomes.toml
-            validity/REPORT.md
+          github-token: ${{ github.token }}
+          retries: 3
+          script: |
+            const paths = ['validity/matrix.toml', 'validity/outcomes.toml', 'validity/REPORT.md'];
+            const changed = (await exec.getExecOutput('git', ['diff', '--name-only', '--', ...paths], { silent: true })).stdout.trim().split('\n').filter(Boolean);
+            if (!changed.length) return core.info('No validity drift.');
+
+            const { owner, repo } = context.repo;
+            const branch = process.env.DRIFT_BRANCH;
+            const title = process.env.PR_TITLE;
+            const stat = (await exec.getExecOutput('git', ['diff', '--stat', '--', ...paths], { silent: true })).stdout.trim();
+            const meaning = {
+              'validity/matrix.toml': '**Image matrix:** resolved OCI digests or pinned build inputs changed.',
+              'validity/outcomes.toml': '**Observed behavior:** at least one diagnostic/shell outcome changed.',
+              'validity/REPORT.md': '**Rendered report:** the human-readable validity matrix was regenerated.',
+            };
+            const root = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`;
+            const body = [
+              '## 🧪 Shell validity drift', '',
+              `The full shell fleet completed for [${context.sha.slice(0, 12)}](${root}/commit/${context.sha}) in [workflow run ${process.env.GITHUB_RUN_ID}](${root}/actions/runs/${process.env.GITHUB_RUN_ID}).`, '',
+              '### What changed', ...changed.map(path => `- ${meaning[path]}`), '',
+              '### Diff footprint', '', '```text', stat, '```', '',
+              `Start with [the rendered report](${root}/blob/${branch}/validity/REPORT.md), then inspect the exact rows in the files tab.`,
+            ].join('\n');
+
+            for (const args of [
+              ['config', 'user.name', 'github-actions[bot]'],
+              ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],
+              ['switch', '--create', branch], ['add', '--', ...paths], ['commit', '--message', title],
+            ]) await exec.exec('git', args);
+            const remote = (await exec.getExecOutput('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { silent: true })).stdout.trim().split(/\s+/)[0];
+            const lease = remote ? [`--force-with-lease=refs/heads/${branch}:${remote}`] : [];
+            await exec.exec('git', ['push', ...lease, 'origin', `HEAD:refs/heads/${branch}`]);
+
+            const common = { owner, repo };
+            const [existing] = (await github.rest.pulls.list({ ...common, head: `${owner}:${branch}`, state: 'open', per_page: 1 })).data;
+            const pull = existing
+              ? (await github.rest.pulls.update({ ...common, pull_number: existing.number, title, body })).data
+              : (await github.rest.pulls.create({ ...common, base: 'master', head: branch, title, body })).data;
+            await Promise.all([
+              github.rest.issues.addAssignees({ ...common, issue_number: pull.number, assignees: [owner] }),
+              github.rest.issues.addLabels({ ...common, issue_number: pull.number, labels: ['conformance'] }),
+            ]);

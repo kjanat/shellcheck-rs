@@ -1,0 +1,23 @@
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/refs/heads/main/schemas/droast.schema.json
+# droast.toml - optional project and organization policy
+# https://github.com/immanuwell/dockerfile-roast
+
+# Inherit one or more local policy files. Relative paths start here.
+# extends = [".config/company-droast.toml"]
+
+# Built-in presets: minimal | security | performance | production | strict
+# Explicit settings below override preset defaults.
+preset = "production"
+
+# Rules and severity
+skip            = ["DF005"]
+min-severity    = "info"
+fail-on         = "error"                       # info | warning | error
+categories      = ["security", "supply-chain"]
+skip-categories = ["maintainability"]
+
+# Optional ShellCheck bridge. `auto` runs an installed `shellcheck` when it is
+# available; `required` turns a missing or failed executable into SC0000.
+[shellcheck]
+mode    = "required"  # off | auto | required
+exclude = []

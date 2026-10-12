@@ -13,6 +13,7 @@ MATRIX: Final = """\
 shell = "bash"
 version = "5"
 image = "shell-bash:5"
+digest = "sha256:bash"
 base = "debian@sha256:a"
 dockerfile = "bash"
 source = { kind = "tarball" }
@@ -21,6 +22,7 @@ source = { kind = "tarball" }
 shell = "zsh"
 version = "5.9"
 image = "shell-zsh:5.9"
+digest = "sha256:zsh"
 base = "debian@sha256:a"
 dockerfile = "zsh"
 source = { kind = "tarball" }
@@ -29,6 +31,7 @@ source = { kind = "tarball" }
 shell = "zsh-sh"
 version = "5.9"
 image = "shell-zsh-sh:5.9"
+digest = "sha256:zsh-sh"
 base = "debian@sha256:a"
 dockerfile = "zsh"
 source = { kind = "tarball" }
@@ -37,6 +40,7 @@ source = { kind = "tarball" }
 shell = "netbsd-sh"
 version = "11"
 image = "shell-netbsd-sh:11"
+digest = "sha256:netbsd"
 base = "debian@sha256:a"
 dockerfile = "netbsd-sh"
 vm = true
@@ -132,9 +136,21 @@ class SelectorTests(unittest.TestCase):
             ["bash:5", "zsh:5.9", "zsh-sh:5.9", "netbsd-sh:11"],
         )
 
-    def test_cargo_config_selects_every_cell(self):
+    def test_tooling_config_does_not_rebuild_images(self):
         self.change(".cargo/config.toml", "[build]\ntarget-dir = 'target'\n")
+        self.assertEqual(affected(self.base, cwd=self.root), [])
+
+    def test_image_builder_change_selects_every_cell(self):
+        self.change("crates/conformance/src/validity/docker.rs", "changed\n")
         self.assertEqual(len(affected(self.base, cwd=self.root)), 4)
+
+    def test_workflow_change_does_not_rebuild_images(self):
+        self.change(".github/workflows/shells.yml", "changed\n")
+        self.assertEqual(affected(self.base, cwd=self.root), [])
+
+    def test_planner_change_does_not_rebuild_images(self):
+        self.change("tools/affected_shell_cells.py", "changed\n")
+        self.assertEqual(affected(self.base, cwd=self.root), [])
 
     def test_docs_do_not_build_images(self):
         self.change("docs/validity.md", "changed\n")
@@ -148,13 +164,14 @@ class SelectorTests(unittest.TestCase):
         self.assertNotIn("netbsd-sh:11", affected(self.base, cwd=self.root))
 
     def test_digest_only_change_does_not_build(self):
-        changed = MATRIX.replace(
-            'source = { kind = "tarball" }',
-            'digest = "sha256:new"\nsource = { kind = "tarball" }',
-            1,
-        )
+        changed = MATRIX.replace('digest = "sha256:bash"', 'digest = "sha256:new"')
         self.change("validity/matrix.toml", changed)
         self.assertEqual(affected(self.base, cwd=self.root), [])
+
+    def test_missing_registry_digest_is_always_selected(self):
+        changed = MATRIX.replace('digest = "sha256:bash"\n', "", 1)
+        (self.root / "validity/matrix.toml").write_text(changed)
+        self.assertEqual(affected(None, cwd=self.root), ["bash:5"])
 
     def test_pin_only_current_matrix_change_is_detected(self):
         changed = MATRIX.replace(
