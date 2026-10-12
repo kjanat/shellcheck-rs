@@ -8,7 +8,13 @@ rshellcheck script.sh
 rshellcheck --enable=clarify-parse-errors broken.sh
 ```
 
-SC9001 and SC9002 codes are local to this project, not upstream ShellCheck codes.
+Codes SC9000 to SC9999 belong to this project. They are diagnostics: integer
+codes in every output format, filtered by `--include`, `--exclude`, severity
+and `disable=` like upstream codes. Codes with the `RSC` prefix report on the
+run itself. They never appear in a comment or in a json, json1, gcc or diff
+document and no filter removes them. The tty footer links SC9xxx codes to this
+page.
+
 `clarify-parse-errors` is a presentation option selected through `--enable`, the
 library's `optional_checks`, or the rc file; it does not change what parses.
 
@@ -53,6 +59,19 @@ Functions, subshells, and command substitutions are treated separately. Arbitrar
 helper names, dynamically assembled actions, and resources without any cleanup
 trap remain outside its coverage. Suppress SC9002 when signal-only cleanup is
 intentional.
+
+## RSC1001
+
+An invariant of the control flow graph or of its dataflow analysis did not hold.
+Upstream dies with `ShellCheck internal error, please report`. The port checks
+the file without the dataflow checks, prints its comments, then reports
+
+```
+file: RSC1001: ShellCheck internal error, please report: <detail>. The checks that need dataflow analysis were skipped.
+```
+
+on stderr, or on stdout for checkstyle. The run exits 2, and `--quiet` exits 1.
+DIVERGENCES.md Z7 holds the evidence.
 
 ## Clearer parser errors
 

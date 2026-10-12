@@ -13,6 +13,8 @@ use super::ColorFunc;
 use super::fixer::{apply_fix, fix_mconcat, lines as hs_lines, map_positions, unlines};
 
 const WIKI_LINK: &str = "https://www.shellcheck.net/wiki/";
+const DOCS_LINK: &str = "https://github.com/kjanat/shellcheck-rs/blob/master/docs/diagnostics.md";
+const PORT_CODES: std::ops::RangeInclusive<i64> = 9000..=9999;
 
 /// Codes considered "uninteresting" (generic parser errors), downranked in the
 /// wiki summary.
@@ -196,11 +198,8 @@ pub fn render_wiki(entries: &[WikiEntry], wiki_link_count: usize, out: &mut Stri
     }
     out.push_str("For more information:\n");
     for e in issues {
-        let link = if matches!(e.code, 9001 | 9002) {
-            format!(
-                "https://github.com/kjanat/shellcheck-rs/blob/rust-port/docs/diagnostics.md#sc{}",
-                e.code
-            )
+        let link = if PORT_CODES.contains(&e.code) {
+            format!("{DOCS_LINK}#sc{}", e.code)
         } else {
             format!("{WIKI_LINK}SC{}", e.code)
         };

@@ -210,3 +210,27 @@ fn diff_no_trailing_newline_marker() {
          \n"
     );
 }
+
+#[test]
+fn tty_links_port_codes_to_the_docs() {
+    let color = shellcheck_cli::formatter::tty_color_func(false);
+    let comments = vec![
+        comment(Severity::WarningC, 9001, "Interpreter path.", 6, 12, None),
+        comment(Severity::WarningC, 9999, "Future port code.", 6, 12, None),
+        comment(Severity::WarningC, 2086, "Double quote.", 6, 12, None),
+    ];
+    let mut wiki: Vec<tty::WikiEntry> = Vec::new();
+    let mut out = String::new();
+    tty::render_file(&color, "fix.sh", CONTENTS, &comments, &mut wiki, &mut out);
+    out.clear();
+    tty::render_wiki(&wiki, 3, &mut out);
+    assert_eq!(
+        out,
+        concat!(
+            "For more information:\n",
+            "  https://www.shellcheck.net/wiki/SC2086 -- Double quote.\n",
+            "  https://github.com/kjanat/shellcheck-rs/blob/master/docs/diagnostics.md#sc9001 -- Interpreter path.\n",
+            "  https://github.com/kjanat/shellcheck-rs/blob/master/docs/diagnostics.md#sc9999 -- Future port code.\n",
+        )
+    );
+}
