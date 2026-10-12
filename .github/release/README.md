@@ -144,3 +144,27 @@ boundary. Authenticode signing and Apple notarization are not provided.
 
 See [GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
 for the signing and verification model.
+
+## JavaScript and Python distributions
+
+Each release also includes three separate installable assets:
+
+- `kjanat-rshellcheck-wasm-VERSION.tgz` — install with `npm install ./FILE.tgz`.
+- `rshellcheck_wasm-VERSION-py3-none-any.whl` — install with `pip install ./FILE.whl`.
+- `rshellcheck_wasm-VERSION.tar.gz` — Python source distribution; installation
+  builds a wheel without requiring Rust, because the WASM module is included.
+
+All three contain the same core WASM binary and the project license. Installed
+JavaScript callers can use `await createChecker()` and Python callers can use
+`Checker()` without supplying WASM bytes. Passing explicit bytes remains supported.
+Browsers fetch the WASM next to `shellcheck.mjs`; bundlers must preserve that asset,
+which is also exported as `@kjanat/rshellcheck-wasm/wasm`.
+
+CI builds the WASM with the release Rust toolchain, builds the npm tarball and both
+Python formats, then installs each into a separate temporary environment and
+checks clean and diagnostic-producing scripts. Package completeness, source SHA,
+archive hashes, bundled WASM equality and license contents gate assembly.
+`binding-packages.json` records their source identity and hashes. Packages and the
+manifest are covered by release checksums and tagged-release provenance attestations.
+The manual/PR workflow exposes separate npm, wheel and sdist artifacts as well.
+This does not publish packages to npm or PyPI, and does not change older releases.

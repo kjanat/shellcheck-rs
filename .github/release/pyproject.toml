@@ -19,5 +19,5 @@ build-backend = "setuptools.build_meta"
 pyright               = { include = ["."], extends = "../../pyproject.toml" }
 # Match the Python version used by the release workflow and editor tooling.
 ruff                  = { extend = "../../pyproject.toml", target-version = "py314" }
-setuptools            = { py-modules = ["release", "supply_chain"] }
+setuptools            = { py-modules = ["release", "supply_chain", "binding_packages"] }
 ty.environment.python = "../../.venv"

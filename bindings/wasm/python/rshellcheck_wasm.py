@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from importlib.resources import files
 from threading import Lock
 from typing import cast, final
 
@@ -28,7 +29,13 @@ def _call_u32(func: wasmtime.Func, store: wasmtime.Store, *args: int) -> int:
 
 @final
 class Checker:
-    def __init__(self, wasm: bytes, *, fuel: int = 1_000_000_000):
+    def __init__(self, wasm: bytes | None = None, *, fuel: int = 1_000_000_000):
+        if wasm is None:
+            wasm = (
+                files("rshellcheck_wasm_data")
+                .joinpath("shellcheck_wasm.wasm")
+                .read_bytes()
+            )
         config = wasmtime.Config()
         config.consume_fuel = True
         self._engine = wasmtime.Engine(config)

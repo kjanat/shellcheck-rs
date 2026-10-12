@@ -1,5 +1,16 @@
 /** Load the same import-free module used by the Go and Python bindings. */
 export async function createChecker(bytes) {
+	if (bytes === undefined) {
+		const url = new URL('./shellcheck_wasm.wasm', import.meta.url);
+		if (url.protocol === 'file:' && typeof process !== 'undefined' && process.versions?.node) {
+			const { readFile } = await import('node:fs/promises');
+			bytes = await readFile(url);
+		} else {
+			const response = await fetch(url);
+			if (!response.ok) throw new Error(`Failed to load ShellCheck WASM: ${response.status}`);
+			bytes = await response.arrayBuffer();
+		}
+	}
 	const module = await WebAssembly.compile(bytes);
 	if (WebAssembly.Module.imports(module).length) throw new Error('Unexpected WASM imports');
 	const instance = await WebAssembly.instantiate(module, {});
