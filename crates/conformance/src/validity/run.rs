@@ -16,11 +16,10 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let mut missing: Vec<String> = Vec::new();
     let mut ran = 0usize;
     for cell in matrix.cells(&args.cell) {
-        let reference = cell.reference();
-        if !docker::available(&reference) {
+        let Some(reference) = docker::locate(cell) else {
             missing.push(cell.id());
             continue;
-        }
+        };
         ran += 1;
         let container = Container::start(&reference)?;
         for (n, s) in specs.iter().enumerate() {

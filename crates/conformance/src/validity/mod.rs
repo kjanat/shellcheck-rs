@@ -18,6 +18,7 @@ pub const OUTCOMES: &str = "validity/outcomes.toml";
 pub const REPORT: &str = "validity/REPORT.md";
 pub const DOCKERFILES: &str = "docker/shells";
 pub const REGISTRY: &str = "ghcr.io/kjanat/shellcheck-rs";
+pub const SOURCE_URL: &str = "https://github.com/kjanat/shellcheck-rs";
 
 /// Which part of the matrix to run.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum, Default)]

@@ -176,29 +176,34 @@ docker exec -i <id> <argv...> < script
 ```
 
 Per-run limit 5 s. Scripts arrive on stdin. Nothing is mounted. The runner
-pulls images from GHCR by digest recorded in `matrix.toml`; a missing image
-marks the cell `missing` and the run continues.
+takes the image at the digest recorded in `matrix.toml`, locally or pulled
+from GHCR. When the digest is unreachable it takes a local build of the
+cell's tag. A cell with neither is `missing` and the run continues.
 
 Parsing happens with the shell's `-n` first where the shell has one. For
 `emulate-sh` cells the parse step runs the same argv with `-n` appended.
 
 ## Images
 
-One Dockerfile per shell under `docker/shells/`, parameterised by `VERSION`,
-building from the upstream release tarball with its checksum pinned in the
-Dockerfile. `shells.yml` builds the matrix in `matrix.toml`, pushes
-`ghcr.io/kjanat/shellcheck-rs/shell-<shell>:<version>`, and writes the digest
-back into `matrix.toml` in a pull request. Images rebuild only when their
-Dockerfile or version changes.
+One Dockerfile per shell under `docker/shells/`. `cargo validity build` passes
+the cell's base digest, version and source pin as build arguments and labels
+the image with the repository URL, which links the GHCR package to this
+repository and gives the workflow token write access. `shells.yml` pushes
+`ghcr.io/kjanat/shellcheck-rs/shell-<shell>:<version>` and writes the digest
+back into `matrix.toml` in a pull request. A package the workflow creates is
+private until its visibility is set to public in the package settings; pulls
+from outside this repository need that.
 
 ## Reproducibility
 
 Every input is pinned in the tree and every step is one command.
 
 - `matrix.toml` records each image by digest. The runner pulls by digest and
-  refuses a tag.
-- Each Dockerfile pins the source tarball URL and its SHA-256. A rebuild from
-  the same Dockerfile yields the same interpreter.
+  falls back to a local build of the same cell only when the digest is
+  unreachable. `cargo validity pin` clears the digest of a cell whose image
+  the registry no longer has.
+- `matrix.toml` pins each source tarball URL with its SHA-256, or each git tag
+  with its commit. A rebuild from the same pin yields the same interpreter.
 - `outcomes.toml` and `REPORT.md` are committed. A fresh checkout plus Docker
   reproduces them with `cargo validity --record` and `git diff` shows drift.
 - The runner uses no host shell. A host without Docker fails the run with one
@@ -219,8 +224,9 @@ Automation:
   pull requests. A pull request opened that way starts no workflow run of
   its own, and needs none: the job that opens it is the run that produced
   the outcomes.
-- `rust.yml` runs `cargo validity --cell bash:5.3 --cell dash:0.5.12` on
-  every push as a smoke test, pulling the two images by digest.
+- `rust.yml` builds the bash 5.3 and dash 0.5.13 cells and runs
+  `cargo validity --cell bash:5.3 --cell dash:0.5.13` on every push as a
+  smoke test. It needs no registry access.
 - Adding a shell version is one `[[cell]]` entry. The next `shells.yml` run
   builds it, records every spec against it, and opens the pull request.
 - Adding a spec is one TOML file. Same flow.

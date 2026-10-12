@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::matrix::{self, Cell};
-use super::{DOCKERFILES, ValidityArgs};
+use super::{DOCKERFILES, SOURCE_URL, ValidityArgs};
 
 pub const TIMEOUT_SECONDS: &str = "5";
 const TIMEOUT_STATUS: i32 = 124;
@@ -28,6 +28,8 @@ fn build(cell: &Cell) -> Result<(), String> {
     cmd.args(["build", "--file"])
         .arg(format!("{DOCKERFILES}/{}/Dockerfile", cell.dockerfile))
         .args(["--tag", &cell.image])
+        .arg("--label")
+        .arg(format!("org.opencontainers.image.source={SOURCE_URL}"))
         .arg("--build-arg")
         .arg(format!("BASE={}", cell.base))
         .arg("--build-arg")
@@ -80,9 +82,21 @@ fn quiet(args: &[&str]) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-pub fn available(reference: &str) -> bool {
-    quiet(&["image", "inspect", reference])
-        || (reference.contains("@sha256:") && quiet(&["pull", "--quiet", reference]))
+pub fn locate(cell: &Cell) -> Option<String> {
+    pick(&cell.reference(), &cell.image, quiet)
+}
+
+fn pick(pinned: &str, tag: &str, probe: impl Fn(&[&str]) -> bool) -> Option<String> {
+    if probe(&["image", "inspect", pinned]) {
+        return Some(pinned.to_string());
+    }
+    if pinned.contains("@sha256:") && probe(&["pull", "--quiet", pinned]) {
+        return Some(pinned.to_string());
+    }
+    if pinned != tag && probe(&["image", "inspect", tag]) {
+        return Some(tag.to_string());
+    }
+    None
 }
 
 pub struct Run {
@@ -196,5 +210,42 @@ impl Container {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick;
+
+    const PINNED: &str = "ghcr.io/x/shell-bash@sha256:abc";
+    const TAG: &str = "ghcr.io/x/shell-bash:5.3";
+
+    #[test]
+    fn pinned_image_present_locally_wins() {
+        let found = pick(PINNED, TAG, |a| a == ["image", "inspect", PINNED]);
+        assert_eq!(found.as_deref(), Some(PINNED));
+    }
+
+    #[test]
+    fn pinned_image_is_pulled_before_the_tag_is_tried() {
+        let found = pick(PINNED, TAG, |a| a == ["pull", "--quiet", PINNED]);
+        assert_eq!(found.as_deref(), Some(PINNED));
+    }
+
+    #[test]
+    fn local_tag_serves_when_the_digest_is_unreachable() {
+        let found = pick(PINNED, TAG, |a| a == ["image", "inspect", TAG]);
+        assert_eq!(found.as_deref(), Some(TAG));
+    }
+
+    #[test]
+    fn unpinned_cell_never_pulls() {
+        let found = pick(TAG, TAG, |a| a[0] == "pull");
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn nothing_available_is_none() {
+        assert_eq!(pick(PINNED, TAG, |_| false), None);
     }
 }

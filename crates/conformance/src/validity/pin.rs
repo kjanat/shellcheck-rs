@@ -26,8 +26,7 @@ pub fn run(refresh: bool) -> Result<(), String> {
             };
             let image = format!("{REGISTRY}/shell-{dockerfile}:{version}");
             let pin = resolve_source(source, version, prev.map(|c| &c.source), refresh)?;
-            let digest =
-                image_digest(&image).unwrap_or_else(|| prev.map_or_default(|c| c.digest.clone()));
+            let digest = image_digest(&image).unwrap_or_default();
             matrix.cell.push(Cell {
                 shell: name.clone(),
                 version: version.clone(),
