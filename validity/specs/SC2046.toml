@@ -1,0 +1,13 @@
+code  = 2046
+claim = "an unquoted command substitution word-splits"
+
+[snippet]
+script = 'printf "<%s>" $(echo a b); echo'
+
+[fixed]
+script = 'printf "<%s>" "$(echo a b)"; echo'
+
+[[observe]]
+kind    = "stdout"
+snippet = "<a><b>\n"
+fixed   = "<a b>\n"

@@ -1,0 +1,109 @@
+name: Shell images and validity
+
+on:
+  schedule: [{ cron: "0 4 * * 1" }]
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: &PATHS
+      - ".github/workflows/shells.yml"
+      - "docker/shells/**"
+      - "validity/**"
+      - "crates/conformance/**"
+  pull_request: { paths: *PATHS }
+
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
+permissions: { contents: read }
+
+jobs:
+  pin:
+    name: Pin sources
+    runs-on: ubuntu-latest
+    outputs: { cells: "${{ steps.cells.outputs.cells }}" }
+    steps:
+      - name: Checkout repository
+        uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install Rust stable
+        uses: &RUST dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+
+      - name: Pin sources
+        run: cargo validity pin
+
+      - name: List cells
+        id: cells
+        run: |
+          cells="$(cargo validity cells)"
+          echo "cells=${cells}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload matrix
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: matrix, path: validity/matrix.toml }
+
+  build:
+    name: "Build ${{ matrix.cell }}"
+    needs: pin
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    strategy:
+      fail-fast: false
+      matrix: { cell: "${{ fromJSON(needs.pin.outputs.cells) }}" }
+    steps:
+      - name: Checkout repository
+        uses: *CO
+
+      - name: Install Rust stable
+        uses: *RUST
+
+      - name: Download matrix
+        uses: &DL actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: matrix, path: validity }
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+
+      - name: Build image
+        if: github.event_name == 'pull_request'
+        run: cargo validity build --cell "${{ matrix.cell }}"
+
+      - name: Build and push image
+        if: github.event_name != 'pull_request'
+        run: cargo validity build --push --cell "${{ matrix.cell }}"
+
+  run:
+    name: Run the matrix
+    needs: [pin, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions: { contents: write, pull-requests: write, packages: read }
+    steps:
+      - name: Checkout repository
+        uses: *CO
+
+      - name: Install Rust stable
+        uses: *RUST
+
+      - name: Download matrix
+        uses: *DL
+        with: { name: matrix, path: validity }
+
+      - name: Resolve image digests
+        run: cargo validity pin
+
+      - name: Record outcomes
+        run: cargo validity --record
+
+      - name: Open drift pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: validity/drift
+          title: Record validity outcomes
+          commit-message: Record validity outcomes
+          body: |
+            `cargo validity --record` on master changed the recorded matrix, outcomes or report. Review the rows that moved.
+          add-paths: |
+            validity/matrix.toml
+            validity/outcomes.toml
+            validity/REPORT.md

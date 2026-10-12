@@ -1,0 +1,13 @@
+code  = 2086
+claim = "an unquoted expansion word-splits"
+
+[snippet]
+script = 'x="a b"; printf "<%s>" $x; echo'
+
+[fixed]
+script = 'x="a b"; printf "<%s>" "$x"; echo'
+
+[[observe]]
+kind    = "stdout"
+snippet = "<a><b>\n"
+fixed   = "<a b>\n"
