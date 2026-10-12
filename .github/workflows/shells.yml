@@ -3,9 +3,9 @@ name: Shell images and validity
 on:
   schedule: [{ cron: "0 4 * * 1" }]
   workflow_dispatch:
-  push:
-    branches: [master]
+  push: { branches: [master, "!validity/*"] }
   pull_request:
+    branches-ignore: ["validity/*"]
     paths:
       - ".github/workflows/shells.yml"
       - "docker/shells/**"
@@ -25,6 +25,7 @@ permissions: { contents: read }
 jobs:
   pin:
     name: Pin sources
+    if: github.event_name != 'pull_request' || github.head_ref != 'validity/drift'
     runs-on: ubuntu-latest
     outputs: { cells: "${{ steps.cells.outputs.cells }}" }
     steps:
