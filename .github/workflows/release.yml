@@ -12,6 +12,9 @@ on:
       - "Cargo.lock"
       - "pyproject.toml"
       - "uv.lock"
+      - "bindings/wasm/**"
+      - "package.json"
+      - "package-lock.json"
       - "crates/**"
       - "rust/**"
   workflow_dispatch:
@@ -142,9 +145,56 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  bindings:
+    name: Package JavaScript and Python bindings
+    needs: plan
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with: { python-version: "3.14", version: "0.13.0" }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: "26" }
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: ${{ needs.plan.outputs.rust }}
+          targets: wasm32-unknown-unknown
+      - name: Build portable core
+        run: cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
+      - name: Build installable distributions
+        run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages build dist-bindings
+      - name: Install and test every distribution in isolation
+        run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages test dist-bindings
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: binding-npm
+          path: dist-bindings/*.tgz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: binding-python-wheel
+          path: dist-bindings/*.whl
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: binding-python-sdist
+          path: dist-bindings/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: binding-manifest
+          path: dist-bindings/binding-packages.json
+          if-no-files-found: error
+          retention-days: 14
+
   assemble:
     name: Verify complete release payload
-    needs: [plan, check, build]
+    needs: [plan, check, build, bindings]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     env: { LABEL: "${{ needs.plan.outputs.label }}" }
@@ -157,11 +207,18 @@ jobs:
         with: { pattern: "binary-*", path: dist, merge-multiple: true }
       - name: Check every target and add source archive and checksums
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release assemble --label "${LABEL}"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with: { pattern: "binding-*", path: dist, merge-multiple: true }
+      - name: Verify all binding distributions and their source identity
+        run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages verify dist
       - name: Prepare exact released source for SBOM scanning
         run: mkdir sbom-source;
           tar -xzf "dist/rshellcheck-${LABEL}-source.tar.gz" -C sbom-source --strip-components=1
       - name: Generate source dependency SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: rshellcheck
+          SYFT_SOURCE_VERSION: ${{ needs.plan.outputs.label }}
         with:
           path: sbom-source
           format: spdx-json

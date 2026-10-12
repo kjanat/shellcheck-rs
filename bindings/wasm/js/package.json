@@ -4,8 +4,8 @@
 	"private": true,
 	"license": "GPL-3.0-or-later",
 	"type": "module",
-	"exports": { ".": "./shellcheck.mjs", "./worker": "./worker.mjs" },
-	"files": ["shellcheck.mjs", "worker.mjs"],
+	"exports": { ".": "./shellcheck.mjs", "./worker": "./worker.mjs", "./wasm": "./shellcheck_wasm.wasm" },
+	"files": ["shellcheck.mjs", "worker.mjs", "shellcheck_wasm.wasm", "LICENSE", "README.md"],
 	"scripts": {
 		"install:browser": "playwright install chromium",
 		"test": "node test.mjs",

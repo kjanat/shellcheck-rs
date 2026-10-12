@@ -11,7 +11,14 @@ requires      = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool]
-pyright               = { include = ["."], extends = "../../../pyproject.toml" }
 ruff.extend           = "../../../pyproject.toml"
-setuptools            = { py-modules = ["rshellcheck_wasm"] }
 ty.environment.python = "../../../.venv"
+
+[tool.pyright]
+include = ["."]
+extends = "../../../pyproject.toml"
+
+[tool.setuptools]
+py-modules   = ["rshellcheck_wasm"]
+packages     = ["rshellcheck_wasm_data"]
+package-data = { rshellcheck_wasm_data = ["*.wasm"] }

@@ -151,3 +151,16 @@ repeated calls, memory growth, ABI misuse, cancellation and fuel exhaustion.
 Runtime references: [Rust target](https://doc.rust-lang.org/rustc/platform-support/wasm32-unknown-unknown.html),
 [wazero](https://pkg.go.dev/github.com/tetratelabs/wazero),
 [Wasmtime Python](https://bytecodealliance.github.io/wasmtime-py/).
+
+## Install release packages
+
+GitHub releases built with the package-enabled pipeline include an npm tarball,
+a Python wheel and a Python source distribution. Each bundles the core WASM and
+license. Install the downloaded file with `npm install ./PACKAGE.tgz` or
+`pip install ./PACKAGE.whl` (the Python `.tar.gz` also works).
+
+After installation, `await createChecker()` in JavaScript or `Checker()` in Python
+loads the bundled module. Existing calls supplying WASM bytes still work.
+In browsers, serve `shellcheck_wasm.wasm` alongside `shellcheck.mjs`; bundlers can
+resolve the exported `@kjanat/rshellcheck-wasm/wasm` asset. The module-worker protocol
+continues to accept explicit WASM bytes for initialization.
