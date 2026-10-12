@@ -1,0 +1,14 @@
+code  = 3010
+claim = "sh has no [[ ]]; the test is a missing command and the branch is skipped"
+shell = "sh"
+
+[snippet]
+script = "if [[ a = a ]] 2>/dev/null; then echo y; fi"
+
+[fixed]
+script = "if [ a = a ] 2>/dev/null; then echo y; fi"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "y\n"

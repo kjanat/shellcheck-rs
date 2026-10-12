@@ -55,7 +55,8 @@ A check lives in the file matching its upstream neighbours.
 | `DIVERGENCES.md`                       | Open port defects from the last fuzz run, and the fixed ledger.                              |
 | `docs/diagnostics.md`                  | Every SC9xxx code: trigger, message, how to enable.                                          |
 | `docs/validity.md`                     | Validity matrix design: cells, specs, outcomes, gate, images, automation.                    |
-| `validity/`                            | `matrix.toml`, `specs/`, `outcomes.toml`, generated `REPORT.md`.                             |
+| `validity/sources.toml`                | Hand-written: per shell, how to fetch and which versions. `cargo validity pin` resolves it.  |
+| `validity/`                            | Generated `matrix.toml`, `outcomes.toml`, `REPORT.md`; hand-written `specs/SC<code>.toml`.   |
 | `rust/snapshot.txt`                    | Frozen behaviour over `rust/conformance-corpus.json`.                                        |
 | `rust/PERF.md`                         | Benchmark method and numbers.                                                                |
 | `CHANGELOG.md`                         | User-facing release notes.                                                                   |

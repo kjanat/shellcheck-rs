@@ -30,6 +30,7 @@ mod fuzz;
 mod oracle;
 mod shells;
 mod snapshot;
+mod validity;
 
 use std::process::ExitCode;
 
@@ -519,6 +520,8 @@ pub enum Command {
     Snapshot,
     /// Where the port's time goes, phase by phase, against the oracle's.
     Bench,
+    /// Each diagnostic's reproducer and fix, run in real shells per version.
+    Validity,
 }
 
 #[derive(Parser)]
@@ -535,6 +538,10 @@ pub struct Args {
     /// What to run: the property gate, the fuzzer, or a listing of the corpus.
     #[arg(value_enum, env = "CONFORMANCE_CMD", default_value_t)]
     cmd: Command,
+
+    /// Which validity step: run (default), pin, build or cells.
+    #[arg(value_enum, default_value_t)]
+    step: validity::Step,
 
     /// ShellCheck to trust as the oracle: a path, or a name to find on PATH.
     ///
@@ -582,6 +589,10 @@ pub struct Args {
     /// The benchmark's options.
     #[command(flatten)]
     pub bench: BenchArgs,
+
+    /// The validity matrix's options.
+    #[command(flatten)]
+    pub validity: validity::ValidityArgs,
 }
 
 /// The options under the "Fuzzing" heading.
@@ -691,6 +702,7 @@ fn main() -> ExitCode {
         Command::Audit => audit(&args),
         Command::Snapshot => snapshot::run(&args),
         Command::Bench => bench::run(&args),
+        Command::Validity => validity::run(args.step, &args.validity),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::coverage(&src).and_then(|coverage| {

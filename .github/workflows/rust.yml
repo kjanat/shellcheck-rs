@@ -13,6 +13,7 @@ on:
       - "rust/**"
       - "tools/oracle*"
       - "tools/test_oracle.py"
+      - "validity/**"
   pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
@@ -124,3 +125,19 @@ jobs:
       - name: Differential fuzz
         env: { "${{ insert }}": "${{ fromJSON(vars.FUZZ) }}" }
         run: cargo conformance-fuzz
+
+  validity-smoke:
+    name: Validity smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: *CO
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+
+      - name: Build two cells
+        run: cargo validity build --cell bash:5.3 --cell dash:0.5.13
+
+      - name: Run two cells
+        run: cargo validity --cell bash:5.3 --cell dash:0.5.13

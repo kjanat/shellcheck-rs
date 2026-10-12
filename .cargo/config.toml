@@ -20,6 +20,7 @@ rb                   = "run --bin"
 rbr                  = "run --release --bin"
 rshellcheck          = "rbr rshellcheck --"
 shellcheck           = "rbr rshellcheck --"
+validity             = "run --release -q -p conformance -- validity"
 
 [build]
 rustflags = ["-Dwarnings"]

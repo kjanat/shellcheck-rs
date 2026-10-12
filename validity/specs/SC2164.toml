@@ -1,0 +1,18 @@
+code  = 2164
+claim = "the script continues after a failed cd"
+
+[snippet]
+script = 'cd "$TMPDIR/missing" 2>/dev/null; echo after'
+
+[fixed]
+script = 'cd "$TMPDIR/missing" 2>/dev/null || exit 3; echo after'
+
+[[observe]]
+kind    = "stdout"
+snippet = "after\n"
+fixed   = ""
+
+[[observe]]
+kind    = "status"
+snippet = "0"
+fixed   = "3"

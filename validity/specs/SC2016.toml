@@ -1,0 +1,13 @@
+code  = 2016
+claim = "a variable inside single quotes stays literal"
+
+[snippet]
+script = "x=1; echo '$x'"
+
+[fixed]
+script = 'x=1; echo "$x"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "$x\n"
+fixed   = "1\n"
