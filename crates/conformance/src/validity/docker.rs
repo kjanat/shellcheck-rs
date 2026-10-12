@@ -15,9 +15,8 @@ pub fn build_all(args: &ValidityArgs) -> Result<(), String> {
         return Err("--push publishes only from shells.yml".to_string());
     }
     let mut matrix = matrix::load()?;
-    let revision = revision()?;
     for cell in matrix.cell.iter_mut().filter(|c| c.matches(&args.cell)) {
-        build(cell, &revision, args.push)?;
+        build(cell, args.push)?;
         if args.push {
             cell.digest = pin::manifest_digest(&cell.image)
                 .ok_or_else(|| format!("{}: no manifest digest after push", cell.id()))?;
@@ -34,14 +33,11 @@ fn in_actions(github_actions: Option<&str>) -> bool {
     github_actions == Some("true")
 }
 
-fn build(cell: &Cell, revision: &str, push: bool) -> Result<(), String> {
-    inherit(
-        build_command(cell, revision, push),
-        &format!("build {}", cell.id()),
-    )
+fn build(cell: &Cell, push: bool) -> Result<(), String> {
+    inherit(build_command(cell, push), &format!("build {}", cell.id()))
 }
 
-fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
+fn build_command(cell: &Cell, push: bool) -> Command {
     let mut cmd = Command::new("docker");
     cmd.args(["buildx", "build", "--file"])
         .arg(format!("{DOCKERFILES}/{}/Dockerfile", cell.dockerfile))
@@ -53,7 +49,7 @@ fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
     for (key, value) in cell.source.build_args() {
         cmd.arg("--build-arg").arg(format!("{key}={value}"));
     }
-    for (key, value) in labels(cell, revision) {
+    for (key, value) in labels(cell) {
         cmd.arg("--label")
             .arg(format!("org.opencontainers.image.{key}={value}"));
     }
@@ -65,7 +61,9 @@ fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
     if push {
         cmd.arg("--cache-to")
             .arg(format!("type=registry,ref={cache},mode=max"));
-        cmd.args(["--push", "--provenance=mode=max", "--sbom=true"]);
+        // Keep commit-specific provenance and SBOMs outside the content-addressed
+        // image so rebuilding identical inputs preserves the manifest digest.
+        cmd.args(["--push", "--provenance=false", "--sbom=false"]);
     } else {
         cmd.arg("--load");
     }
@@ -73,11 +71,10 @@ fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
     cmd
 }
 
-fn labels(cell: &Cell, revision: &str) -> Vec<(&'static str, String)> {
+fn labels(cell: &Cell) -> Vec<(&'static str, String)> {
     vec![
         ("source", SOURCE_URL.to_string()),
         ("url", SOURCE_URL.to_string()),
-        ("revision", revision.to_string()),
         ("version", cell.version.clone()),
         ("title", format!("shell-{}", cell.dockerfile)),
         (
@@ -88,17 +85,6 @@ fn labels(cell: &Cell, revision: &str) -> Vec<(&'static str, String)> {
             ),
         ),
     ]
-}
-
-fn revision() -> Result<String, String> {
-    let out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
-    if !out.status.success() {
-        return Err("git rev-parse HEAD failed".to_string());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn step_output(cell: &Cell) -> Result<(), String> {
@@ -331,7 +317,7 @@ mod tests {
     }
 
     fn args(cell: &Cell, push: bool) -> Vec<String> {
-        build_command(cell, "deadbeef", push)
+        build_command(cell, push)
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
@@ -359,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn a_push_build_attaches_provenance_and_sbom() {
+    fn a_push_build_keeps_attestations_outside_the_image() {
         let a = args(&cell(), true);
-        for flag in ["--push", "--provenance=mode=max", "--sbom=true"] {
+        for flag in ["--push", "--provenance=false", "--sbom=false"] {
             assert!(a.contains(&flag.to_string()), "{flag} missing from {a:?}");
         }
         assert!(!a.contains(&"--load".to_string()));
@@ -398,16 +384,20 @@ mod tests {
     }
 
     #[test]
-    fn every_build_carries_source_and_revision_labels() {
+    fn every_build_carries_stable_source_labels() {
         let a = args(&cell(), false);
         for label in [
             "org.opencontainers.image.source=https://github.com/kjanat/shellcheck-rs",
-            "org.opencontainers.image.revision=deadbeef",
             "org.opencontainers.image.version=5.3",
             "org.opencontainers.image.title=shell-bash",
         ] {
             assert!(a.contains(&label.to_string()), "{label} missing from {a:?}");
         }
+        assert!(
+            !a.iter()
+                .any(|arg| arg.starts_with("org.opencontainers.image.revision=")),
+            "revision label makes identical image inputs produce different digests: {a:?}"
+        );
     }
 
     #[test]
