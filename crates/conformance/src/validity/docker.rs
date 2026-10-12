@@ -1,35 +1,50 @@
+use std::env;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::matrix::{self, Cell};
-use super::{DOCKERFILES, SOURCE_URL, ValidityArgs};
+use super::{DOCKERFILES, SOURCE_URL, ValidityArgs, pin};
 
 pub const TIMEOUT_SECONDS: &str = "5";
 const TIMEOUT_STATUS: i32 = 124;
 
 pub fn build_all(args: &ValidityArgs) -> Result<(), String> {
+    if args.push && !in_actions(env::var("GITHUB_ACTIONS").ok().as_deref()) {
+        return Err("--push publishes only from shells.yml".to_string());
+    }
     let mut matrix = matrix::load()?;
-    let mut pushed = false;
+    let revision = revision()?;
     for cell in matrix.cell.iter_mut().filter(|c| c.matches(&args.cell)) {
-        build(cell)?;
+        build(cell, &revision, args.push)?;
         if args.push {
-            push(cell)?;
-            pushed = true;
+            cell.digest = pin::manifest_digest(&cell.image)
+                .ok_or_else(|| format!("{}: no manifest digest after push", cell.id()))?;
+            step_output(cell)?;
         }
     }
-    if pushed {
+    if args.push {
         matrix::save(&matrix)?;
     }
     Ok(())
 }
 
-fn build(cell: &Cell) -> Result<(), String> {
+fn in_actions(github_actions: Option<&str>) -> bool {
+    github_actions == Some("true")
+}
+
+fn build(cell: &Cell, revision: &str, push: bool) -> Result<(), String> {
+    inherit(
+        build_command(cell, revision, push),
+        &format!("build {}", cell.id()),
+    )
+}
+
+fn build_command(cell: &Cell, revision: &str, push: bool) -> Command {
     let mut cmd = Command::new("docker");
-    cmd.args(["build", "--file"])
+    cmd.args(["buildx", "build", "--file"])
         .arg(format!("{DOCKERFILES}/{}/Dockerfile", cell.dockerfile))
         .args(["--tag", &cell.image])
-        .arg("--label")
-        .arg(format!("org.opencontainers.image.source={SOURCE_URL}"))
         .arg("--build-arg")
         .arg(format!("BASE={}", cell.base))
         .arg("--build-arg")
@@ -37,31 +52,62 @@ fn build(cell: &Cell) -> Result<(), String> {
     for (key, value) in cell.source.build_args() {
         cmd.arg("--build-arg").arg(format!("{key}={value}"));
     }
+    for (key, value) in labels(cell, revision) {
+        cmd.arg("--label")
+            .arg(format!("org.opencontainers.image.{key}={value}"));
+    }
+    if push {
+        cmd.args(["--push", "--provenance=mode=max", "--sbom=true"]);
+    } else {
+        cmd.arg("--load");
+    }
     cmd.arg(DOCKERFILES);
-    inherit(cmd, &format!("build {}", cell.id()))
+    cmd
 }
 
-fn push(cell: &mut Cell) -> Result<(), String> {
-    let mut cmd = Command::new("docker");
-    cmd.args(["push", &cell.image]);
-    inherit(cmd, &format!("push {}", cell.id()))?;
-    let out = Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            "{{index .RepoDigests 0}}",
-            &cell.image,
-        ])
+fn labels(cell: &Cell, revision: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("source", SOURCE_URL.to_string()),
+        ("url", SOURCE_URL.to_string()),
+        ("revision", revision.to_string()),
+        ("version", cell.version.clone()),
+        ("title", format!("shell-{}", cell.dockerfile)),
+        (
+            "description",
+            format!(
+                "{} {} for the validity matrix",
+                cell.dockerfile, cell.version
+            ),
+        ),
+    ]
+}
+
+fn revision() -> Result<String, String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
         .output()
-        .map_err(|e| format!("docker: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    cell.digest = text
-        .trim()
-        .rsplit_once('@')
-        .map(|(_, d)| d.to_string())
-        .ok_or_else(|| format!("{}: no repository digest after push", cell.id()))?;
-    Ok(())
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        return Err("git rev-parse HEAD failed".to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn step_output(cell: &Cell) -> Result<(), String> {
+    env::var("GITHUB_OUTPUT").map_or(Ok(()), |path| write_step_output(&path, cell))
+}
+
+fn write_step_output(path: &str, cell: &Cell) -> Result<(), String> {
+    let repository = cell
+        .image
+        .rsplit_once(':')
+        .map_or(cell.image.as_str(), |(r, _)| r);
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("{path}: {e}"))?;
+    writeln!(file, "repository={repository}\ndigest={}", cell.digest)
+        .map_err(|e| format!("{path}: {e}"))
 }
 
 fn inherit(mut cmd: Command, what: &str) -> Result<(), String> {
@@ -215,10 +261,84 @@ impl Container {
 
 #[cfg(test)]
 mod tests {
-    use super::pick;
+    use super::super::matrix::SourcePin;
+    use super::{Cell, build_command, in_actions, pick, write_step_output};
 
     const PINNED: &str = "ghcr.io/x/shell-bash@sha256:abc";
     const TAG: &str = "ghcr.io/x/shell-bash:5.3";
+
+    fn cell() -> Cell {
+        Cell {
+            shell: "bash".to_string(),
+            version: "5.3".to_string(),
+            image: TAG.to_string(),
+            digest: "sha256:abc".to_string(),
+            base: "debian@sha256:0".to_string(),
+            dockerfile: "bash".to_string(),
+            argv: vec!["bash".to_string()],
+            parse: vec!["-n".to_string()],
+            shipped: true,
+            dialect: Some("bash".to_string()),
+            source: SourcePin::Tarball {
+                url: "u".to_string(),
+                sha256: "s".to_string(),
+            },
+        }
+    }
+
+    fn args(cell: &Cell, push: bool) -> Vec<String> {
+        build_command(cell, "deadbeef", push)
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn push_is_reserved_for_actions() {
+        assert!(in_actions(Some("true")));
+        assert!(!in_actions(Some("false")));
+        assert!(!in_actions(None));
+    }
+
+    #[test]
+    fn a_push_build_attaches_provenance_and_sbom() {
+        let a = args(&cell(), true);
+        for flag in ["--push", "--provenance=mode=max", "--sbom=true"] {
+            assert!(a.contains(&flag.to_string()), "{flag} missing from {a:?}");
+        }
+        assert!(!a.contains(&"--load".to_string()));
+    }
+
+    #[test]
+    fn a_local_build_loads_and_never_pushes() {
+        let a = args(&cell(), false);
+        assert!(a.contains(&"--load".to_string()));
+        assert!(!a.contains(&"--push".to_string()));
+    }
+
+    #[test]
+    fn every_build_carries_source_and_revision_labels() {
+        let a = args(&cell(), false);
+        for label in [
+            "org.opencontainers.image.source=https://github.com/kjanat/shellcheck-rs",
+            "org.opencontainers.image.revision=deadbeef",
+            "org.opencontainers.image.version=5.3",
+            "org.opencontainers.image.title=shell-bash",
+        ] {
+            assert!(a.contains(&label.to_string()), "{label} missing from {a:?}");
+        }
+    }
+
+    #[test]
+    fn step_output_names_repository_and_digest() {
+        let path =
+            std::env::temp_dir().join(format!("validity-step-output-{}", std::process::id()));
+        std::fs::write(&path, "").unwrap();
+        write_step_output(path.to_str().unwrap(), &cell()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(text, "repository=ghcr.io/x/shell-bash\ndigest=sha256:abc\n");
+    }
 
     #[test]
     fn pinned_image_present_locally_wins() {
