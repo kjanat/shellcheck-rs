@@ -129,6 +129,22 @@ url = "https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz"
 sha256 = "0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba"
 
 [[cell]]
+shell = "bosh"
+version = "2024-03-21"
+image = "ghcr.io/kjanat/shellcheck-rs/shell-bosh:2024-03-21"
+base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+dockerfile = "bosh"
+argv = ["bosh"]
+parse = ["-n"]
+shipped = false
+
+[cell.source]
+kind = "git"
+repo = "https://codeberg.org/schilytools/schilytools"
+tag = "2024-03-21"
+commit = "e835e64f0d84a614b3c8d619ac646060ea6922a5"
+
+[[cell]]
 shell = "brush"
 version = "0.4.0"
 image = "ghcr.io/kjanat/shellcheck-rs/shell-brush:0.4.0"

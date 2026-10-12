@@ -97,6 +97,13 @@ base     = "rust:1-slim-bookworm"
 versions = ["0.4.0"]
 argv     = ["brush"]
 
+[shell.bosh]
+kind     = "git"
+repo     = "https://codeberg.org/schilytools/schilytools"
+tag      = "{version}"
+versions = ["2024-03-21"]
+argv     = ["bosh"]
+
 [shell.tcsh]
 kind     = "tarball"
 url      = "https://astron.com/pub/tcsh/tcsh-{version}.tar.gz"

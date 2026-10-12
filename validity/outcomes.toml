@@ -14,6 +14,12 @@ outcome = "reproduces"
 
 [[row]]
 code = 2016
+shell = "bosh"
+version = "2024-03-21"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
 shell = "brush"
 version = "0.4.0"
 outcome = "reproduces"
@@ -113,6 +119,12 @@ outcome = "reproduces"
 code = 2046
 shell = "bash"
 version = "5.3"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bosh"
+version = "2024-03-21"
 outcome = "reproduces"
 
 [[row]]
@@ -220,6 +232,12 @@ outcome = "reproduces"
 
 [[row]]
 code = 2086
+shell = "bosh"
+version = "2024-03-21"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
 shell = "brush"
 version = "0.4.0"
 outcome = "reproduces"
@@ -319,6 +337,12 @@ outcome = "reproduces"
 code = 2164
 shell = "bash"
 version = "5.3"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bosh"
+version = "2024-03-21"
 outcome = "reproduces"
 
 [[row]]
@@ -423,6 +447,12 @@ code = 3010
 shell = "bash"
 version = "5.3"
 outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bosh"
+version = "2024-03-21"
+outcome = "reproduces"
 
 [[row]]
 code = 3010

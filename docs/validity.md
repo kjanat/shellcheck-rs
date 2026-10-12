@@ -98,7 +98,7 @@ Floor cells, all `shipped = true`: bash 3.2.57 4.0 4.2.53 4.4.18 5.0 5.1.16
 busybox 1.30.1 to 1.37.0.
 
 Unshipped cells: zsh native and emulate-sh, mksh, oksh, loksh, yash, posh,
-osh, brush, tcsh.
+osh, brush, bosh, tcsh.
 
 tcsh is the default root shell on TrueNAS CORE and FreeBSD. Its grammar is
 unrelated to sh, so every POSIX spec records `unparsable` there. The cells
@@ -106,9 +106,13 @@ exist to record what a TrueNAS user running a script under the wrong shell
 sees, and to hold csh specs once the port has a csh parser. TrueNAS SCALE
 ships zsh for the admin account; the zsh cells cover it.
 
-FreeBSD sh, NetBSD sh and bosh have no Dockerfile yet. Their sources are
-BSD and schilytools trees that do not build on a Linux base without their
-own make and libc shims.
+bosh builds from the schilytools tree at a release tag: `psmake/MAKE-all`
+bootstraps smake, then `inc`, the five libraries and `sh` build in order.
+
+FreeBSD sh and NetBSD sh have no cell. Linux cannot execute their binaries,
+and no port of either shell builds against glibc. Running them means a cell
+that boots a BSD image under QEMU inside the container and forwards stdin
+and argv over a serial console, with KVM on the runner.
 
 ## Specs
 
