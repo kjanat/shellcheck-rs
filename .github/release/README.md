@@ -118,7 +118,7 @@ gh attestation verify rshellcheck-VERSION-source.tar.gz \
   --repo kjanat/shellcheck-rs \
   --signer-workflow kjanat/shellcheck-rs/.github/workflows/release.yml \
   --source-ref refs/tags/rshellcheck-vVERSION \
-  --predicate-type https://spdx.dev/Document \
+  --predicate-type https://spdx.dev/Document/v2.3 \
   --bundle source-sbom.sigstore.json
 ```
 

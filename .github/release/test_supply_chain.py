@@ -71,6 +71,12 @@ sys.exit(int(os.environ["FAIL"] == ("sbom" if is_sbom else "provenance")))
                 calls = read_calls(root / "calls.jsonl")
                 if failure == "none":
                     self.assertEqual(len(calls), 4)
+                    sbom_calls = [args for args in calls if "--predicate-type" in args]
+                    self.assertEqual(len(sbom_calls), 1)
+                    self.assertEqual(
+                        sbom_calls[0][sbom_calls[0].index("--predicate-type") + 1],
+                        "https://spdx.dev/Document/v2.3",
+                    )
                 for args in calls:
                     self.assertEqual(args[args.index("--source-digest") + 1], "a" * 40)
                     self.assertEqual(

@@ -277,7 +277,7 @@ jobs:
             gh attestation verify "${asset}" --bundle "${PROVENANCE_BUNDLE}" "${identity[@]}"
           done
           gh attestation verify "dist/rshellcheck-${LABEL}-source.tar.gz" \
-            --bundle "${SBOM_BUNDLE}" --predicate-type https://spdx.dev/Document "${identity[@]}"
+            --bundle "${SBOM_BUNDLE}" --predicate-type https://spdx.dev/Document/v2.3 "${identity[@]}"
           cp "${PROVENANCE_BUNDLE}" dist/provenance.sigstore.json
           cp "${SBOM_BUNDLE}" dist/source-sbom.sigstore.json
       - name: Upload to a draft, then publish
