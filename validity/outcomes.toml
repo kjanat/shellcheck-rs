@@ -9,6 +9,42 @@ outcome = "reproduces"
 [[row]]
 code = 2016
 shell = "bash"
+version = "4.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
+version = "4.2.53"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
+version = "4.4.18"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
+version = "5.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
+version = "5.1.16"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
+version = "5.2.37"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "bash"
 version = "5.3"
 outcome = "reproduces"
 
@@ -39,7 +75,67 @@ outcome = "reproduces"
 [[row]]
 code = 2016
 shell = "busybox"
+version = "1.32.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
+version = "1.33.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
+version = "1.34.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
+version = "1.35.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
+version = "1.36.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
 version = "1.37.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "dash"
+version = "0.5.8"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "dash"
+version = "0.5.9.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "dash"
+version = "0.5.10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "dash"
+version = "0.5.11.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "dash"
+version = "0.5.12"
 outcome = "reproduces"
 
 [[row]]
@@ -58,6 +154,24 @@ outcome = "reproduces"
 code = 2016
 shell = "freebsd-sh"
 version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "ksh"
+version = "1.0.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "ksh"
+version = "1.0.4"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "ksh"
+version = "1.0.8"
 outcome = "reproduces"
 
 [[row]]
@@ -124,7 +238,19 @@ outcome = "reproduces"
 [[row]]
 code = 2016
 shell = "zsh"
+version = "5.8.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "zsh"
 version = "5.9"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "zsh-sh"
+version = "5.8.1"
 outcome = "reproduces"
 
 [[row]]
@@ -137,6 +263,42 @@ outcome = "reproduces"
 code = 2046
 shell = "bash"
 version = "3.2.57"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "4.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "4.2.53"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "4.4.18"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "5.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "5.1.16"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "bash"
+version = "5.2.37"
 outcome = "reproduces"
 
 [[row]]
@@ -172,7 +334,67 @@ outcome = "reproduces"
 [[row]]
 code = 2046
 shell = "busybox"
+version = "1.32.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.33.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.34.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.35.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.36.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
 version = "1.37.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "dash"
+version = "0.5.8"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "dash"
+version = "0.5.9.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "dash"
+version = "0.5.10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "dash"
+version = "0.5.11.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "dash"
+version = "0.5.12"
 outcome = "reproduces"
 
 [[row]]
@@ -191,6 +413,24 @@ outcome = "reproduces"
 code = 2046
 shell = "freebsd-sh"
 version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "ksh"
+version = "1.0.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "ksh"
+version = "1.0.4"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "ksh"
+version = "1.0.8"
 outcome = "reproduces"
 
 [[row]]
@@ -257,7 +497,19 @@ outcome = "reproduces"
 [[row]]
 code = 2046
 shell = "zsh"
+version = "5.8.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "zsh"
 version = "5.9"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "zsh-sh"
+version = "5.8.1"
 outcome = "reproduces"
 
 [[row]]
@@ -270,6 +522,42 @@ outcome = "reproduces"
 code = 2086
 shell = "bash"
 version = "3.2.57"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "4.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "4.2.53"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "4.4.18"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "5.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "5.1.16"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "bash"
+version = "5.2.37"
 outcome = "reproduces"
 
 [[row]]
@@ -305,7 +593,67 @@ outcome = "reproduces"
 [[row]]
 code = 2086
 shell = "busybox"
+version = "1.32.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
+version = "1.33.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
+version = "1.34.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
+version = "1.35.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
+version = "1.36.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
 version = "1.37.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "dash"
+version = "0.5.8"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "dash"
+version = "0.5.9.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "dash"
+version = "0.5.10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "dash"
+version = "0.5.11.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "dash"
+version = "0.5.12"
 outcome = "reproduces"
 
 [[row]]
@@ -324,6 +672,24 @@ outcome = "reproduces"
 code = 2086
 shell = "freebsd-sh"
 version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "ksh"
+version = "1.0.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "ksh"
+version = "1.0.4"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "ksh"
+version = "1.0.8"
 outcome = "reproduces"
 
 [[row]]
@@ -390,8 +756,20 @@ outcome = "reproduces"
 [[row]]
 code = 2086
 shell = "zsh"
+version = "5.8.1"
+outcome = "absent"
+
+[[row]]
+code = 2086
+shell = "zsh"
 version = "5.9"
 outcome = "absent"
+
+[[row]]
+code = 2086
+shell = "zsh-sh"
+version = "5.8.1"
+outcome = "reproduces"
 
 [[row]]
 code = 2086
@@ -403,6 +781,42 @@ outcome = "reproduces"
 code = 2164
 shell = "bash"
 version = "3.2.57"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "4.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "4.2.53"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "4.4.18"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "5.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "5.1.16"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "bash"
+version = "5.2.37"
 outcome = "reproduces"
 
 [[row]]
@@ -438,7 +852,67 @@ outcome = "reproduces"
 [[row]]
 code = 2164
 shell = "busybox"
+version = "1.32.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
+version = "1.33.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
+version = "1.34.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
+version = "1.35.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
+version = "1.36.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
 version = "1.37.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "dash"
+version = "0.5.8"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "dash"
+version = "0.5.9.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "dash"
+version = "0.5.10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "dash"
+version = "0.5.11.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "dash"
+version = "0.5.12"
 outcome = "reproduces"
 
 [[row]]
@@ -457,6 +931,24 @@ outcome = "reproduces"
 code = 2164
 shell = "freebsd-sh"
 version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "ksh"
+version = "1.0.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "ksh"
+version = "1.0.4"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "ksh"
+version = "1.0.8"
 outcome = "reproduces"
 
 [[row]]
@@ -523,7 +1015,19 @@ outcome = "reproduces"
 [[row]]
 code = 2164
 shell = "zsh"
+version = "5.8.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "zsh"
 version = "5.9"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "zsh-sh"
+version = "5.8.1"
 outcome = "reproduces"
 
 [[row]]
@@ -536,6 +1040,42 @@ outcome = "reproduces"
 code = 3010
 shell = "bash"
 version = "3.2.57"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "4.0"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "4.2.53"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "4.4.18"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "5.0"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "5.1.16"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "bash"
+version = "5.2.37"
 outcome = "absent"
 
 [[row]]
@@ -571,8 +1111,68 @@ outcome = "absent"
 [[row]]
 code = 3010
 shell = "busybox"
+version = "1.32.1"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.33.2"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.34.1"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.35.0"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.36.1"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
 version = "1.37.0"
 outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "dash"
+version = "0.5.8"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "dash"
+version = "0.5.9.1"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "dash"
+version = "0.5.10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "dash"
+version = "0.5.11.5"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "dash"
+version = "0.5.12"
+outcome = "reproduces"
 
 [[row]]
 code = 3010
@@ -591,6 +1191,24 @@ code = 3010
 shell = "freebsd-sh"
 version = "15.1"
 outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "ksh"
+version = "1.0.0"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "ksh"
+version = "1.0.4"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "ksh"
+version = "1.0.8"
+outcome = "absent"
 
 [[row]]
 code = 3010
@@ -656,7 +1274,19 @@ outcome = "absent"
 [[row]]
 code = 3010
 shell = "zsh"
+version = "5.8.1"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "zsh"
 version = "5.9"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "zsh-sh"
+version = "5.8.1"
 outcome = "absent"
 
 [[row]]
