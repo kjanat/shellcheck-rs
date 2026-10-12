@@ -40,6 +40,7 @@ pub fn run(refresh: bool) -> Result<(), String> {
                     .clone()
                     .unwrap_or_else(|| sources.defaults.parse.clone()),
                 shipped: source.shipped,
+                vm: source.vm,
                 dialect: source.dialect.clone(),
                 source: pin,
             });
@@ -149,6 +150,20 @@ fn resolve_source(
         Kind::Crate => Ok(SourcePin::Crate {
             version: version.to_string(),
         }),
+        Kind::Image => {
+            let url = source.url.replace("{version}", version);
+            if let Some(SourcePin::Image { url: u, sha256 }) = previous
+                && *u == url
+                && !sha256.is_empty()
+            {
+                return Ok(SourcePin::Image {
+                    url,
+                    sha256: sha256.clone(),
+                });
+            }
+            let sha256 = sha256_of_url(&url)?;
+            Ok(SourcePin::Image { url, sha256 })
+        }
     }
 }
 
@@ -235,6 +250,38 @@ mod tests {
             Some("aaaa")
         );
         assert!(parse_ls_remote("", "v1").is_none());
+    }
+
+    #[test]
+    fn a_pinned_image_is_reused_without_a_download() {
+        let source = Source {
+            kind: Kind::Image,
+            url: "https://example.invalid/img-{version}.gz".to_string(),
+            repo: String::new(),
+            tag: String::new(),
+            versions: vec!["1".to_string()],
+            argv: vec!["sh".to_string()],
+            parse: None,
+            shipped: false,
+            vm: true,
+            dialect: None,
+            image: None,
+            base: None,
+        };
+        let previous = SourcePin::Image {
+            url: "https://example.invalid/img-1.gz".to_string(),
+            sha256: "f".repeat(64),
+        };
+        let pin = resolve_source(&source, "1", Some(&previous), false).unwrap();
+        assert_eq!(pin, previous);
+        assert_eq!(
+            pin.build_args(),
+            vec![
+                ("KIND", "image"),
+                ("SOURCE", "https://example.invalid/img-1.gz"),
+                ("SHA256", "f".repeat(64).as_str()),
+            ]
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+mkdir -p /tmp/qemu
+export TMPDIR=/tmp/qemu
+accel=tcg
+[ -w /dev/kvm ] && accel=kvm
+set -- qemu-system-x86_64 -machine q35,accel="$accel" -cpu max -m 512 -smp 1 \
+	-display none -serial none -monitor none -snapshot \
+	-drive file=/vm/disk.qcow2,if=virtio,format=qcow2 \
+	-netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0
+if [ -f /vm/seed.iso ]; then
+	set -- "$@" -drive file=/vm/seed.iso,media=cdrom,if=ide,format=raw,read-only=on \
+		-smbios type=1,serial=ds=nocloud
+fi
+exec "$@"

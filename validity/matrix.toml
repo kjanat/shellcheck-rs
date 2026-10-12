@@ -383,6 +383,38 @@ url = "http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.13.tar.gz"
 sha256 = "fd8da121e306b27f59330613417b182b8844f11e269531cc4720bf523e3e06d7"
 
 [[cell]]
+shell = "freebsd-sh"
+version = "14.5"
+image = "ghcr.io/kjanat/shellcheck-rs/shell-freebsd-sh:14.5"
+base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+dockerfile = "freebsd-sh"
+argv = ["sh"]
+parse = ["-n"]
+shipped = false
+vm = true
+
+[cell.source]
+kind = "image"
+url = "https://download.freebsd.org/releases/VM-IMAGES/14.5-RELEASE/amd64/Latest/FreeBSD-14.5-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz"
+sha256 = "a2a8cd84cd59077225a0e75ead852e8a08fe26f9ab251a96d5a4fd4fe1db4454"
+
+[[cell]]
+shell = "freebsd-sh"
+version = "15.1"
+image = "ghcr.io/kjanat/shellcheck-rs/shell-freebsd-sh:15.1"
+base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+dockerfile = "freebsd-sh"
+argv = ["sh"]
+parse = ["-n"]
+shipped = false
+vm = true
+
+[cell.source]
+kind = "image"
+url = "https://download.freebsd.org/releases/VM-IMAGES/15.1-RELEASE/amd64/Latest/FreeBSD-15.1-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz"
+sha256 = "e4ca4db889f8559c9b9dfcacc70405c038476f4b6d41649b152d3809a2ed9e1f"
+
+[[cell]]
 shell = "ksh"
 version = "1.0.0"
 image = "ghcr.io/kjanat/shellcheck-rs/shell-ksh:1.0.0"
@@ -480,6 +512,38 @@ shipped = false
 kind = "tarball"
 url = "https://mbsd.evolvis.org/MirOS/dist/mir/mksh/mksh-R59c.tgz"
 sha256 = "77ae1665a337f1c48c61d6b961db3e52119b38e58884d1c89684af31f87bc506"
+
+[[cell]]
+shell = "netbsd-sh"
+version = "10.2"
+image = "ghcr.io/kjanat/shellcheck-rs/shell-netbsd-sh:10.2"
+base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+dockerfile = "netbsd-sh"
+argv = ["sh"]
+parse = ["-n"]
+shipped = false
+vm = true
+
+[cell.source]
+kind = "image"
+url = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.2/images/NetBSD-10.2-amd64-live.img.gz"
+sha256 = "1bb2acdbf162e34648f795d8fb8280f9750d2d4510ffa63fb014df2092fd7f3c"
+
+[[cell]]
+shell = "netbsd-sh"
+version = "11.0"
+image = "ghcr.io/kjanat/shellcheck-rs/shell-netbsd-sh:11.0"
+base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+dockerfile = "netbsd-sh"
+argv = ["sh"]
+parse = ["-n"]
+shipped = false
+vm = true
+
+[cell.source]
+kind = "image"
+url = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/images/NetBSD-11.0-amd64-live.img.gz"
+sha256 = "70df2336baea29348243b793f25481ea6e8445e1a8b783d657488e2f391b887a"
 
 [[cell]]
 shell = "oksh"

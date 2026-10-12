@@ -23,6 +23,7 @@ pub enum Kind {
     Tarball,
     Git,
     Crate,
+    Image,
 }
 
 #[derive(Deserialize, Debug)]
@@ -40,6 +41,8 @@ pub struct Source {
     pub parse: Option<Vec<String>>,
     #[serde(default)]
     pub shipped: bool,
+    #[serde(default)]
+    pub vm: bool,
     pub dialect: Option<String>,
     pub image: Option<String>,
     pub base: Option<String>,
@@ -55,7 +58,7 @@ pub fn load_from(path: &Path) -> Result<Sources, String> {
     let sources: Sources = toml::from_str(&text).map_err(|e| format!("{shown}: {e}"))?;
     for (name, source) in &sources.shell {
         let missing = match source.kind {
-            Kind::Tarball => source.url.is_empty(),
+            Kind::Tarball | Kind::Image => source.url.is_empty(),
             Kind::Git => source.repo.is_empty() || source.tag.is_empty(),
             Kind::Crate => false,
         };
@@ -94,7 +97,17 @@ mod tests {
         )
         .unwrap();
         let err = load_from(&path).unwrap_err();
+        std::fs::write(
+            &path,
+            "[defaults]\nbase = \"b\"\nparse = [\"-n\"]\n[shell.x]\nkind = \"image\"\nvm = true\nversions = [\"1\"]\nargv = [\"sh\"]\n",
+        )
+        .unwrap();
+        let image_err = load_from(&path).unwrap_err();
         std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            image_err.contains("lacks its source location"),
+            "{image_err}"
+        );
         assert!(err.contains("shell.x lacks"));
     }
 }

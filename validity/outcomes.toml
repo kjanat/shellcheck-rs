@@ -50,6 +50,18 @@ outcome = "reproduces"
 
 [[row]]
 code = 2016
+shell = "freebsd-sh"
+version = "14.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "freebsd-sh"
+version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
 shell = "ksh"
 version = "1.0.10"
 outcome = "reproduces"
@@ -64,6 +76,18 @@ outcome = "reproduces"
 code = 2016
 shell = "mksh"
 version = "R59c"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "netbsd-sh"
+version = "10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "netbsd-sh"
+version = "11.0"
 outcome = "reproduces"
 
 [[row]]
@@ -159,6 +183,18 @@ outcome = "reproduces"
 
 [[row]]
 code = 2046
+shell = "freebsd-sh"
+version = "14.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "freebsd-sh"
+version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
 shell = "ksh"
 version = "1.0.10"
 outcome = "reproduces"
@@ -173,6 +209,18 @@ outcome = "reproduces"
 code = 2046
 shell = "mksh"
 version = "R59c"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "netbsd-sh"
+version = "10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "netbsd-sh"
+version = "11.0"
 outcome = "reproduces"
 
 [[row]]
@@ -268,6 +316,18 @@ outcome = "reproduces"
 
 [[row]]
 code = 2086
+shell = "freebsd-sh"
+version = "14.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "freebsd-sh"
+version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
 shell = "ksh"
 version = "1.0.10"
 outcome = "reproduces"
@@ -282,6 +342,18 @@ outcome = "reproduces"
 code = 2086
 shell = "mksh"
 version = "R59c"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "netbsd-sh"
+version = "10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "netbsd-sh"
+version = "11.0"
 outcome = "reproduces"
 
 [[row]]
@@ -377,6 +449,18 @@ outcome = "reproduces"
 
 [[row]]
 code = 2164
+shell = "freebsd-sh"
+version = "14.5"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "freebsd-sh"
+version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
 shell = "ksh"
 version = "1.0.10"
 outcome = "reproduces"
@@ -391,6 +475,18 @@ outcome = "reproduces"
 code = 2164
 shell = "mksh"
 version = "R59c"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "netbsd-sh"
+version = "10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "netbsd-sh"
+version = "11.0"
 outcome = "reproduces"
 
 [[row]]
@@ -486,6 +582,18 @@ outcome = "reproduces"
 
 [[row]]
 code = 3010
+shell = "freebsd-sh"
+version = "14.5"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "freebsd-sh"
+version = "15.1"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
 shell = "ksh"
 version = "1.0.10"
 outcome = "absent"
@@ -501,6 +609,18 @@ code = 3010
 shell = "mksh"
 version = "R59c"
 outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "netbsd-sh"
+version = "10.2"
+outcome = "reproduces"
+
+[[row]]
+code = 3010
+shell = "netbsd-sh"
+version = "11.0"
+outcome = "reproduces"
 
 [[row]]
 code = 3010

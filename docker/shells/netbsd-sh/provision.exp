@@ -1,0 +1,33 @@
+#!/usr/bin/expect -f
+set timeout 900
+lassign $argv disk sercon pubkey
+set accel tcg
+if {[file writable /dev/kvm]} { set accel kvm }
+spawn qemu-system-x86_64 -machine q35,accel=$accel -cpu max -m 512 -smp 1 \
+    -display none -serial stdio -monitor none -no-reboot \
+    -fw_cfg name=etc/sercon-port,file=$sercon \
+    -drive file=$disk,if=virtio,format=qcow2
+expect "Choose an option"
+send "3"
+expect -re {\n> $}
+send "consdev com0\r"
+expect -re {\n> $}
+send "boot\r"
+expect "login:"
+send "root\r"
+expect {
+    "Password:" { send "\r"; exp_continue }
+    -re {# $} {}
+}
+send "mkdir -p /root/.ssh && echo '$pubkey' > /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && echo step1-ok\r"
+expect "step1-ok"
+expect -re {# $}
+send "printf 'dhcpcd=YES\\nsshd=YES\\n' >> /etc/rc.conf && printf 'PermitRootLogin prohibit-password\\nUseDNS no\\n' >> /etc/ssh/sshd_config && echo step2-ok\r"
+expect "step2-ok"
+expect -re {# $}
+send "/etc/rc.d/sshd keygen && sync && echo step3-ok\r"
+expect "step3-ok"
+expect -re {# $}
+send "shutdown -p now\r"
+expect "syncing disks... done"
+expect eof
