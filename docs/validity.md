@@ -43,6 +43,12 @@ re-resolves git tags and base digests.
 `fetch.sh` in the image verifies the checksum or the commit before anything
 compiles. `--push` pushes and writes the digest into `matrix.toml`.
 
+BusyBox cells keep the default shell configuration but disable the `date` and
+`rdate` applets: older versions call `stime`, which cannot link in the current
+build environment. The shell sources are unchanged. Tarball downloads use a
+20-second connection timeout, a 10-minute per-attempt limit and up to two retries;
+the pinned SHA-256 is still required before extraction.
+
 ## Cells
 
 A cell in `matrix.toml`, as `pin` writes it:

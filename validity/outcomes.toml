@@ -21,6 +21,18 @@ outcome = "reproduces"
 [[row]]
 code = 2016
 shell = "busybox"
+version = "1.30.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
+version = "1.31.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2016
+shell = "busybox"
 version = "1.37.0"
 outcome = "reproduces"
 
@@ -107,6 +119,18 @@ outcome = "reproduces"
 code = 2046
 shell = "brush"
 version = "0.4.0"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.30.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2046
+shell = "busybox"
+version = "1.31.1"
 outcome = "reproduces"
 
 [[row]]
@@ -203,6 +227,18 @@ outcome = "reproduces"
 [[row]]
 code = 2086
 shell = "busybox"
+version = "1.30.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
+version = "1.31.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2086
+shell = "busybox"
 version = "1.37.0"
 outcome = "reproduces"
 
@@ -294,6 +330,18 @@ outcome = "reproduces"
 [[row]]
 code = 2164
 shell = "busybox"
+version = "1.30.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
+version = "1.31.1"
+outcome = "reproduces"
+
+[[row]]
+code = 2164
+shell = "busybox"
 version = "1.37.0"
 outcome = "reproduces"
 
@@ -380,6 +428,18 @@ outcome = "absent"
 code = 3010
 shell = "brush"
 version = "0.4.0"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.30.1"
+outcome = "absent"
+
+[[row]]
+code = 3010
+shell = "busybox"
+version = "1.31.1"
 outcome = "absent"
 
 [[row]]

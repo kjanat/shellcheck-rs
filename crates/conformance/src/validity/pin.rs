@@ -160,6 +160,15 @@ fn sha256_of_url(url: &str) -> Result<String, String> {
             "--show-error",
             "--location",
             "--fail",
+            "--connect-timeout",
+            "20",
+            "--max-time",
+            "600",
+            "--retry",
+            "2",
+            "--retry-connrefused",
+            "--retry-max-time",
+            "1800",
             "--output",
         ])
         .arg(&file)

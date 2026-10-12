@@ -5,7 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY fetch.sh /fetch.sh
 WORKDIR /src
 RUN sh /fetch.sh
-RUN make defconfig && sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config && make -j"$(nproc)" && install -D busybox /out/bin/busybox
+RUN make defconfig && sed -i \
+    -e 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' \
+    -e 's/^CONFIG_DATE=.*/# CONFIG_DATE is not set/' \
+    -e 's/^CONFIG_RDATE=.*/# CONFIG_RDATE is not set/' \
+    .config && make -j"$(nproc)" && install -D busybox /out/bin/busybox
 
 FROM ${BASE}
 COPY --from=build /out/bin/busybox /usr/local/bin/busybox

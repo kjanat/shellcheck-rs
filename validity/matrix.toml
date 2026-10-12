@@ -462,7 +462,7 @@ shipped = false
 
 [cell.source]
 kind = "tarball"
-url = "http://www.mirbsd.org/MirOS/dist/mir/mksh/mksh-R59c.tgz"
+url = "https://mbsd.evolvis.org/MirOS/dist/mir/mksh/mksh-R59c.tgz"
 sha256 = "77ae1665a337f1c48c61d6b961db3e52119b38e58884d1c89684af31f87bc506"
 
 [[cell]]
