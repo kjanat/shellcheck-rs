@@ -5,7 +5,8 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
-    paths: &PATHS
+  pull_request:
+    paths:
       - ".github/workflows/shells.yml"
       - "docker/shells/**"
       - "validity/**"
@@ -15,7 +16,6 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".cargo/**"
-  pull_request: { paths: *PATHS }
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
 permissions: { contents: read }

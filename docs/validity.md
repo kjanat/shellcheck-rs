@@ -63,7 +63,9 @@ shell versions (including dialects sharing that recipe); VM helpers select guest
 cells. Changed source pins select their cells, while shared build tooling selects
 the full matrix. Documentation, specs and recorded outcomes alone do not rebuild
 images. Empty selections skip the image job. Scheduled, manual and master runs
-still build the full matrix and refresh the cache.
+still build the full matrix and refresh the cache. Every master push starts a
+run so the workflow's concurrency group cancels any publication still running
+for an older master revision.
 
 ## Cells
 
@@ -279,9 +281,10 @@ Every input is pinned in the tree and every step is one command.
 
 Automation:
 
-- `shells.yml` on a weekly cron and on changes under `docker/shells/`,
-  `validity/`, or the conformance crate. Jobs: build changed images, push,
-  update digests, run `cargo validity --record`, open a pull request with
+- `shells.yml` on a weekly cron, every master push, and relevant pull request
+  changes under `docker/shells/`, `validity/`, or the conformance crate. Jobs:
+  build changed images, push, update digests, run `cargo validity --record`,
+  open a pull request with
   `peter-evans/create-pull-request` when `matrix.toml`, `outcomes.toml` or
   `REPORT.md` changed. The pull request body lists each changed row. The
   action uses the workflow token; the repository allows Actions to create
