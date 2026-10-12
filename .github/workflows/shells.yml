@@ -17,7 +17,9 @@ on:
       - "Cargo.lock"
       - ".cargo/**"
 
-concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: "${{ github.event_name == 'push' || github.event_name == 'pull_request' }}"
 permissions: { contents: read }
 
 jobs:

@@ -65,7 +65,8 @@ the full matrix. Documentation, specs and recorded outcomes alone do not rebuild
 images. Empty selections skip the image job. Scheduled, manual and master runs
 still build the full matrix and refresh the cache. Every master push starts a
 run so the workflow's concurrency group cancels any publication still running
-for an older master revision.
+for an older master revision. Updated pull requests likewise replace their
+earlier runs; manual and scheduled runs wait for active work to finish.
 
 ## Cells
 
