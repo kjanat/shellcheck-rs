@@ -1,17 +1,22 @@
 //! Port of `ShellCheck.Formatter.JSON1`: the `--format=json1` output.
 //!
-//! Emits a single `{"comments":[...]}` object over all analyzed files, matching
-//! the Haskell formatter's field set. Key ordering is irrelevant to the
-//! conformance harness (it compares parsed JSON), but values must match exactly.
+//! Emits a single `{"comments":[...],"sources":[...]}` object over all analyzed
+//! files. `comments` matches the Haskell formatter's field set. Key ordering is
+//! irrelevant to the conformance harness (it compares parsed JSON), but values
+//! must match exactly. `sources` is the port's: the sourced files that were
+//! read.
 
 use serde::Serialize;
 use shellcheck_rs::interface::{InsertionPoint, PositionedComment};
 
-/// The json1 document: `{"comments": [...]}`.
+/// The json1 document: `{"comments": [...], "sources": [...]}`.
 #[derive(Serialize)]
 pub struct Output {
     /// Every comment of every checked file.
     pub comments: Vec<Comment>,
+    /// Every sourced file that was read, by resolved name, each once, in the
+    /// order the inputs first read them.
+    pub sources: Vec<String>,
 }
 
 /// One comment, in the field order of the Haskell `toEncoding`.
@@ -102,13 +107,14 @@ pub fn to_comment(pc: &PositionedComment) -> Comment {
     }
 }
 
-/// The json1 document for `comments`.
+/// The json1 document for `comments` and `sources`.
 ///
 /// # Errors
 ///
 /// When `serde_json` fails to serialize the document.
-pub fn render(comments: &[PositionedComment]) -> serde_json::Result<String> {
+pub fn render(comments: &[PositionedComment], sources: &[String]) -> serde_json::Result<String> {
     serde_json::to_string(&Output {
         comments: comments.iter().map(to_comment).collect(),
+        sources: sources.to_vec(),
     })
 }

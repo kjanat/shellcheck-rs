@@ -73,6 +73,23 @@ file: RSC1001: ShellCheck internal error, please report: <detail>. The checks th
 on stderr, or on stdout for checkstyle. The run exits 2, and `--quiet` exits 1.
 DIVERGENCES.md Z7 holds the evidence.
 
+## Sourced files in json1
+
+The json1 document carries a `sources` member after `comments`:
+
+```json
+{ "comments": [], "sources": ["./lib.sh", "lib/util.sh"] }
+```
+
+It lists every file the run read through `source` or `.`, by the name the
+`file` field of its comments would carry, each once, in the order the inputs
+first read them. Nested sources are included. A file that was not followed is
+absent: SC1090 (non-constant name), SC1091 (refused or missing), SC1093
+(recursion). A sourced file that was read and then failed to parse (SC1094) is
+present. The inputs themselves are not listed. `json` stays a bare array of
+comments. The library returns the same list in `CheckResult::sources`, and the
+WASM response carries it as `sources`.
+
 ## Clearer parser errors
 
 `clarify-parse-errors` omits redundant enclosing-context notes at the same position

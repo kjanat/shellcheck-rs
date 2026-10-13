@@ -1104,7 +1104,7 @@ impl Parser {
 
     /// `readSource`'s `(input, resolvedFile)`: the sourced file's contents and
     /// the name it resolved to.
-    fn read_source_input(&self, filename: &str) -> (Result<String, ErrorMessage>, String) {
+    fn read_source_input(&mut self, filename: &str) -> (Result<String, ErrorMessage>, String) {
         if filename == "/dev/null" {
             // Always allow /dev/null.
             return (Ok(String::new()), filename.to_string());
@@ -1125,7 +1125,16 @@ impl Parser {
             .sys
             .find_source(&self.root_filename, external, &paths, filename);
         let contents = self.sys.read_file(external, &resolved);
+        if contents.is_ok() {
+            self.record_source(&resolved);
+        }
         (contents, resolved)
+    }
+
+    pub(super) fn record_source(&mut self, name: &str) {
+        if !self.sources.iter().any(|s| s == name) {
+            self.sources.push(name.to_string());
+        }
     }
 
     /// `subRead`: parse `script` as a whole file of its own, under a
@@ -1158,6 +1167,9 @@ impl Parser {
         // `pendingHereDocs = []`: the caller's unread here documents are not the
         // sourced file's business, and are put back afterwards.
         let root = sub.read_script_file();
+        for nested in std::mem::take(&mut sub.sources) {
+            self.record_source(&nested);
+        }
         let failed = root.is_none() || sub.has_committed_failure();
         if failed {
             // `included <|> failed`: `try` rewinds the parse notes too, and

@@ -101,6 +101,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         filename: spec.filename.clone(),
         comments: positioned,
         dataflow_error,
+        sources: parse.sources,
     }
 }
 
@@ -325,6 +326,72 @@ mod source_tests {
     /// `check`: no includes at all, so every source fails to resolve.
     fn check(script: &str) -> Vec<i64> {
         check_with_includes(&[], script)
+    }
+
+    fn sources(includes: &[(&str, &str)], script: &str) -> Vec<String> {
+        check_script_with(
+            Rc::new(MockSystem::new(includes)),
+            &CheckSpec {
+                script: script.to_string(),
+                ..CheckSpec::default()
+            },
+        )
+        .sources
+    }
+
+    #[test]
+    fn sources_lists_each_read_file_once_in_read_order() {
+        let includes = [
+            ("a.sh", ". b.sh\n. c.sh\n"),
+            ("b.sh", "v=1\n"),
+            ("c.sh", "w=2\n"),
+            ("broken.sh", "if true\n"),
+        ];
+        assert_eq!(
+            sources(
+                &includes,
+                ". a.sh\n. c.sh\n. /dev/null\n. missing.sh\n. \"$dyn\"\n"
+            ),
+            ["a.sh", "b.sh", "c.sh"]
+        );
+        assert_eq!(sources(&includes, ". broken.sh\n"), ["broken.sh"]);
+        assert_eq!(sources(&includes, "echo hi\n"), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn sources_read_inside_sub_parsed_fragments_are_listed() {
+        let includes = [("b.sh", "v=1\n"), ("c.sh", "w=2\n"), ("d.sh", "x=3\n")];
+        assert_eq!(sources(&includes, "echo `. b.sh`\n"), ["b.sh"]);
+        assert_eq!(sources(&includes, "cat <<EOF\n$(. b.sh)\nEOF\n"), ["b.sh"]);
+        assert_eq!(sources(&includes, "let \"$(. b.sh)\"\n"), ["b.sh"]);
+        assert_eq!(
+            sources(&includes, "declare -A m\nm[$(. b.sh)]=1\n"),
+            ["b.sh"]
+        );
+        assert_eq!(
+            sources(&includes, "echo `. b.sh` <<EOF\n$(. c.sh)\nEOF\n. d.sh\n"),
+            ["b.sh", "c.sh", "d.sh"]
+        );
+    }
+
+    #[test]
+    fn sources_read_by_the_lenient_parse_survive_the_strict_retry() {
+        let includes = [("b.sh", "v=1\n")];
+        let out = check_script_with(
+            Rc::new(MockSystem::new(&includes)),
+            &CheckSpec {
+                script: "#!/bin/bash\n! # comment\n. b.sh\nfi\n".to_string(),
+                ..CheckSpec::default()
+            },
+        );
+        assert_eq!(out.sources, ["b.sh"]);
+        assert_eq!(
+            out.comments
+                .iter()
+                .map(|c| c.comment.code)
+                .collect::<Vec<_>>(),
+            [1072]
+        );
     }
 
     #[test]

@@ -81,7 +81,7 @@ fn on(template: &str, file: &str) -> String {
 }
 
 fn json1(comments: &[String]) -> String {
-    format!(r#"{{"comments":[{}]}}"#, comments.join(","))
+    format!(r#"{{"comments":[{}],"sources":[]}}"#, comments.join(","))
 }
 
 /// `escape'` of the checkstyle formatter.
