@@ -15,6 +15,9 @@ struct Case {
     /// The port's json1 `sources`: the oracle's document is expected to carry
     /// exactly this list appended.
     sources: &'static [&'static str],
+    /// `(line, code)` of each `SC9xxx` comment the port adds to the oracle's
+    /// json1 document. The documents are compared as JSON without them.
+    port_only: &'static [(i64, i64)],
 }
 
 const fn script(stdin: &'static [u8]) -> Case {
@@ -25,6 +28,7 @@ const fn script(stdin: &'static [u8]) -> Case {
         unreadable: &[],
         full_stdout: false,
         sources: &[],
+        port_only: &[],
     }
 }
 
@@ -32,15 +36,28 @@ const fn files(
     args: &'static [&'static str],
     files: &'static [(&'static str, &'static [u8])],
 ) -> Case {
+    piped(args, b"", files)
+}
+
+/// A script on stdin with files beside it. `{dir}` in an argument is the
+/// working directory of the run.
+const fn piped(
+    args: &'static [&'static str],
+    stdin: &'static [u8],
+    files: &'static [(&'static str, &'static [u8])],
+) -> Case {
     Case {
         args,
-        stdin: b"",
+        stdin,
         files,
         unreadable: &[],
         full_stdout: false,
         sources: &[],
+        port_only: &[],
     }
 }
+
+const ACTIONLINT_EXCLUDES: &str = "SC1091,SC2194,SC2050,SC2153,SC2154,SC2157,SC2043";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Run {
@@ -67,8 +84,12 @@ fn run(binary: &Path, dir: &Path, case: &Case) -> io::Result<Run> {
     } else {
         Stdio::piped()
     };
+    let args = case
+        .args
+        .iter()
+        .map(|arg| arg.replace("{dir}", &dir.to_string_lossy()));
     let mut child = Command::new(binary)
-        .args(case.args)
+        .args(args)
         .current_dir(dir)
         .env_remove("SHELLCHECK_OPTS")
         .env("HOME", dir.join(".home"))
@@ -115,10 +136,15 @@ fn assert_parity(name: &str, case: &Case) -> io::Result<()> {
         std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o644))?;
     }
     std::fs::remove_dir_all(&dir)?;
-    assert_eq!(
-        port?, oracle?,
-        "{name}: port (left) and oracle (right) differ"
-    );
+    let (port, oracle) = (port?, oracle?);
+    if case.port_only.is_empty() {
+        assert_eq!(
+            port, oracle,
+            "{name}: port (left) and oracle (right) differ"
+        );
+    } else {
+        assert_parity_without_port_codes(name, &port, &oracle, case.port_only);
+    }
     Ok(())
 }
 
@@ -127,6 +153,36 @@ fn with_sources(mut run: Run, sources: &[&str]) -> Run {
         run.stdout = format!("{doc},\"sources\":{}}}\n", serde_json::json!(sources));
     }
     run
+}
+
+fn assert_parity_without_port_codes(name: &str, port: &Run, oracle: &Run, expected: &[(i64, i64)]) {
+    let mut port_doc: serde_json::Value = serde_json::from_str(&port.stdout)
+        .unwrap_or_else(|e| panic!("{name}: port stdout is not json1: {e}\n{}", port.stdout));
+    let oracle_doc: serde_json::Value = serde_json::from_str(&oracle.stdout)
+        .unwrap_or_else(|e| panic!("{name}: oracle stdout is not json1: {e}\n{}", oracle.stdout));
+    let comments = port_doc["comments"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("{name}: port document has no comments array"));
+    let mut added = Vec::new();
+    comments.retain(|c| {
+        let code = c["code"].as_i64().unwrap_or(0);
+        if (9000..=9999).contains(&code) {
+            added.push((c["line"].as_i64().unwrap_or(0), code));
+            false
+        } else {
+            true
+        }
+    });
+    assert_eq!(
+        added, expected,
+        "{name}: port diagnostics added to the oracle's"
+    );
+    assert_eq!(
+        port_doc, oracle_doc,
+        "{name}: port (left) and oracle (right) differ apart from port diagnostics"
+    );
+    assert_eq!(port.code, oracle.code, "{name}: exit status");
+    assert_eq!(port.stderr, oracle.stderr, "{name}: stderr");
 }
 
 macro_rules! parity {
@@ -239,6 +295,58 @@ parity! {
                 ("lib.sh", b"v=1\n"),
             ],
         )
+    };
+    actionlint_flags_bash = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        ..script(b"echo $GITHUB_REF\ncd \"$dir\"\n[[ $x == 1 ]]\n")
+    };
+    actionlint_flags_sh = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "sh", "-e", ACTIONLINT_EXCLUDES, "-"],
+        ..script(b"echo $GITHUB_REF\ncd \"$dir\"\n[[ $x == 1 ]]\n")
+    };
+    actionlint_flags_dash = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "dash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        ..script(b"echo $GITHUB_REF\ncd \"$dir\"\n[[ $x == 1 ]]\n")
+    };
+    actionlint_flags_ksh = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "ksh", "-e", ACTIONLINT_EXCLUDES, "-"],
+        ..script(b"echo $GITHUB_REF\ncd \"$dir\"\n[[ $x == 1 ]]\n")
+    };
+    actionlint_directive_prefix_on_stdin = Case {
+        args: &["--norc", "-x", "-f", "json1", "-e", ACTIONLINT_EXCLUDES, "-"],
+        ..script(b"# shellcheck shell=sh\n# shellcheck disable=SC2086\necho $x\n[[ $x ]]\n")
+    };
+    actionlint_user_excludes_join_the_fixed_list = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "bash", "-e", "SC1091,SC2194,SC2050,SC2153,SC2154,SC2157,SC2043,SC2086,SC2164", "-"],
+        ..script(b"echo $x\ncd \"$d\"\n")
+    };
+    actionlint_rcfile_with_an_absolute_path = piped(
+        &["--rcfile", "{dir}/rc", "-x", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        b"echo $x\ncd \"$d\"\n",
+        &[("rc", b"disable=SC2086\n")],
+    );
+    actionlint_external_source_present = Case {
+        sources: &["./lib.sh"],
+        ..piped(
+            &["--norc", "-x", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+            b". ./lib.sh\necho \"$v\"\n",
+            &[("lib.sh", b"v=1\n")],
+        )
+    };
+    actionlint_external_source_missing = piped(
+        &["--norc", "-x", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        b". ./missing.sh\necho \"$v\"\n",
+        &[],
+    );
+    actionlint_external_sources_off = piped(
+        &["--norc", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        b"# shellcheck external-sources=false\n. ./lib.sh\necho \"$v\"\n",
+        &[("lib.sh", b"v=1\n")],
+    );
+    actionlint_port_diagnostics_pass_through = Case {
+        args: &["--norc", "-x", "-f", "json1", "--shell", "bash", "-e", ACTIONLINT_EXCLUDES, "-"],
+        port_only: &[(2, 9002)],
+        ..script(b"tmp=$(mktemp)\ntrap 'rm -f \"$tmp\"' INT\necho $tmp\n")
     };
     sourced_file_without_external_sources = files(
         &["-f", "json1", "main.sh"],
