@@ -1105,6 +1105,9 @@ impl Parser {
             self.positions.entry(k).or_insert(v);
         }
         self.notes.extend(sub.notes);
+        for name in sub.sources {
+            self.record_source(&name);
+        }
         // Past the point of no return the outer parse is over in Parsec, which
         // never reads the text this sub-parse was made from -- so its problems
         // are ones the original had no chance to emit. Same rule as
@@ -1769,6 +1772,7 @@ fn finish_parse(parser: impl Fn() -> Parser) -> ParseOutput {
     {
         let mut strict = parser();
         strict.empty_negation = EmptyNegation::Refused;
+        strict.sources = out.sources;
         return parse_to_output(&mut strict);
     }
     out

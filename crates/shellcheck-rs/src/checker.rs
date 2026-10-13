@@ -359,6 +359,42 @@ mod source_tests {
     }
 
     #[test]
+    fn sources_read_inside_sub_parsed_fragments_are_listed() {
+        let includes = [("b.sh", "v=1\n"), ("c.sh", "w=2\n"), ("d.sh", "x=3\n")];
+        assert_eq!(sources(&includes, "echo `. b.sh`\n"), ["b.sh"]);
+        assert_eq!(sources(&includes, "cat <<EOF\n$(. b.sh)\nEOF\n"), ["b.sh"]);
+        assert_eq!(sources(&includes, "let \"$(. b.sh)\"\n"), ["b.sh"]);
+        assert_eq!(
+            sources(&includes, "declare -A m\nm[$(. b.sh)]=1\n"),
+            ["b.sh"]
+        );
+        assert_eq!(
+            sources(&includes, "echo `. b.sh` <<EOF\n$(. c.sh)\nEOF\n. d.sh\n"),
+            ["b.sh", "c.sh", "d.sh"]
+        );
+    }
+
+    #[test]
+    fn sources_read_by_the_lenient_parse_survive_the_strict_retry() {
+        let includes = [("b.sh", "v=1\n")];
+        let out = check_script_with(
+            Rc::new(MockSystem::new(&includes)),
+            &CheckSpec {
+                script: "#!/bin/bash\n! # comment\n. b.sh\nfi\n".to_string(),
+                ..CheckSpec::default()
+            },
+        );
+        assert_eq!(out.sources, ["b.sh"]);
+        assert_eq!(
+            out.comments
+                .iter()
+                .map(|c| c.comment.code)
+                .collect::<Vec<_>>(),
+            [1072]
+        );
+    }
+
+    #[test]
     fn unchecked_cd_is_not_hidden_by_a_final_compound_command() {
         for body in [
             "if true; then cd /missing; echo continued; fi",

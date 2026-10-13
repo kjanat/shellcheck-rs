@@ -1131,7 +1131,7 @@ impl Parser {
         (contents, resolved)
     }
 
-    fn record_source(&mut self, name: &str) {
+    pub(super) fn record_source(&mut self, name: &str) {
         if !self.sources.iter().any(|s| s == name) {
             self.sources.push(name.to_string());
         }

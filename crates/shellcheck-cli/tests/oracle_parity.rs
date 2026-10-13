@@ -230,6 +230,16 @@ parity! {
             ],
         )
     };
+    sources_read_before_a_strict_reparse_are_listed = Case {
+        sources: &["./lib.sh"],
+        ..files(
+            &["-x", "-f", "json1", "main.sh"],
+            &[
+                ("main.sh", b"#!/bin/bash\n! # comment\n. ./lib.sh\nfi\n"),
+                ("lib.sh", b"v=1\n"),
+            ],
+        )
+    };
     sourced_file_without_external_sources = files(
         &["-f", "json1", "main.sh"],
         &[
