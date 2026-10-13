@@ -58,6 +58,7 @@ type Runner = Literal[
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = "rshellcheck-v"
+GO_PREFIX = "go/v"
 CROSS_VERSION = "0.2.5"
 NDK_VERSION = "30.0.16248370"
 ANDROID_API = 23
@@ -178,6 +179,29 @@ def target_entries() -> list[Target]:
     return [Target(target=t, runner=r, backend=b) for t, r, b in TARGETS]
 
 
+def companion_tag(version: str, commit: str) -> str:
+    """The Go installer at go/cmd/shellcheck resolves `go/v<version>` to the
+    release `rshellcheck-v<version>`, so both tags must name the same commit."""
+    tag = GO_PREFIX + version
+    listing = git(
+        "ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"
+    )
+    found: dict[str, str] = {}
+    for line in listing.splitlines():
+        sha, _, name = line.partition("\t")
+        found[name] = sha
+    points_at = found.get(f"refs/tags/{tag}^{{}}", found.get(f"refs/tags/{tag}"))
+    if points_at is None:
+        raise ValueError(
+            f"Tag {tag} is missing; the Go installer needs it on commit {commit[:12]}"
+        )
+    if points_at != commit:
+        raise ValueError(
+            f"Tag {tag} points at {points_at[:12]}, the release at {commit[:12]}"
+        )
+    return tag
+
+
 def plan(ref: str = "", event: str = "") -> Plan:
     meta = metadata()
     publishing = event == "push" and ref.startswith("refs/tags/")
@@ -186,6 +210,8 @@ def plan(ref: str = "", event: str = "") -> Plan:
         raise ValueError(
             f"Tag must be {expected}, matching both Cargo package versions"
         )
+    if publishing:
+        _ = companion_tag(meta["version"], meta["commit"])
     label = (
         meta["version"]
         if publishing

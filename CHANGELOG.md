@@ -8,6 +8,9 @@
 - Add `--files-from` option to read input files from a file
 - Support EditorConfig `shellcheck.*` keys
 - json1 documents carry `sources`, the files a run read through `source`
+- `go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@<version>`
+  installs a `shellcheck` command that fetches and runs the matching native
+  rshellcheck release
 
 ### Changed
 

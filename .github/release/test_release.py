@@ -106,11 +106,45 @@ class ReleaseTests(unittest.TestCase):
 
     def test_only_exact_push_tag_publishes(self):
         tag = "refs/tags/" + release.PREFIX + release.metadata()["version"]
-        self.assertTrue(release.plan(tag, "push")["publish"])
+        with patch.object(release, "companion_tag", return_value="go/v0.11.0") as go:
+            self.assertTrue(release.plan(tag, "push")["publish"])
+        go.assert_called_once()
         for event in ("pull_request", "workflow_dispatch"):
             self.assertFalse(release.plan(tag, event)["publish"])
         with self.assertRaisesRegex(ValueError, "Tag must be"):
             _ = release.plan("refs/tags/rshellcheck-v999.0.0", "push")
+
+    def test_publishing_requires_the_go_tag_on_the_same_commit(self):
+        tag = "refs/tags/" + release.PREFIX + release.metadata()["version"]
+        with (
+            patch.object(release, "git", return_value=""),
+            self.assertRaisesRegex(ValueError, "go/v0.11.0 is missing"),
+        ):
+            _ = release.plan(tag, "push")
+
+    def test_companion_tag_accepts_annotated_and_lightweight_tags(self):
+        commit = "a" * 40
+        annotated = (
+            f"{'b' * 40}\trefs/tags/go/v0.11.0\n{commit}\trefs/tags/go/v0.11.0^{{}}\n"
+        )
+        lightweight = f"{commit}\trefs/tags/go/v0.11.0\n"
+        for listing in (annotated, lightweight):
+            with patch.object(release, "git", return_value=listing) as git:
+                self.assertEqual(release.companion_tag("0.11.0", commit), "go/v0.11.0")
+            git.assert_called_once_with(
+                "ls-remote",
+                "--tags",
+                "origin",
+                "refs/tags/go/v0.11.0",
+                "refs/tags/go/v0.11.0^{}",
+            )
+        with (
+            patch.object(
+                release, "git", return_value=f"{'c' * 40}\trefs/tags/go/v0.11.0\n"
+            ),
+            self.assertRaisesRegex(ValueError, "points at cccccccccccc"),
+        ):
+            _ = release.companion_tag("0.11.0", commit)
 
     def test_matrix_has_unique_archives(self):
         matrix = release.plan()["matrix"]["include"]

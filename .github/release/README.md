@@ -41,9 +41,11 @@ no Haskell oracle or H2R compiler is built.
    builds all 15 targets on relevant PR changes and checks workspace unit tests
    and the 4,067-entry behavior snapshot.
 3. After the intended commit is merged, verify its required signature, then
-   create and push a tag such as `rshellcheck-v0.11.0`. A mismatched version
-   fails before any build job starts. Prerelease versions use tags such as
-   `rshellcheck-v0.12.0-rc.1` and become GitHub prereleases.
+   create and push a tag such as `rshellcheck-v0.11.0`, and on the same commit
+   the Go installer's tag `go/v0.11.0`. A mismatched version or a missing
+   `go/v<version>` tag fails before any build job starts. Prerelease versions
+   use tags such as `rshellcheck-v0.12.0-rc.1` and `go/v0.12.0-rc.1` and
+   become GitHub prereleases.
 4. All targets must succeed. Assembly verifies target headers, binary hashes,
    version, toolchain and source commit for every archive, then adds the source
    archive and SHA-256 checksums. Linux musl archives must contain static ELF
