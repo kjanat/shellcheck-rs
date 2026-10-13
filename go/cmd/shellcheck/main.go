@@ -28,7 +28,7 @@ const (
 	installWait    = 2 * time.Minute
 	staleLock      = 10 * time.Minute
 	pollInterval   = 100 * time.Millisecond
-	wrapperFailure = 2
+	wrapperFailure = 69
 )
 
 var targets = map[string]string{

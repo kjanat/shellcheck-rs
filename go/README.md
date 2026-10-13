@@ -55,9 +55,10 @@ plan step fails when `go/v<version>` is absent or names another commit.
 
 ## Exit codes
 
-rshellcheck's exit code passes through unchanged. The command exits 2 with a
+rshellcheck's exit code passes through unchanged. The command exits 69 with a
 `shellcheck: ...` line on stderr when it cannot resolve, download, verify or
-start the binary.
+start the binary. ShellCheck itself never exits 69, so a CI log separates the
+two failures.
 
 ## Development
 
