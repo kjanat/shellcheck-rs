@@ -22,7 +22,10 @@ import (
 )
 
 const (
-	releaseBase    = "https://github.com/kjanat/shellcheck-rs/releases/download"
+	repository     = "kjanat/shellcheck-rs"
+	releaseBase    = "https://github.com/" + repository + "/releases/download"
+	signerWorkflow = repository + "/.github/workflows/release.yml"
+	ghAuthRequired = 4
 	tagPrefix      = "rshellcheck-v"
 	maxArchive     = 256 << 20
 	installWait    = 2 * time.Minute
@@ -61,6 +64,8 @@ type release struct {
 	windows bool
 	base    string
 	dir     string
+	gh      string
+	log     io.Writer
 }
 
 func main() {
@@ -78,6 +83,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "shellcheck: %v\n", err)
 		return wrapperFailure
 	}
+	rel.gh, _ = exec.LookPath("gh")
+	rel.log = stderr
 	binary, err := rel.ensure(&http.Client{Timeout: 5 * time.Minute})
 	if err != nil {
 		fmt.Fprintf(stderr, "shellcheck: %v\n", err)
@@ -109,6 +116,7 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 		windows: goos == "windows",
 		base:    base + "/" + tagPrefix + label,
 		dir:     filepath.Join(cache, "rshellcheck", label, target),
+		log:     io.Discard,
 	}, nil
 }
 
@@ -194,6 +202,9 @@ func (r *release) install(client *http.Client, binary string) error {
 	if hex.EncodeToString(got[:]) != want {
 		return fmt.Errorf("%s: SHA-256 %x does not match SHA256SUMS", r.archive(), got)
 	}
+	if err := r.verify(data); err != nil {
+		return err
+	}
 	var contents []byte
 	if r.windows {
 		contents, err = fromZip(data, r.member())
@@ -229,6 +240,40 @@ func (r *release) install(client *http.Client, binary string) error {
 		return err
 	}
 	return nil
+}
+
+func (r *release) verify(data []byte) error {
+	name := r.archive()
+	if r.gh == "" {
+		fmt.Fprintf(r.log, "shellcheck: %s: provenance not verified, gh is not installed\n", name)
+		return nil
+	}
+	temp, err := os.CreateTemp(r.dir, ".archive-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp.Name())
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	command := exec.Command(r.gh, "attestation", "verify", temp.Name(),
+		"--repo", repository,
+		"--signer-workflow", signerWorkflow,
+		"--source-ref", "refs/tags/"+tagPrefix+r.label)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == ghAuthRequired {
+		fmt.Fprintf(r.log, "shellcheck: %s: provenance not verified, gh is not signed in\n", name)
+		return nil
+	}
+	return fmt.Errorf("%s: provenance verification failed: %w\n%s", name, err, bytes.TrimSpace(output))
 }
 
 func fetch(client *http.Client, url string) ([]byte, error) {

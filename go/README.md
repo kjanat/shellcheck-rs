@@ -31,18 +31,31 @@ this command inside the hook environment.
    Supported: linux amd64, 386, arm64, arm; darwin amd64, arm64; windows
    amd64, 386, arm64; freebsd amd64, 386; android arm64, arm, amd64, 386.
 3. Downloads `SHA256SUMS` and the archive for that target from
-   `github.com/kjanat/shellcheck-rs/releases`, checks the archive's SHA-256
-   against the checksum file, and unpacks `rshellcheck` into
-   `<user cache dir>/rshellcheck/<version>/<target>/`. The cache dir is
-   `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS,
-   `%LocalAppData%` on Windows.
-4. Concurrent first runs share one download: one process holds a lock file,
+   `github.com/kjanat/shellcheck-rs/releases` and checks the archive's
+   SHA-256 against the checksum file.
+4. When `gh` is on `PATH` and signed in, verifies the archive's SLSA
+   provenance:
+
+   ```sh
+   gh attestation verify <archive> --repo kjanat/shellcheck-rs \
+     --signer-workflow kjanat/shellcheck-rs/.github/workflows/release.yml \
+     --source-ref refs/tags/rshellcheck-v<version>
+   ```
+
+   A failed verification aborts the install. Without `gh`, or with `gh`
+   signed out, the install goes on and prints one
+   `shellcheck: <archive>: provenance not verified, ...` line on stderr.
+5. Unpacks `rshellcheck` into `<user cache dir>/rshellcheck/<version>/<target>/`.
+   The cache dir is `$XDG_CACHE_HOME` or `~/.cache` on Linux,
+   `~/Library/Caches` on macOS, `%LocalAppData%` on Windows.
+6. Concurrent first runs share one download: one process holds a lock file,
    the others wait for the binary to appear.
 
 The first run needs network access to github.com. A CI runner without a
 persistent cache directory downloads once per job. The trust root is GitHub
-over TLS plus the release's checksum file; the command does not verify the
-release's sigstore attestations.
+over TLS plus the release's checksum file, and the release's sigstore
+attestation wherever a signed-in `gh` is present. GitHub-hosted runners
+ship `gh` and the hook inherits `GH_TOKEN` when the job sets it.
 
 A build from an untagged revision (`@master`, `@<commit>`, `go run .`) has no
 matching release and exits with a message asking for a tagged version.

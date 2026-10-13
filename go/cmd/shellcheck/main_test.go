@@ -19,9 +19,33 @@ import (
 	"time"
 )
 
-const helperEnv = "RSHELLCHECK_HELPER_PROCESS"
+const (
+	helperEnv = "RSHELLCHECK_HELPER_PROCESS"
+	ghEnv     = "RSHELLCHECK_HELPER_GH"
+	ghLogEnv  = "RSHELLCHECK_HELPER_GH_LOG"
+)
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv(ghEnv); mode != "" {
+		if log := os.Getenv(ghLogEnv); log != "" {
+			handle, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err != nil {
+				os.Exit(99)
+			}
+			fmt.Fprintln(handle, strings.Join(os.Args[1:], " "))
+			handle.Close()
+		}
+		switch mode {
+		case "ok":
+			os.Exit(0)
+		case "noauth":
+			fmt.Fprintln(os.Stderr, "To get started with GitHub CLI, please run:  gh auth login")
+			os.Exit(4)
+		default:
+			fmt.Fprintln(os.Stderr, "Error: HTTP 404: Not Found")
+			os.Exit(1)
+		}
+	}
 	if os.Getenv(helperEnv) == "1" {
 		args := os.Args[1:]
 		for i, arg := range args {
@@ -218,6 +242,13 @@ func sumsFor(archive string, data []byte) []byte {
 
 func TestEnsureDownloadsVerifiesAndCaches(t *testing.T) {
 	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	var log bytes.Buffer
+	rel.log = &log
+	defer func() {
+		if log.String() != "shellcheck: rshellcheck-0.11.0-x86_64-unknown-linux-musl.tar.gz: provenance not verified, gh is not installed\n" {
+			t.Errorf("log %q", log.String())
+		}
+	}()
 	payload := []byte("#!/bin/sh\necho native\n")
 	archive := tarGz(t, rel.member(), payload)
 	fake := serve(t, map[string][]byte{
@@ -254,6 +285,95 @@ func TestEnsureDownloadsVerifiesAndCaches(t *testing.T) {
 	}
 	if fake.hits.Load() != 2 {
 		t.Fatalf("%d requests after a cache hit", fake.hits.Load())
+	}
+}
+
+func ghRelease(t *testing.T, mode string) (*release, *fakeRelease, string) {
+	t.Helper()
+	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	archive := tarGz(t, rel.member(), []byte("native"))
+	fake := serve(t, map[string][]byte{
+		"/rshellcheck-v0.11.0/SHA256SUMS":                                          sumsFor(rel.archive(), archive),
+		"/rshellcheck-v0.11.0/rshellcheck-0.11.0-x86_64-unknown-linux-musl.tar.gz": archive,
+	})
+	rel.base = fake.server.URL + "/rshellcheck-v0.11.0"
+	rel.gh = os.Args[0]
+	calls := filepath.Join(t.TempDir(), "gh.log")
+	t.Setenv(ghEnv, mode)
+	t.Setenv(ghLogEnv, calls)
+	return rel, fake, calls
+}
+
+func TestInstallVerifiesProvenanceWithGh(t *testing.T) {
+	rel, fake, calls := ghRelease(t, "ok")
+	var log bytes.Buffer
+	rel.log = &log
+	binary, err := rel.ensure(fake.server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(binary)
+	if string(got) != "native" {
+		t.Fatalf("%q", got)
+	}
+	if log.Len() != 0 {
+		t.Fatalf("log %q", log.String())
+	}
+	invocation, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(invocation))
+	for _, want := range []string{
+		"attestation verify " + filepath.Join(rel.dir, ".archive-"),
+		" --repo kjanat/shellcheck-rs ",
+		" --signer-workflow kjanat/shellcheck-rs/.github/workflows/release.yml ",
+		" --source-ref refs/tags/rshellcheck-v0.11.0",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("gh invocation %q lacks %q", line, want)
+		}
+	}
+	if strings.Count(string(invocation), "\n") != 1 {
+		t.Fatalf("gh ran %d times", strings.Count(string(invocation), "\n"))
+	}
+	entries, err := os.ReadDir(rel.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "rshellcheck" {
+		t.Fatalf("cache dir holds %v", entries)
+	}
+}
+
+func TestInstallFailsWhenProvenanceVerificationFails(t *testing.T) {
+	rel, fake, _ := ghRelease(t, "fail")
+	_, err := rel.ensure(fake.server.Client())
+	if err == nil || !strings.Contains(err.Error(), "provenance verification failed") || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(rel.binary()); !os.IsNotExist(err) {
+		t.Fatal("binary installed despite a failed verification")
+	}
+	entries, _ := os.ReadDir(rel.dir)
+	if len(entries) != 0 {
+		t.Fatalf("cache dir holds %v", entries)
+	}
+}
+
+func TestInstallSkipsVerificationWhenGhIsSignedOut(t *testing.T) {
+	rel, fake, _ := ghRelease(t, "noauth")
+	var log bytes.Buffer
+	rel.log = &log
+	binary, err := rel.ensure(fake.server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatal(err)
+	}
+	if log.String() != "shellcheck: rshellcheck-0.11.0-x86_64-unknown-linux-musl.tar.gz: provenance not verified, gh is not signed in\n" {
+		t.Fatalf("log %q", log.String())
 	}
 }
 
