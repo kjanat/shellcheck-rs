@@ -50,8 +50,9 @@ var targets = map[string]string{
 }
 
 var (
-	taggedVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
-	pseudoVersion = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}$`)
+	taggedVersion   = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+	pseudoVersion   = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}$`)
+	wrapperRevision = regexp.MustCompile(`-wrapper\.\d+$`)
 )
 
 type release struct {
@@ -101,7 +102,7 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 	if !ok {
 		return nil, fmt.Errorf("no rshellcheck release for %s/%s", goos, goarch)
 	}
-	label := strings.TrimPrefix(version, "v")
+	label := releaseLabel(version)
 	return &release{
 		label:   label,
 		target:  target,
@@ -109,6 +110,10 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 		base:    base + "/" + tagPrefix + label,
 		dir:     filepath.Join(cache, "rshellcheck", label, target),
 	}, nil
+}
+
+func releaseLabel(version string) string {
+	return wrapperRevision.ReplaceAllLiteralString(strings.TrimPrefix(version, "v"), "")
 }
 
 func (r *release) archive() string {
