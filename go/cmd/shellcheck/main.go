@@ -101,7 +101,7 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 	if !ok {
 		return nil, fmt.Errorf("no rshellcheck release for %s/%s", goos, goarch)
 	}
-	label := strings.TrimPrefix(version, "v")
+	label := releaseLabel(version)
 	return &release{
 		label:   label,
 		target:  target,
@@ -109,6 +109,35 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 		base:    base + "/" + tagPrefix + label,
 		dir:     filepath.Join(cache, "rshellcheck", label, target),
 	}, nil
+}
+
+func releaseLabel(version string) string {
+	label := strings.TrimPrefix(version, "v")
+	core, pre, ok := strings.Cut(label, "-")
+	if !ok {
+		return label
+	}
+	ids := strings.Split(pre, ".")
+	last := len(ids) - 1
+	if last >= 1 && ids[last-1] == "wrapper" && isDigits(ids[last]) {
+		ids = ids[:last-1]
+	}
+	if len(ids) == 0 {
+		return core
+	}
+	return core + "-" + strings.Join(ids, ".")
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *release) archive() string {

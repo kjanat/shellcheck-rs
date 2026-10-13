@@ -80,6 +80,36 @@ func TestResolveNamesArchivesLikeTheRelease(t *testing.T) {
 	}
 }
 
+func TestWrapperRevisionsShareTheirRelease(t *testing.T) {
+	cases := map[string]string{
+		"v0.11.0":                     "0.11.0",
+		"v0.11.0-wrapper.1":           "0.11.0",
+		"v0.11.0-wrapper.12":          "0.11.0",
+		"v0.12.0-rc.1":                "0.12.0-rc.1",
+		"v0.12.0-rc.1.wrapper.2":      "0.12.0-rc.1",
+		"v0.11.0-wrapper":             "0.11.0-wrapper",
+		"v0.11.0-wrapper.x":           "0.11.0-wrapper.x",
+		"v0.11.0-beta.wrapper.1":      "0.11.0-beta",
+		"v0.11.0-wrapper.1.rc.1":      "0.11.0-wrapper.1.rc.1",
+		"v0.11.0-wrapper.1.wrapper.2": "0.11.0-wrapper.1",
+	}
+	for version, label := range cases {
+		if got := releaseLabel(version); got != label {
+			t.Errorf("%s: %s", version, got)
+		}
+	}
+	rel, err := resolve("v0.11.0-wrapper.1", "linux", "amd64", "https://example.test/d", "/cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.base != "https://example.test/d/rshellcheck-v0.11.0" || rel.archive() != "rshellcheck-0.11.0-x86_64-unknown-linux-musl.tar.gz" {
+		t.Fatalf("%+v", rel)
+	}
+	if rel.dir != filepath.Join("/cache", "rshellcheck", "0.11.0", "x86_64-unknown-linux-musl") {
+		t.Fatal(rel.dir)
+	}
+}
+
 func TestResolveRejectsUntaggedBuildsAndUnknownPlatforms(t *testing.T) {
 	for _, version := range []string{"", "(devel)", "v0.0.0-20261013094512-67f912e61b5a", "v0.11.0+dirty", "0.11.0"} {
 		if _, err := resolve(version, "linux", "amd64", "b", "c"); err == nil {
