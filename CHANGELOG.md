@@ -7,6 +7,7 @@
   (bash `require-double-equals`)
 - Add `--files-from` option to read input files from a file
 - Support EditorConfig `shellcheck.*` keys
+- json1 documents carry `sources`, the files a run read through `source`
 
 ### Changed
 
