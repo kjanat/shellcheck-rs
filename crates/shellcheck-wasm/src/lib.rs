@@ -106,7 +106,8 @@ fn analyze(input: &[u8]) -> Result<Value, String> {
             "message": c.comment.message, "fix": fix})
     }).collect();
     Ok(json!({"comments": comments,
-        "dataflowError": result.dataflow_error.map(|e| format!("{e:?}"))}))
+        "dataflowError": result.dataflow_error.map(|e| format!("{e:?}")),
+        "sources": result.sources}))
 }
 
 /// Analyze a UTF-8 JSON request. Errors are returned as an `error` JSON object.
@@ -149,6 +150,7 @@ mod tests {
         let script = "#!/bin/sh\n. shared.sh\necho \"$shared\"\n";
         let with_file = check(json!({"script": script, "files": {"shared.sh": "shared=hello\n"}}));
         assert_eq!(with_file["comments"], json!([]));
+        assert_eq!(with_file["sources"], json!(["shared.sh"]));
         let without_file = check(json!({"script": script}));
         assert!(
             without_file["comments"]
@@ -157,6 +159,7 @@ mod tests {
                 .iter()
                 .any(|c| c["code"] == 1091)
         );
+        assert_eq!(without_file["sources"], json!([]));
     }
 
     #[test]

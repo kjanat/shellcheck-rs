@@ -91,12 +91,14 @@ There is no filesystem search, `source-path` resolution, rc-file or EditorConfig
 loading. Supply options explicitly and use inline ShellCheck directives. Missing
 source files yield diagnostics; the module never reads host files.
 
-Success returns `{comments: [...], dataflowError: null}`. Comments include `file`,
-`line`, `column`, `endLine`, `endColumn`, `level`, numeric `code`, `message` and
-`fix`. Fix replacements include source file, range, text, insertion point and
-precedence. Positions are **1-based character columns with eight-column tab
-stops**, not UTF-8 bytes or UTF-16 offsets. A non-null `dataflowError` means some
-analysis was skipped; do not treat an empty comments array as a clean result then.
+Success returns `{comments: [...], dataflowError: null, sources: [...]}`. Comments
+include `file`, `line`, `column`, `endLine`, `endColumn`, `level`, numeric `code`,
+`message` and `fix`. Fix replacements include source file, range, text, insertion
+point and precedence. Positions are **1-based character columns with eight-column
+tab stops**, not UTF-8 bytes or UTF-16 offsets. A non-null `dataflowError` means
+some analysis was skipped; do not treat an empty comments array as a clean result
+then. `sources` lists every key of `files` the analysis read through `source` or
+`.`, transitively, each once, in the order they were first read.
 
 Invalid requests return `{error: "..."}` at the ABI boundary; wrappers raise an
 exception/return an error. Such errors leave the instance reusable. WASM traps

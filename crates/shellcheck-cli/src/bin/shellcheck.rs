@@ -227,6 +227,7 @@ struct Loaded {
     comments: Vec<PositionedComment>,
     /// Why the analysis is incomplete, reported as a read failure is.
     failure: Option<String>,
+    sources: Vec<String>,
 }
 
 enum Input {
@@ -337,6 +338,7 @@ fn analyze_input(spec: CheckSpec, sys: Rc<IoSystem>) -> Input {
         sys,
         comments: result.comments,
         failure: result.dataflow_error.map(dataflow_failure),
+        sources: result.sources,
     })
 }
 
@@ -418,6 +420,7 @@ fn load_parallel(
                 sys: Rc::new(sys.for_input(&inputs[index])),
                 comments: result.comments,
                 failure: result.dataflow_error.map(dataflow_failure),
+                sources: result.sources,
             });
         }
     });
@@ -513,7 +516,10 @@ fn run(config: RunConfig) -> ExitCode {
     let mut err = stderr.lock();
 
     let written = match format.as_str() {
-        "json1" => print_json(json1::render(&json1_comments(&loaded, &mut err)), &mut out),
+        "json1" => print_json(
+            json1::render(&json1_comments(&loaded, &mut err), &json1_sources(&loaded)),
+            &mut out,
+        ),
         "json" => print_json(json::render(&json_comments(&loaded, &mut err)), &mut out),
         "gcc" => {
             write_gcc(&loaded, &mut out, &mut err);
@@ -564,6 +570,21 @@ fn json1_comments(loaded: &[Input], err: &mut impl Write) -> Vec<PositionedComme
         }
         if let Some((name, message)) = i.failure() {
             let _ = writeln!(err, "{name}: {message}");
+        }
+    }
+    all
+}
+
+/// The json1 sources: every input's, in input order, each file once.
+fn json1_sources(loaded: &[Input]) -> Vec<String> {
+    let mut all: Vec<String> = Vec::new();
+    for i in loaded {
+        if let Input::Ok(l) = i {
+            for source in &l.sources {
+                if !all.contains(source) {
+                    all.push(source.clone());
+                }
+            }
         }
     }
     all
@@ -904,18 +925,21 @@ mod tests {
                 sys: no_sources(),
                 comments: vec![comment_in("a.sh", 2)],
                 failure: failure.clone(),
+                sources: vec!["./lib.sh".to_string()],
             }),
             Input::Ok(Loaded {
                 name: "b.sh".to_string(),
                 sys: no_sources(),
                 comments: Vec::new(),
                 failure: None,
+                sources: vec!["./lib.sh".to_string(), "util.sh".to_string()],
             }),
             Input::Ok(Loaded {
                 name: "c.sh".to_string(),
                 sys: no_sources(),
                 comments: Vec::new(),
                 failure,
+                sources: Vec::new(),
             }),
         ]
     }
@@ -950,10 +974,14 @@ mod tests {
     #[test]
     fn json1_keeps_numeric_codes_and_reports_the_failure_on_stderr() {
         let mut err = Vec::new();
-        let doc =
-            json1::render(&json1_comments(&injected(), &mut err)).unwrap_or_else(|e| panic!("{e}"));
+        let doc = json1::render(
+            &json1_comments(&injected(), &mut err),
+            &json1_sources(&injected()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         let value: serde_json::Value = serde_json::from_str(&doc).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(value["comments"][0]["code"], serde_json::json!(2086));
+        assert_eq!(value["sources"], serde_json::json!(["./lib.sh", "util.sh"]));
         assert!(!doc.contains("RSC"), "{doc}");
         assert_eq!(text(err), format!("a.sh: {MESSAGE}\nc.sh: {MESSAGE}\n"));
 

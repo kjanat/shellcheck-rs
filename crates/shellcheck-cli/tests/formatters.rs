@@ -137,9 +137,15 @@ fn checkstyle_clean_file_has_empty_block() {
 
 #[test]
 fn json1_matches_oracle() {
-    let out = json1::render(&sample()).unwrap();
-    let expected = r#"{"comments":[{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"warning","code":2046,"message":"Quote this to prevent word splitting.","fix":null},{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"style","code":2005,"message":"Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.","fix":null},{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"style","code":2006,"message":"Use $(...) notation instead of legacy backticks `...`.","fix":{"replacements":[{"column":6,"endColumn":7,"endLine":2,"insertionPoint":"afterEnd","line":2,"precedence":7,"replacement":"$("},{"column":11,"endColumn":12,"endLine":2,"insertionPoint":"beforeStart","line":2,"precedence":7,"replacement":")"}]}}]}"#;
+    let out = json1::render(&sample(), &[]).unwrap();
+    let expected = r#"{"comments":[{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"warning","code":2046,"message":"Quote this to prevent word splitting.","fix":null},{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"style","code":2005,"message":"Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.","fix":null},{"file":"fix.sh","line":2,"endLine":2,"column":6,"endColumn":12,"level":"style","code":2006,"message":"Use $(...) notation instead of legacy backticks `...`.","fix":{"replacements":[{"column":6,"endColumn":7,"endLine":2,"insertionPoint":"afterEnd","line":2,"precedence":7,"replacement":"$("},{"column":11,"endColumn":12,"endLine":2,"insertionPoint":"beforeStart","line":2,"precedence":7,"replacement":")"}]}}],"sources":[]}"#;
     assert_eq!(out, expected);
+}
+
+#[test]
+fn json1_lists_the_sources_after_the_comments() {
+    let out = json1::render(&[], &["./lib.sh".to_string(), "util/x.sh".to_string()]).unwrap();
+    assert_eq!(out, r#"{"comments":[],"sources":["./lib.sh","util/x.sh"]}"#);
 }
 
 #[test]

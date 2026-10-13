@@ -101,6 +101,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         filename: spec.filename.clone(),
         comments: positioned,
         dataflow_error,
+        sources: parse.sources,
     }
 }
 
@@ -325,6 +326,36 @@ mod source_tests {
     /// `check`: no includes at all, so every source fails to resolve.
     fn check(script: &str) -> Vec<i64> {
         check_with_includes(&[], script)
+    }
+
+    fn sources(includes: &[(&str, &str)], script: &str) -> Vec<String> {
+        check_script_with(
+            Rc::new(MockSystem::new(includes)),
+            &CheckSpec {
+                script: script.to_string(),
+                ..CheckSpec::default()
+            },
+        )
+        .sources
+    }
+
+    #[test]
+    fn sources_lists_each_read_file_once_in_read_order() {
+        let includes = [
+            ("a.sh", ". b.sh\n. c.sh\n"),
+            ("b.sh", "v=1\n"),
+            ("c.sh", "w=2\n"),
+            ("broken.sh", "if true\n"),
+        ];
+        assert_eq!(
+            sources(
+                &includes,
+                ". a.sh\n. c.sh\n. /dev/null\n. missing.sh\n. \"$dyn\"\n"
+            ),
+            ["a.sh", "b.sh", "c.sh"]
+        );
+        assert_eq!(sources(&includes, ". broken.sh\n"), ["broken.sh"]);
+        assert_eq!(sources(&includes, "echo hi\n"), [] as [&str; 0]);
     }
 
     #[test]

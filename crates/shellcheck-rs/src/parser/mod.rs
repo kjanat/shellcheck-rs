@@ -230,6 +230,9 @@ pub struct ParseOutput {
     pub notes: Vec<ParseNote>,
     /// `prTokenPositions`: each token's start and end.
     pub positions: BTreeMap<Id, (Position, Position)>,
+    /// The sourced files that were read, by resolved name, each once, in the
+    /// order they were first read.
+    pub sources: Vec<String>,
 }
 
 /// Cursor snapshot for backtracking.
@@ -363,6 +366,7 @@ pub struct Parser {
     /// stays put while sourced files are read -- `SCRIPTDIR` is relative to it,
     /// not to whichever file the `source` was written in.
     root_filename: String,
+    sources: Vec<String>,
 }
 
 /// Whether a `!` with nothing to negate parses, for bash.
@@ -501,6 +505,7 @@ impl Parser {
             sys: Rc::new(NoExternalSources),
             check_sourced: false,
             root_filename: filename.to_string(),
+            sources: Vec::new(),
             input: script.chars().collect(),
             idx: 0,
             line: 1,
@@ -1791,6 +1796,7 @@ fn parse_to_output(p: &mut Parser) -> ParseOutput {
             root: None,
             notes,
             positions: BTreeMap::new(),
+            sources: std::mem::take(&mut p.sources),
         };
     }
     // Reattach here-doc bodies collected during parsing.
@@ -1810,6 +1816,7 @@ fn parse_to_output(p: &mut Parser) -> ParseOutput {
             root: None,
             notes,
             positions: BTreeMap::new(),
+            sources: std::mem::take(&mut p.sources),
         };
     }
     // Parse succeeded (we always return a tree in the slice); emit notes+problems.
@@ -1819,6 +1826,7 @@ fn parse_to_output(p: &mut Parser) -> ParseOutput {
         root,
         notes,
         positions: std::mem::take(&mut p.positions),
+        sources: std::mem::take(&mut p.sources),
     }
 }
 

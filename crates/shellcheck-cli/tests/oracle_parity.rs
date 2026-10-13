@@ -12,6 +12,9 @@ struct Case {
     files: &'static [(&'static str, &'static [u8])],
     unreadable: &'static [&'static str],
     full_stdout: bool,
+    /// The port's json1 `sources`: the oracle's document is expected to carry
+    /// exactly this list appended.
+    sources: &'static [&'static str],
 }
 
 const fn script(stdin: &'static [u8]) -> Case {
@@ -21,6 +24,7 @@ const fn script(stdin: &'static [u8]) -> Case {
         files: &[],
         unreadable: &[],
         full_stdout: false,
+        sources: &[],
     }
 }
 
@@ -34,6 +38,7 @@ const fn files(
         files,
         unreadable: &[],
         full_stdout: false,
+        sources: &[],
     }
 }
 
@@ -104,7 +109,7 @@ fn assert_parity(name: &str, case: &Case) -> io::Result<()> {
     for path in case.unreadable {
         std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o000))?;
     }
-    let oracle = run(&oracle()?, &dir, case);
+    let oracle = run(&oracle()?, &dir, case).map(|run| with_sources(run, case.sources));
     let port = run(Path::new(env!("CARGO_BIN_EXE_rshellcheck")), &dir, case);
     for path in case.unreadable {
         std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o644))?;
@@ -115,6 +120,13 @@ fn assert_parity(name: &str, case: &Case) -> io::Result<()> {
         "{name}: port (left) and oracle (right) differ"
     );
     Ok(())
+}
+
+fn with_sources(mut run: Run, sources: &[&str]) -> Run {
+    if let Some(doc) = run.stdout.strip_suffix("}\n") {
+        run.stdout = format!("{doc},\"sources\":{}}}\n", serde_json::json!(sources));
+    }
+    run
 }
 
 macro_rules! parity {
@@ -176,20 +188,48 @@ parity! {
     shebang_hash_space = script(b"# /bin/sh\necho hi\n");
     escapes_in_double_quotes = script(b"#!/bin/sh\n[ \"\\$a\" = '$a' ]\nx=\"\\$HOME\"\ncase \"\\$x\" in '$x') :;; esac\necho \"$x\"\n");
     unicode_quotes = script("#!/bin/sh\necho \u{201c}$HOME\u{201d}\necho \u{2018}hi\u{2019}\n".as_bytes());
-    sourced_file_with_check_sourced = files(
-        &["-x", "-a", "-f", "json1", "main.sh"],
-        &[
-            ("main.sh", b"#!/bin/sh\n. ./lib.sh\necho \"$v\"\n"),
-            ("lib.sh", b"v=$1\necho $v\n"),
-        ],
-    );
-    sourced_file_named_by_a_directive = files(
-        &["-x", "-f", "json1", "main.sh"],
-        &[
-            ("main.sh", b"#!/bin/sh\n# shellcheck source=lib.sh\n. \"$dir/lib.sh\"\necho \"$v\"\n"),
-            ("lib.sh", b"v=1\n"),
-        ],
-    );
+    sourced_file_with_check_sourced = Case {
+        sources: &["./lib.sh"],
+        ..files(
+            &["-x", "-a", "-f", "json1", "main.sh"],
+            &[
+                ("main.sh", b"#!/bin/sh\n. ./lib.sh\necho \"$v\"\n"),
+                ("lib.sh", b"v=$1\necho $v\n"),
+            ],
+        )
+    };
+    sourced_file_named_by_a_directive = Case {
+        sources: &["lib.sh"],
+        ..files(
+            &["-x", "-f", "json1", "main.sh"],
+            &[
+                ("main.sh", b"#!/bin/sh\n# shellcheck source=lib.sh\n. \"$dir/lib.sh\"\necho \"$v\"\n"),
+                ("lib.sh", b"v=1\n"),
+            ],
+        )
+    };
+    nested_sources_are_listed_once_each_in_read_order = Case {
+        sources: &["./a.sh", "./b.sh", "./c.sh"],
+        ..files(
+            &["-x", "-f", "json1", "main.sh"],
+            &[
+                ("main.sh", b"#!/bin/sh\n. ./a.sh\n. ./c.sh\necho \"$v\"\n"),
+                ("a.sh", b". ./b.sh\n. ./c.sh\n"),
+                ("b.sh", b"v=1\n"),
+                ("c.sh", b"w=2\n"),
+            ],
+        )
+    };
+    a_sourced_file_that_does_not_parse_is_still_listed = Case {
+        sources: &["./broken.sh"],
+        ..files(
+            &["-x", "-f", "json1", "main.sh"],
+            &[
+                ("main.sh", b"#!/bin/sh\n. ./broken.sh\n"),
+                ("broken.sh", b"if true\n"),
+            ],
+        )
+    };
     sourced_file_without_external_sources = files(
         &["-f", "json1", "main.sh"],
         &[
@@ -343,23 +383,29 @@ parity! {
         &["-f", "json1", "x.sh"],
         &[(".shellcheckrc", b"shell=bash\n"), ("x.sh", b"#!/bin/sh\necho $'x' $1\n")],
     );
-    shellcheckrc_allows_external_sources = files(
-        &["-f", "json1", "main.sh"],
-        &[
-            (".shellcheckrc", b"external-sources=true\n"),
-            ("main.sh", b"#!/bin/bash\nsource ./lib.sh\necho \"$v\"\n"),
-            ("lib.sh", b"v=$1\n"),
-        ],
-    );
-    file_can_disable_external_sources = files(
-        &["-f", "json1", "main.sh"],
-        &[
-            (".shellcheckrc", b"external-sources=true\n"),
-            ("main.sh", b"#!/bin/bash\ntrue\nsource ./a.sh\n# shellcheck external-sources=false\nsource ./b.sh\n"),
-            ("a.sh", b"echo $1\n"),
-            ("b.sh", b"_=`foo`\n"),
-        ],
-    );
+    shellcheckrc_allows_external_sources = Case {
+        sources: &["./lib.sh"],
+        ..files(
+            &["-f", "json1", "main.sh"],
+            &[
+                (".shellcheckrc", b"external-sources=true\n"),
+                ("main.sh", b"#!/bin/bash\nsource ./lib.sh\necho \"$v\"\n"),
+                ("lib.sh", b"v=$1\n"),
+            ],
+        )
+    };
+    file_can_disable_external_sources = Case {
+        sources: &["./a.sh"],
+        ..files(
+            &["-f", "json1", "main.sh"],
+            &[
+                (".shellcheckrc", b"external-sources=true\n"),
+                ("main.sh", b"#!/bin/bash\ntrue\nsource ./a.sh\n# shellcheck external-sources=false\nsource ./b.sh\n"),
+                ("a.sh", b"echo $1\n"),
+                ("b.sh", b"_=`foo`\n"),
+            ],
+        )
+    };
     file_cannot_enable_external_sources = files(
         &["-f", "json1", "main.sh"],
         &[

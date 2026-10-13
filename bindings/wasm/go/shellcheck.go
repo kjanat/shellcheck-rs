@@ -42,7 +42,7 @@ func New(ctx context.Context, wasm []byte) (*Checker, error) {
 	return c, nil
 }
 
-// Check accepts the shared JSON request and returns diagnostics, fixes and dataflowError.
+// Check accepts the shared JSON request and returns diagnostics, fixes, dataflowError and sources.
 // Request validation errors leave the instance usable; runtime traps invalidate it.
 func (c *Checker) Check(ctx context.Context, request json.RawMessage) (json.RawMessage, error) {
 	c.mu.Lock()

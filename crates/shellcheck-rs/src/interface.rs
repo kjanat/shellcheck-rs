@@ -507,6 +507,10 @@ pub struct CheckResult {
     /// The internal error that stopped the dataflow analysis, where upstream
     /// dies. The checks that need it did not run, so `comments` is incomplete.
     pub dataflow_error: Option<crate::cfg::InternalError>,
+    /// The sourced files that were read, by resolved name, each once, in the
+    /// order they were first read. A file that was refused, missing or
+    /// recursively sourced is not in it.
+    pub sources: Vec<String>,
 }
 
 /// Position span map: token id -> (start, end).
