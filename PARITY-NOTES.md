@@ -222,7 +222,7 @@ echo 'x=$(coproc foo)' | shellcheck -
 **You get**
 
 ```
-shellcheck-oracle: src/ShellCheck/Analytics.hs:5270:5-93: Non-exhaustive patterns in function checkCmd
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5275:5-93: Non-exhaustive patterns in function checkCmd
 ```
 
 Nothing else: no diagnostics, no JSON, exit status 1. Every spelling of the same
@@ -245,7 +245,7 @@ In a.sh line 2:
 echo $x
      ^-- SC2154 (warning): x is referenced but not assigned.
 ...
-shellcheck-oracle: src/ShellCheck/Analytics.hs:5270:5-93: Non-exhaustive patterns in function checkCmd
+shellcheck-oracle: src/ShellCheck/Analytics.hs:5275:5-93: Non-exhaustive patterns in function checkCmd
 ```
 
 With `--format=json1` there is no output at all, so an editor integration or a
@@ -275,6 +275,26 @@ Two other last elements crash the same way: a `source` or `.` command, which
 parses to `T_SourceCommand` (`x=$(source /dev/null)`, valid bash), and a negated
 command, which parses to `T_Banged` (`x=$(a | ! b)`, which bash rejects and the
 port reports as SC2326).
+
+The `source` case also fires on a file the parser reads. With `-x` and the file
+present, the parse succeeds and the analysis dies on the same equation:
+
+```sh
+printf 'v=1\n' > lib.sh
+printf '#!/bin/bash\necho `. ./lib.sh`\n' > main.sh
+shellcheck -x -f json1 main.sh
+```
+
+```
+shellcheck-oracle: Uncaught exception ghc-internal:GHC.Internal.Control.Exception.Base.PatternMatchFail:
+
+src/ShellCheck/Analytics.hs:5275:5-93: Non-exhaustive patterns in function checkCmd
+```
+
+A here-document body holding `$(. ./lib.sh)` crashes the same way. The port
+checks both and lists the file in json1 `sources`;
+`sources_read_inside_sub_parsed_fragments_are_listed` in `checker.rs` holds the
+scripts.
 
 **Port.** The port does not crash: it reports SC2148 and SC2034 for
 `x=$(coproc foo)` and carries on. That is not a sanctioned deviation — there is
