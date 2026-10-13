@@ -54,9 +54,9 @@ for the binaries and `go/v<version>` for this module. The release workflow's
 plan step fails when `go/v<version>` is absent or names another commit.
 
 A fix to this command alone ships as `go/v<version>-wrapper.<n>` on the fix
-commit, with `n` counting from 1. That build runs the same
-`rshellcheck-v<version>` binaries. Go treats the tag as a pre-release, so
-users pin it explicitly:
+commit, with `n` counting from 1, for a pre-release `go/v0.12.0-rc.1-wrapper.1`.
+That build runs the same `rshellcheck-v<version>` binaries. Go treats the tag
+as a pre-release, so users pin it explicitly:
 
 ```sh
 go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v0.11.0-wrapper.1

@@ -86,12 +86,12 @@ func TestWrapperRevisionsShareTheirRelease(t *testing.T) {
 		"v0.11.0-wrapper.1":           "0.11.0",
 		"v0.11.0-wrapper.12":          "0.11.0",
 		"v0.12.0-rc.1":                "0.12.0-rc.1",
-		"v0.12.0-rc.1.wrapper.2":      "0.12.0-rc.1",
+		"v0.12.0-rc.1-wrapper.2":      "0.12.0-rc.1",
 		"v0.11.0-wrapper":             "0.11.0-wrapper",
 		"v0.11.0-wrapper.x":           "0.11.0-wrapper.x",
-		"v0.11.0-beta.wrapper.1":      "0.11.0-beta",
-		"v0.11.0-wrapper.1.rc.1":      "0.11.0-wrapper.1.rc.1",
-		"v0.11.0-wrapper.1.wrapper.2": "0.11.0-wrapper.1",
+		"v0.11.0-wrapper.1-rc.1":      "0.11.0-wrapper.1-rc.1",
+		"v0.11.0-wrapper.1-wrapper.2": "0.11.0-wrapper.1",
+		"v0.12.0-rc.1.wrapper.2":      "0.12.0-rc.1.wrapper.2",
 	}
 	for version, label := range cases {
 		if got := releaseLabel(version); got != label {
@@ -107,6 +107,13 @@ func TestWrapperRevisionsShareTheirRelease(t *testing.T) {
 	}
 	if rel.dir != filepath.Join("/cache", "rshellcheck", "0.11.0", "x86_64-unknown-linux-musl") {
 		t.Fatal(rel.dir)
+	}
+	pre, err := resolve("v0.12.0-rc.1-wrapper.2", "windows", "amd64", "https://example.test/d", "/cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pre.base != "https://example.test/d/rshellcheck-v0.12.0-rc.1" || pre.archive() != "rshellcheck-0.12.0-rc.1-x86_64-pc-windows-msvc.zip" {
+		t.Fatalf("%+v", pre)
 	}
 }
 

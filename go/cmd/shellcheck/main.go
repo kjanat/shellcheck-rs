@@ -50,8 +50,9 @@ var targets = map[string]string{
 }
 
 var (
-	taggedVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
-	pseudoVersion = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}$`)
+	taggedVersion   = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+	pseudoVersion   = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}$`)
+	wrapperRevision = regexp.MustCompile(`-wrapper\.\d+$`)
 )
 
 type release struct {
@@ -112,32 +113,7 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 }
 
 func releaseLabel(version string) string {
-	label := strings.TrimPrefix(version, "v")
-	core, pre, ok := strings.Cut(label, "-")
-	if !ok {
-		return label
-	}
-	ids := strings.Split(pre, ".")
-	last := len(ids) - 1
-	if last >= 1 && ids[last-1] == "wrapper" && isDigits(ids[last]) {
-		ids = ids[:last-1]
-	}
-	if len(ids) == 0 {
-		return core
-	}
-	return core + "-" + strings.Join(ids, ".")
-}
-
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return wrapperRevision.ReplaceAllLiteralString(strings.TrimPrefix(version, "v"), "")
 }
 
 func (r *release) archive() string {
