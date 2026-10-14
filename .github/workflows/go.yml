@@ -3,13 +3,8 @@ name: Go installer
 on:
   push:
     branches: [master]
-    paths:
-      - "go/**"
-      - ".github/workflows/go.yml"
-  pull_request:
-    paths:
-      - "go/**"
-      - ".github/workflows/go.yml"
+    paths: &Paths ["go/**", ".github/workflows/go.yml"]
+  pull_request: { paths: *Paths }
 
 permissions: { contents: read }
 concurrency:
@@ -24,20 +19,16 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-26.04, macos-15, windows-2025]
+      matrix: { os: [ubuntu-26.04, macos-15, windows-2025] }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with: { go-version: "1.27.2", cache: false }
+        with: { go-version-file: "go.mod", cache: false }
       - name: Format
         run: |
           unformatted="$(gofmt -l .)"
-          if [ -n "${unformatted}" ]; then
-            printf '%s\n' "${unformatted}"
-            exit 1
-          fi
+          if [[ -n "${unformatted}" ]]; then { printf '%s\n' "${unformatted}"; exit 1; }; fi
       - name: Vet
         run: go vet ./...
       - name: Test

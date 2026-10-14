@@ -24,7 +24,10 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    steps: [uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1, uses: kjanat/actionlint@722799fa4b8cc6734debb97bae24aca9e0dbaf59]
+    steps:
+      - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: docker run --rm --pull always -qv "${GITHUB_WORKSPACE:-$PWD}:/w"
+          ghcr.io/kjanat/actionlint:nightly -v
 
   lint:
     name: "Format, clippy, workflows"
@@ -37,10 +40,10 @@ jobs:
         uses: *CO
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5
 
       - name: Check formatting
-        uses: kjanat/dprint-check@29c42153a7346f4d7315883ff7722cfe22cd510c # v3.1
+        uses: kjanat/dprint-check@29c42153a7346f4d7315883ff7722cfe22cd510c # v3
 
       - name: Clippy
         run: cargo lint
