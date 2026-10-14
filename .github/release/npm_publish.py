@@ -6,22 +6,23 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from binding_packages import load_record, members
 from binding_packages import verify as verify_bindings
-from native_packages import MANIFEST
+from native_packages import load_record as load_native_record
 from native_packages import verify as verify_native
 
 
-def integrity(path):
+def integrity(path: Path) -> str:
     return (
         "sha512-"
         + base64.b64encode(hashlib.sha512(path.read_bytes()).digest()).decode()
     )
 
 
-def publish_one(path):
-    manifest = json.loads(members(path)["package/package.json"])
+def publish_one(path: Path) -> None:
+    manifest = cast(dict[str, str], json.loads(members(path)["package/package.json"]))
     spec = f"{manifest['name']}@{manifest['version']}"
     result = subprocess.run(
         [
@@ -32,6 +33,7 @@ def publish_one(path):
             "--json",
             "--registry=https://registry.npmjs.org",
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -41,7 +43,9 @@ def publish_one(path):
         print(f"{spec}: identical archive already published", flush=True)
         return
     try:
-        code = json.loads(result.stdout)["error"]["code"]
+        code = cast(dict[str, dict[str, str]], json.loads(result.stdout))["error"][
+            "code"
+        ]
     except (ValueError, KeyError, TypeError):
         raise RuntimeError(
             f"Cannot check npm package {spec}: {result.stderr}"
@@ -49,7 +53,7 @@ def publish_one(path):
     if code != "E404":
         raise RuntimeError(f"Cannot check npm package {spec}: {result.stderr}")
     tag = "next" if "-" in manifest["version"] else "latest"
-    subprocess.run(
+    _ = subprocess.run(
         [
             "npm",
             "publish",
@@ -77,11 +81,11 @@ def publish_one(path):
         raise ValueError(f"{spec}: registry integrity does not match published archive")
 
 
-def publish(dest):
+def publish(dest: Path) -> None:
     verify_bindings(dest)
     verify_native(dest)
     # Platform dependencies precede the wrapper so it is installable when visible.
-    native = json.loads((dest / MANIFEST).read_text())["packages"]
+    native = load_native_record(dest)["packages"]
     for package in native:
         publish_one(dest / package["file"])
     for package in load_record(dest)["packages"]:
@@ -89,7 +93,11 @@ def publish(dest):
             publish_one(dest / package["name"])
 
 
+class Args(argparse.Namespace):
+    directory: Path = Path()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("directory", type=Path)
-    publish(parser.parse_args().directory)
+    _ = parser.add_argument("directory", type=Path)
+    publish(parser.parse_args(namespace=Args()).directory)

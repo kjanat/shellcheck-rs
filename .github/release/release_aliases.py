@@ -6,10 +6,11 @@ import os
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import TypedDict, cast
 
 from binding_packages import load_record, members
 from binding_packages import verify as verify_bindings
-from native_packages import MANIFEST
+from native_packages import load_record as load_native_record
 from native_packages import verify as verify_native
 from release import TARGETS, metadata, upstream
 
@@ -18,8 +19,18 @@ def output(*args: str) -> str:
     return subprocess.check_output(args, text=True).strip()
 
 
-def api(path: str, *args: str):
-    return json.loads(output("gh", "api", path, *args))
+class GitObject(TypedDict):
+    type: str
+    sha: str
+
+
+class GitRef(TypedDict):
+    ref: str
+    object: GitObject
+
+
+def api(path: str, *args: str) -> object:
+    return cast(object, json.loads(output("gh", "api", path, *args)))
 
 
 def advance(current: str, previous: str | None) -> bool:
@@ -43,7 +54,7 @@ def promote_image(source: str, alias: str) -> None:
     if not digest.startswith("sha256:") or len(digest) != 71:
         raise ValueError(f"Invalid image digest: {source}")
     repository = source.rsplit(":", 1)[0]
-    subprocess.run(
+    _ = subprocess.run(
         [
             "docker",
             "buildx",
@@ -69,7 +80,7 @@ def promote_image(source: str, alias: str) -> None:
 
 
 def promote_npm(name: str, version: str, alias: str) -> None:
-    subprocess.run(
+    _ = subprocess.run(
         [
             "npm",
             "dist-tag",
@@ -80,15 +91,18 @@ def promote_npm(name: str, version: str, alias: str) -> None:
         ],
         check=True,
     )
-    tags = json.loads(
-        output(
-            "npm",
-            "view",
-            name,
-            "dist-tags",
-            "--json",
-            "--registry=https://registry.npmjs.org",
-        )
+    tags = cast(
+        dict[str, str],
+        json.loads(
+            output(
+                "npm",
+                "view",
+                name,
+                "dist-tags",
+                "--json",
+                "--registry=https://registry.npmjs.org",
+            )
+        ),
     )
     if tags.get(alias) != version:
         raise ValueError(f"npm alias mismatch: {name}")
@@ -108,28 +122,33 @@ def promote(directory: Path) -> None:
     alias = "upstream-" + upstream()["upstream_version"]
     endpoint = f"repos/{repository}"
     # Inspect the exact existing alias; an API failure is not an absent tag.
-    refs = api(f"{endpoint}/git/matching-refs/tags/{alias}")
+    refs = cast(list[GitRef], api(f"{endpoint}/git/matching-refs/tags/{alias}"))
     existing = next((r for r in refs if r["ref"] == f"refs/tags/{alias}"), None)
     if existing:
         if existing["object"]["type"] != "commit":
             raise ValueError("Expected a lightweight upstream alias tag")
         old_sha = existing["object"]["sha"]
-        content = api(
-            f"{endpoint}/contents/crates/shellcheck-cli/Cargo.toml?ref={old_sha}"
+        content = cast(
+            dict[str, str],
+            api(f"{endpoint}/contents/crates/shellcheck-cli/Cargo.toml?ref={old_sha}"),
         )
-        previous = tomllib.loads(base64.b64decode(content["content"]).decode())[
-            "package"
-        ]["version"]
+        previous = cast(
+            dict[str, dict[str, str]],
+            tomllib.loads(base64.b64decode(content["content"]).decode()),
+        )["package"]["version"]
         if not advance(version, previous):
             print(f"Keeping newer upstream alias at {previous}.")
             return
         if version == previous and old_sha != meta["commit"]:
             raise ValueError("Same release version points at a different commit")
-    commit = api(f"{endpoint}/commits/{meta['commit']}")
+    commit = cast(
+        dict[str, dict[str, dict[str, bool]]],
+        api(f"{endpoint}/commits/{meta['commit']}"),
+    )
     if not commit["commit"]["verification"]["verified"]:
         raise ValueError("Refusing to tag an unverified release commit")
 
-    records = json.loads((directory / MANIFEST).read_text())["packages"]
+    records = load_native_record(directory)["packages"]
     archives = [directory / p["file"] for p in records]
     archives += [
         directory / p["name"]
@@ -137,21 +156,26 @@ def promote(directory: Path) -> None:
         if p["kind"] == "npm"
     ]
     names = [
-        json.loads(members(archive)["package/package.json"])["name"]
+        cast(dict[str, str], json.loads(members(archive)["package/package.json"]))[
+            "name"
+        ]
         for archive in archives
     ]
     # A failed newer promotion may have moved npm aliases before its Git tag.
     # Inspect every package first so retrying an older run cannot undo that work.
     for name in names:
-        tags = json.loads(
-            output(
-                "npm",
-                "view",
-                name,
-                "dist-tags",
-                "--json",
-                "--registry=https://registry.npmjs.org",
-            )
+        tags = cast(
+            dict[str, str],
+            json.loads(
+                output(
+                    "npm",
+                    "view",
+                    name,
+                    "dist-tags",
+                    "--json",
+                    "--registry=https://registry.npmjs.org",
+                )
+            ),
         )
         if not advance(version, tags.get(alias)):
             print(f"Keeping newer npm upstream alias for {name}.")
@@ -166,7 +190,7 @@ def promote(directory: Path) -> None:
         )
 
     if existing:
-        api(
+        _ = api(
             f"{endpoint}/git/refs/tags/{alias}",
             "--method",
             "PATCH",
@@ -176,7 +200,7 @@ def promote(directory: Path) -> None:
             "force=true",
         )
     else:
-        api(
+        _ = api(
             f"{endpoint}/git/refs",
             "--method",
             "POST",
@@ -185,7 +209,7 @@ def promote(directory: Path) -> None:
             "-f",
             f"sha={meta['commit']}",
         )
-    actual = api(f"{endpoint}/git/ref/tags/{alias}")
+    actual = cast(GitRef, api(f"{endpoint}/git/ref/tags/{alias}"))
     if actual["object"]["sha"] != meta["commit"]:
         raise ValueError("Git upstream alias target mismatch")
 

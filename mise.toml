@@ -71,7 +71,6 @@ run = [
   "ruff check",
   "ty check",
   "basedpyright",
-  "basedpyright --project .github/release",
 ]
 
 # Whether the tests would catch a behaviour change at all. Scope it to the file

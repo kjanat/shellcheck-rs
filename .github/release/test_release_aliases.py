@@ -2,13 +2,17 @@
 
 import base64
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import release
 import release_aliases as aliases
+from native_packages import MANIFEST
 
 
 class AliasTests(unittest.TestCase):
@@ -23,34 +27,37 @@ class AliasTests(unittest.TestCase):
         digest = "sha256:" + "a" * 64
         with (
             patch.object(aliases, "output", side_effect=[digest, digest]),
-            patch.object(aliases.subprocess, "run") as run,
+            patch.object(subprocess, "run") as run,
         ):
             aliases.promote_image(
                 "ghcr.io/example/image:1.0.0", "ghcr.io/example/image:upstream-0.11.0"
             )
-            self.assertIn("ghcr.io/example/image@" + digest, run.call_args.args[0])
+            self.assertIn(
+                "ghcr.io/example/image@" + digest,
+                cast(list[str], run.call_args.args[0]),
+            )
         with (
             patch.object(aliases, "output", side_effect=[digest, "sha256:" + "b" * 64]),
-            patch.object(aliases.subprocess, "run"),
+            patch.object(subprocess, "run"),
+            self.assertRaisesRegex(ValueError, "digest mismatch"),
         ):
-            with self.assertRaisesRegex(ValueError, "digest mismatch"):
-                aliases.promote_image(
-                    "ghcr.io/example/image:1.0.0",
-                    "ghcr.io/example/image:upstream-0.11.0",
-                )
+            aliases.promote_image(
+                "ghcr.io/example/image:1.0.0",
+                "ghcr.io/example/image:upstream-0.11.0",
+            )
 
     def test_npm_alias_checks_registry_result(self):
         with (
             patch.object(
                 aliases, "output", return_value='{"upstream-0.11.0":"0.11.1"}'
             ),
-            patch.object(aliases.subprocess, "run") as run,
+            patch.object(subprocess, "run") as run,
         ):
             aliases.promote_npm(
                 "@rshellcheck/rshellcheck-linux-x64", "0.11.1", "upstream-0.11.0"
             )
             self.assertEqual(
-                run.call_args.args[0][1:5],
+                cast(list[str], run.call_args.args[0])[1:5],
                 [
                     "dist-tag",
                     "add",
@@ -60,10 +67,10 @@ class AliasTests(unittest.TestCase):
             )
         with (
             patch.object(aliases, "output", return_value="{}"),
-            patch.object(aliases.subprocess, "run"),
+            patch.object(subprocess, "run"),
+            self.assertRaisesRegex(ValueError, "npm alias mismatch"),
         ):
-            with self.assertRaisesRegex(ValueError, "npm alias mismatch"):
-                aliases.promote_npm("@kjanat/rshellcheck", "0.11.1", "upstream-0.11.0")
+            aliases.promote_npm("@kjanat/rshellcheck", "0.11.1", "upstream-0.11.0")
 
     def test_git_promotion_is_last_and_verified(self):
         meta = {"version": "0.11.1", "commit": "a" * 40, "rust": "1.99.0"}
@@ -71,8 +78,8 @@ class AliasTests(unittest.TestCase):
         for exists in (False, True):
             with self.subTest(exists=exists), tempfile.TemporaryDirectory() as temp:
                 directory = Path(temp)
-                (directory / aliases.MANIFEST).write_text('{"packages":[]}')
-                responses = [
+                _ = (directory / MANIFEST).write_text('{"packages":[]}')
+                responses: list[object] = [
                     [
                         {
                             "ref": f"refs/tags/{alias}",
@@ -95,7 +102,7 @@ class AliasTests(unittest.TestCase):
                 ]
                 with (
                     patch.dict(
-                        aliases.os.environ,
+                        os.environ,
                         {"GITHUB_REPOSITORY": "kjanat/shellcheck-rs"},
                     ),
                     patch.object(aliases, "metadata", return_value=meta),
@@ -111,7 +118,9 @@ class AliasTests(unittest.TestCase):
                         "PATCH" if exists else "POST", api.call_args_list[-2].args
                     )
                     self.assertTrue(
-                        api.call_args.args[0].endswith(f"/git/ref/tags/{alias}")
+                        cast(str, api.call_args.args[0]).endswith(
+                            f"/git/ref/tags/{alias}"
+                        )
                     )
 
     def test_upstream_pin_is_validated(self):
@@ -121,8 +130,10 @@ class AliasTests(unittest.TestCase):
         ):
             (Path(temp) / "tools").mkdir()
             pin = Path(temp) / "tools/oracle.json"
-            pin.write_text(json.dumps({"version": "0.11.0", "revision": "a" * 40}))
+            _ = pin.write_text(json.dumps({"version": "0.11.0", "revision": "a" * 40}))
             self.assertEqual(release.upstream()["upstream_version"], "0.11.0")
-            pin.write_text(json.dumps({"version": "0.11.0-dev", "revision": "a" * 40}))
+            _ = pin.write_text(
+                json.dumps({"version": "0.11.0-dev", "revision": "a" * 40})
+            )
             with self.assertRaises(ValueError):
-                release.upstream()
+                _ = release.upstream()

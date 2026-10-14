@@ -168,7 +168,7 @@ def cargo_version() -> str:
 
 
 def upstream() -> dict[str, str]:
-    pin = json.loads((ROOT / "tools/oracle.json").read_text())
+    pin = cast(dict[str, str], json.loads((ROOT / "tools/oracle.json").read_text()))
     if not re.fullmatch(r"\d+\.\d+\.\d+", pin["version"]):
         raise ValueError("Upstream version must be a stable release version")
     if not re.fullmatch(r"[0-9a-f]{40}", pin["revision"]):

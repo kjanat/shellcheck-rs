@@ -2,11 +2,13 @@
 
 import io
 import json
+import subprocess
 import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import binding_packages as packages
@@ -28,20 +30,19 @@ class PackageTests(unittest.TestCase):
             }
             with (
                 patch.object(packages, "metadata", return_value=metadata()),
-                patch.object(packages.subprocess, "run") as run,
+                patch.object(subprocess, "run") as run,
                 patch.object(packages, "urlopen") as request,
             ):
-                request.return_value.__enter__.return_value = io.BytesIO(
-                    json.dumps(response).encode()
-                )
+                request.return_value = io.BytesIO(json.dumps(response).encode())
                 packages.publish_pypi(root)
-                command = run.call_args.args[0]
+                command = cast(list[str], run.call_args.args[0])
                 self.assertIn("always", command)
                 self.assertEqual(command[-2:], [str(root / p["name"]) for p in python])
-                response["urls"][0]["digests"]["sha256"] = "wrong"
-                request.return_value.__enter__.return_value = io.BytesIO(
-                    json.dumps(response).encode()
-                )
+                response["urls"][0] = {
+                    "filename": python[0]["name"],
+                    "digests": {"sha256": "wrong"},
+                }
+                request.return_value = io.BytesIO(json.dumps(response).encode())
                 with self.assertRaisesRegex(ValueError, "PyPI digest mismatch"):
                     packages.publish_pypi(root)
 

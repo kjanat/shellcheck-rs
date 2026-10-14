@@ -5,11 +5,13 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import native_packages as native
 import npm_publish
 import release
+from binding_packages import members
 from test_release import executable
 
 
@@ -21,18 +23,24 @@ class NativeTests(unittest.TestCase):
                 binary = dest / (
                     "rshellcheck.exe" if "windows" in target else "rshellcheck"
                 )
-                binary.write_bytes(executable(target))
-                release.pack(target, "test", binary, dest)
+                _ = binary.write_bytes(executable(target))
+                _ = release.pack(target, "test", binary, dest)
             native.build(dest, "test")
-            record = json.loads((dest / native.MANIFEST).read_text())
+            record = native.load_record(dest)
             self.assertEqual(len(record["packages"]), 16)
-            wrapper = native.members(dest / record["packages"][-1]["file"])
-            manifest = json.loads(wrapper["package/package.json"])
-            self.assertEqual(len(manifest["optionalDependencies"]), 15)
+            wrapper = members(dest / record["packages"][-1]["file"])
+            manifest = cast(
+                dict[str, object], json.loads(wrapper["package/package.json"])
+            )
+            self.assertEqual(
+                len(cast(dict[str, str], manifest["optionalDependencies"])), 15
+            )
             self.assertNotIn("scripts", manifest)
-            self.assertEqual(manifest["bin"]["rshellcheck"], "bin.mjs")
+            self.assertEqual(
+                cast(dict[str, str], manifest["bin"])["rshellcheck"], "bin.mjs"
+            )
             path = dest / record["packages"][0]["file"]
-            with patch.object(npm_publish.subprocess, "run") as run:
+            with patch.object(subprocess, "run") as run:
                 run.return_value = subprocess.CompletedProcess(
                     [], 0, json.dumps(npm_publish.integrity(path)), ""
                 )
@@ -49,8 +57,8 @@ class NativeTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     npm_publish.publish_one(path)
             with (
-                patch.object(npm_publish.subprocess, "run") as run,
-                patch.object(npm_publish.subprocess, "check_output") as view,
+                patch.object(subprocess, "run") as run,
+                patch.object(subprocess, "check_output") as view,
             ):
                 run.side_effect = [
                     subprocess.CompletedProcess([], 1, '{"error":{"code":"E404"}}', ""),
@@ -58,11 +66,11 @@ class NativeTests(unittest.TestCase):
                 ]
                 view.return_value = json.dumps(npm_publish.integrity(path))
                 npm_publish.publish_one(path)
-                command = run.call_args_list[1].args[0]
+                command = cast(list[str], run.call_args_list[1].args[0])
                 self.assertEqual(command[:2], ["npm", "publish"])
                 self.assertIn("--provenance", command)
                 self.assertEqual(command[command.index("--tag") + 1], "latest")
-            path.write_bytes(b"corrupt")
+            _ = path.write_bytes(b"corrupt")
             with self.assertRaises(ValueError):
                 native.verify(dest)
 
@@ -71,12 +79,12 @@ class NativeTests(unittest.TestCase):
             dest = Path(temp)
             target = next(iter(native.platforms().values()))
             binary = dest / "rshellcheck.exe"
-            binary.write_bytes(executable(target))
+            _ = binary.write_bytes(executable(target))
             with patch.object(
                 release,
                 "metadata",
                 return_value={**release.metadata(), "commit": "0" * 40},
             ):
-                release.pack(target, "test", binary, dest)
+                _ = release.pack(target, "test", binary, dest)
             with self.assertRaisesRegex(ValueError, "source identity"):
                 native.build(dest, "test")

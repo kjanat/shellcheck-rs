@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
+from http.client import HTTPResponse
 from pathlib import Path
 from typing import TypedDict, cast
 from urllib.request import urlopen
@@ -119,7 +120,7 @@ def build(dest: Path) -> None:
             f"https://github.com/koalaman/shellcheck/commit/{pin['upstream_revision']}"
         )
         project = python / "pyproject.toml"
-        project.write_text(
+        _ = project.write_text(
             project.read_text().replace(
                 "[project.urls]\n",
                 f'[project.urls]\n"Upstream ShellCheck {pin["upstream_version"]}" = "{upstream_url}"\n',
@@ -140,9 +141,9 @@ def build(dest: Path) -> None:
             )
         _ = shutil.copy2(wasm, npm / wasm.name)
         with (python / "README.md").open("a") as readme:
-            readme.write(
+            _ = readme.write(
                 f"\nTracks ShellCheck {pin['upstream_version']} with upstream changes through "
-                f"[{pin['upstream_revision'][:12]}]({upstream_url}).\n"
+                + f"[{pin['upstream_revision'][:12]}]({upstream_url}).\n"
             )
         _ = shutil.copy2(wasm, python / "rshellcheck_wasm_data" / wasm.name)
         _ = subprocess.run(
@@ -195,6 +196,11 @@ def main() -> None:
         test_install(args.directory.resolve())
 
 
+class PublishedFile(TypedDict):
+    filename: str
+    digests: dict[str, str]
+
+
 def publish_pypi(dest: Path) -> None:
     verify(dest)
     record = load_record(dest)
@@ -213,10 +219,14 @@ def publish_pypi(dest: Path) -> None:
         ],
         check=True,
     )
-    with urlopen(
-        f"https://pypi.org/pypi/rshellcheck-wasm/{record['version']}/json", timeout=30
+    with cast(
+        HTTPResponse,
+        urlopen(
+            f"https://pypi.org/pypi/rshellcheck-wasm/{record['version']}/json",
+            timeout=30,
+        ),
     ) as response:
-        published = json.load(response)
+        published = cast(dict[str, list[PublishedFile]], json.load(response))
     hashes = {p["filename"]: p["digests"]["sha256"] for p in published["urls"]}
     for package in packages:
         if hashes.get(package["name"]) != package["sha256"]:

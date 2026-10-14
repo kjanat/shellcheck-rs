@@ -7,48 +7,73 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TypedDict, cast
 
 from binding_packages import members
-from release import ROOT, TARGETS, archive_name, metadata, verify_binary
+from release import ROOT, TARGETS, Triple, archive_name, metadata, verify_binary
 
 SOURCE = ROOT / "bindings/native/npm"
 MANIFEST = "native-packages.json"
 
 
-def platforms():
-    result = json.loads((SOURCE / "platforms.json").read_text())
+class Package(TypedDict):
+    file: str
+    sha256: str
+
+
+class Record(TypedDict):
+    version: str
+    commit: str
+    rust: str
+    packages: list[Package]
+
+
+class Args(argparse.Namespace):
+    command: str = ""
+    directory: Path = Path()
+    label: str = ""
+
+
+def load_record(dest: Path) -> Record:
+    return cast(Record, json.loads((dest / MANIFEST).read_text()))
+
+
+def platforms() -> dict[str, Triple]:
+    result = cast(
+        dict[str, Triple], json.loads((SOURCE / "platforms.json").read_text())
+    )
     if set(result.values()) != {target for target, _, _ in TARGETS}:
         raise ValueError("npm platforms must cover exactly the release targets")
     return result
 
 
-def pack(stage, dest):
+def pack(stage: Path, dest: Path) -> Package:
     output = subprocess.check_output(
         ["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", str(dest)],
         cwd=stage,
         text=True,
     )
-    name = json.loads(output)[0]["filename"]
+    name = cast(list[dict[str, str]], json.loads(output))[0]["filename"]
     return {
         "file": name,
         "sha256": hashlib.sha256((dest / name).read_bytes()).hexdigest(),
     }
 
 
-def build(dest, label):
+def build(dest: Path, label: str) -> None:
     dest = dest.resolve()
     meta = metadata()
-    wrapper = json.loads((SOURCE / "package.json").read_text())
+    wrapper = cast(dict[str, object], json.loads((SOURCE / "package.json").read_text()))
     if wrapper["version"] != meta["version"]:
         raise ValueError("Native npm and Rust versions must agree")
-    records = []
-    dependencies = {}
+    records: list[Package] = []
+    dependencies: dict[str, str] = {}
     for key, target in platforms().items():
         contents = members(dest / archive_name(label, target))
         prefix = f"rshellcheck-{label}-{target}/"
         binary = "rshellcheck.exe" if key.startswith("win32-") else "rshellcheck"
         data = contents[prefix + binary]
-        build_meta = json.loads(contents[prefix + "BUILD.json"])
+        build_meta = cast(dict[str, str], json.loads(contents[prefix + "BUILD.json"]))
         expected = {
             **meta,
             "label": label,
@@ -65,14 +90,14 @@ def build(dest, label):
             stage = Path(temp)
             (stage / "bin").mkdir()
             executable = stage / "bin" / binary
-            executable.write_bytes(data)
+            _ = executable.write_bytes(data)
             executable.chmod(0o755)
-            shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
-            (stage / "BUILD.json").write_bytes(contents[prefix + "BUILD.json"])
-            (stage / "README.md").write_text(
+            _ = shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
+            _ = (stage / "BUILD.json").write_bytes(contents[prefix + "BUILD.json"])
+            _ = (stage / "README.md").write_text(
                 f"# {name}\n\nPlatform binary for @kjanat/rshellcheck. Install the main package.\n"
             )
-            (stage / "package.json").write_text(
+            _ = (stage / "package.json").write_text(
                 json.dumps({
                     "name": name,
                     "version": meta["version"],
@@ -88,26 +113,26 @@ def build(dest, label):
     with tempfile.TemporaryDirectory() as temp:
         stage = Path(temp)
         for name in ("bin.mjs", "index.mjs", "platforms.json", "README.md"):
-            shutil.copy2(SOURCE / name, stage / name)
-        shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
+            _ = shutil.copy2(SOURCE / name, stage / name)
+        _ = shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
         (stage / "bin.mjs").chmod(0o755)
         wrapper["optionalDependencies"] = dependencies
-        (stage / "package.json").write_text(json.dumps(wrapper))
+        _ = (stage / "package.json").write_text(json.dumps(wrapper))
         records.append(pack(stage, dest))
-    (dest / MANIFEST).write_text(
+    _ = (dest / MANIFEST).write_text(
         json.dumps({**meta, "packages": records}, indent=2) + "\n"
     )
     verify(dest)
 
 
-def verify(dest):
-    record = json.loads((dest / MANIFEST).read_text())
+def verify(dest: Path) -> None:
+    record = load_record(dest)
     if any(record.get(k) != v for k, v in metadata().items()):
         raise ValueError("Native npm packages are from another source revision")
     expected = {f"@rshellcheck/rshellcheck-{key}" for key in platforms()} | {
         "@kjanat/rshellcheck"
     }
-    actual = set()
+    actual: set[str] = set()
     for package in record["packages"]:
         name = package["file"]
         if Path(name).name != name:
@@ -116,7 +141,7 @@ def verify(dest):
         if hashlib.sha256(path.read_bytes()).hexdigest() != package["sha256"]:
             raise ValueError(f"Package checksum mismatch: {name}")
         files = members(path)
-        manifest = json.loads(files["package/package.json"])
+        manifest = cast(dict[str, str], json.loads(files["package/package.json"]))
         if manifest["version"] != record["version"] or manifest["name"] in actual:
             raise ValueError("Wrong version or duplicate npm package")
         actual.add(manifest["name"])
@@ -126,21 +151,23 @@ def verify(dest):
         raise ValueError("Incomplete native npm packages")
 
 
-def test_install(dest):
+def test_install(dest: Path) -> None:
     verify(dest)
     key = subprocess.check_output(
         ["node", "-p", 'process.platform + "-" + process.arch'], text=True
     ).strip()
     if key not in platforms():
         raise ValueError(f"Cannot test native npm installation on {key}")
-    records = json.loads((dest / MANIFEST).read_text())["packages"]
-    packages = {}
+    records = load_record(dest)["packages"]
+    packages: dict[str, Path] = {}
     for record in records:
         path = dest / record["file"]
-        manifest = json.loads(members(path)["package/package.json"])
+        manifest = cast(
+            dict[str, str], json.loads(members(path)["package/package.json"])
+        )
         packages[manifest["name"]] = path.resolve()
     with tempfile.TemporaryDirectory() as temp:
-        subprocess.run(
+        _ = subprocess.run(
             [
                 "npm",
                 "install",
@@ -155,10 +182,11 @@ def test_install(dest):
             check=True,
         )
         executable = Path(temp) / "node_modules/@kjanat/rshellcheck/bin.mjs"
-        subprocess.run(["node", str(executable), "--version"], check=True)
+        _ = subprocess.run(["node", str(executable), "--version"], check=True)
         for script, status in [("#!/bin/sh\ntrue\n", 0), ("#!/bin/sh\necho $x\n", 1)]:
             result = subprocess.run(
                 ["node", str(executable), "--norc", "-f", "quiet", "-"],
+                check=False,
                 input=script,
                 text=True,
             )
@@ -168,10 +196,10 @@ def test_install(dest):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["build", "verify", "test"])
-    parser.add_argument("directory", type=Path)
-    parser.add_argument("--label")
-    args = parser.parse_args()
+    _ = parser.add_argument("command", choices=["build", "verify", "test"])
+    _ = parser.add_argument("directory", type=Path)
+    _ = parser.add_argument("--label")
+    args = parser.parse_args(namespace=Args())
     if args.command == "build":
         if not args.label:
             parser.error("build requires --label")
