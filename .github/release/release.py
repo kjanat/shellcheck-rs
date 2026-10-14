@@ -106,6 +106,7 @@ class Plan(Metadata):
     label: str
     tag: str
     publish: bool
+    registry_only: bool
     cross: str
     ndk: str
     matrix: Matrix
@@ -138,8 +139,21 @@ def git(*args: str) -> str:
     return run("git", *args, capture_output=True).stdout.strip()
 
 
+def source_commit() -> str:
+    commit = os.environ.get("RELEASE_SOURCE_COMMIT", "")
+    if commit and not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Release source must be a full commit SHA")
+    return commit or git("rev-parse", "HEAD")
+
+
+def source_text(path: Path) -> str:
+    if os.environ.get("RELEASE_SOURCE_COMMIT"):
+        return git("show", f"{source_commit()}:{path.relative_to(ROOT).as_posix()}")
+    return path.read_text()
+
+
 def toml_string(path: Path, *keys: str) -> str:
-    value = cast(TOML, tomllib.loads(path.read_text()))
+    value = cast(TOML, tomllib.loads(source_text(path)))
     for key in keys:
         if not isinstance(value, dict):
             raise TypeError(f"{path}: {key} is not inside a table")
@@ -168,7 +182,7 @@ def cargo_version() -> str:
 
 
 def upstream() -> dict[str, str]:
-    pin = cast(dict[str, str], json.loads((ROOT / "tools/oracle.json").read_text()))
+    pin = cast(dict[str, str], json.loads(source_text(ROOT / "tools/oracle.json")))
     if not re.fullmatch(r"\d+\.\d+\.\d+", pin["version"]):
         raise ValueError("Upstream version must be a stable release version")
     if not re.fullmatch(r"[0-9a-f]{40}", pin["revision"]):
@@ -181,7 +195,7 @@ def metadata() -> Metadata:
     toolchain = toml_string(ROOT / "Cargo.toml", "workspace", "package", "rust-version")
     if toolchain.count(".") == 1:
         toolchain += ".0"
-    return Metadata(version=version, commit=git("rev-parse", "HEAD"), rust=toolchain)
+    return Metadata(version=version, commit=source_commit(), rust=toolchain)
 
 
 def target_entries() -> list[Target]:
@@ -212,14 +226,48 @@ def companion_tag(version: str, commit: str) -> str:
 
 
 def plan(ref: str = "", event: str = "") -> Plan:
+    existing = os.environ.get("PUBLISH_EXISTING", "")
+    if existing:
+        if event != "workflow_dispatch" or existing != PREFIX + cargo_version():
+            raise ValueError("Existing release dispatch must match the package version")
+        release = cast(
+            dict[str, bool],
+            json.loads(
+                run(
+                    "gh",
+                    "release",
+                    "view",
+                    existing,
+                    "--json",
+                    "isDraft,isImmutable",
+                    capture_output=True,
+                ).stdout
+            ),
+        )
+        if release["isDraft"] or not release["isImmutable"]:
+            raise ValueError(
+                "Registry publication requires an immutable published release"
+            )
+        commit = git("rev-parse", f"refs/tags/{existing}^{{commit}}")
+        verified = run(
+            "gh",
+            "api",
+            f"repos/{os.environ['GITHUB_REPOSITORY']}/commits/{commit}",
+            "--jq",
+            ".commit.verification.verified",
+            capture_output=True,
+        ).stdout.strip()
+        if verified != "true":
+            raise ValueError("Release commit signature is not verified")
+        os.environ["RELEASE_SOURCE_COMMIT"] = commit
     meta = metadata()
-    publishing = event == "push" and ref.startswith("refs/tags/")
+    publishing = bool(existing) or (event == "push" and ref.startswith("refs/tags/"))
     expected = PREFIX + meta["version"]
-    if publishing and ref != "refs/tags/" + expected:
+    if publishing and not existing and ref != "refs/tags/" + expected:
         raise ValueError(
             f"Tag must be {expected}, matching both Cargo package versions"
         )
-    if publishing:
+    if publishing and not existing:
         _ = companion_tag(meta["version"], meta["commit"])
     label = (
         meta["version"]
@@ -231,6 +279,7 @@ def plan(ref: str = "", event: str = "") -> Plan:
         label=label,
         tag=expected,
         publish=publishing,
+        registry_only=bool(existing),
         cross=CROSS_VERSION,
         ndk=NDK_VERSION,
         matrix=Matrix(include=target_entries()),

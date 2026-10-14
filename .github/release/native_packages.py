@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from binding_packages import members
-from release import ROOT, TARGETS, Triple, archive_name, metadata, verify_binary
+from release import ROOT, TARGETS, Triple, archive_name, git, metadata, verify_binary
 
 SOURCE = ROOT / "bindings/native/npm"
 MANIFEST = "native-packages.json"
@@ -120,7 +120,11 @@ def build(dest: Path, label: str) -> None:
         _ = (stage / "package.json").write_text(json.dumps(wrapper))
         records.append(pack(stage, dest))
     _ = (dest / MANIFEST).write_text(
-        json.dumps({**meta, "packages": records}, indent=2) + "\n"
+        json.dumps(
+            {**meta, "packaging_commit": git("rev-parse", "HEAD"), "packages": records},
+            indent=2,
+        )
+        + "\n"
     )
     verify(dest)
 

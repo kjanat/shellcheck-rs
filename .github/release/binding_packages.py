@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 from urllib.request import urlopen
 
-from release import ROOT, metadata, read_member
+from release import ROOT, git, metadata, read_member
 
 MANIFEST = "binding-packages.json"
 
@@ -87,7 +87,7 @@ def verify(dest: Path) -> None:
             raise ValueError(f"Missing project license in {name}")
 
 
-def build(dest: Path) -> None:
+def build(dest: Path, wasm: Path | None = None) -> None:
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
     meta = metadata()
@@ -100,7 +100,7 @@ def build(dest: Path) -> None:
         != meta["version"]
     ):
         raise ValueError("Python and Rust package versions must agree")
-    wasm = ROOT / "target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm"
+    wasm = wasm or ROOT / "target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm"
     if not wasm.read_bytes().startswith(b"\0asm\x01\0\0\0"):
         raise ValueError("Missing valid core WASM module")
     with tempfile.TemporaryDirectory() as temp:
@@ -171,7 +171,12 @@ def build(dest: Path) -> None:
         })
     _ = (dest / MANIFEST).write_text(
         json.dumps(
-            {**meta, "wasm_sha256": digest(wasm.read_bytes()), "packages": packages},
+            {
+                **meta,
+                "packaging_commit": git("rev-parse", "HEAD"),
+                "wasm_sha256": digest(wasm.read_bytes()),
+                "packages": packages,
+            },
             indent=2,
         )
         + "\n"
