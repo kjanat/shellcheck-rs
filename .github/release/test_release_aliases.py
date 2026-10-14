@@ -46,16 +46,18 @@ class AliasTests(unittest.TestCase):
                 "ghcr.io/example/image:upstream-0.11.0",
             )
 
-    def test_npm_alias_checks_registry_result(self):
+    def test_npm_alias_waits_for_visibility_without_rewriting(self):
         with (
             patch.object(
-                aliases, "output", return_value='{"upstream-0.11.0":"0.11.1"}'
+                aliases, "npm_tags", side_effect=[{}, {}, {"upstream-0.11.0": "0.11.1"}]
             ),
             patch.object(subprocess, "run") as run,
+            patch("registry_checks.time.sleep"),
         ):
             aliases.promote_npm(
                 "@rshellcheck/rshellcheck-linux-x64", "0.11.1", "upstream-0.11.0"
             )
+            self.assertEqual(run.call_count, 1)
             self.assertEqual(
                 cast(list[str], run.call_args.args[0])[1:5],
                 [
@@ -65,12 +67,25 @@ class AliasTests(unittest.TestCase):
                     "upstream-0.11.0",
                 ],
             )
+
+    def test_existing_alias_does_not_get_written_again(self):
         with (
-            patch.object(aliases, "output", return_value="{}"),
-            patch.object(subprocess, "run"),
-            self.assertRaisesRegex(ValueError, "npm alias mismatch"),
+            patch.object(
+                aliases, "npm_tags", return_value={"upstream-0.11.0": "0.11.1"}
+            ),
+            patch.object(subprocess, "run") as run,
         ):
             aliases.promote_npm("@kjanat/rshellcheck", "0.11.1", "upstream-0.11.0")
+            run.assert_not_called()
+        with (
+            patch.object(
+                aliases, "npm_tags", return_value={"upstream-0.11.0": "0.11.2"}
+            ),
+            patch.object(subprocess, "run") as run,
+        ):
+            with self.assertRaises(ValueError):
+                aliases.promote_npm("@kjanat/rshellcheck", "0.11.1", "upstream-0.11.0")
+            run.assert_not_called()
 
     def test_git_promotion_is_last_and_verified(self):
         meta = {"version": "0.11.1", "commit": "a" * 40, "rust": "1.99.0"}
@@ -122,6 +137,56 @@ class AliasTests(unittest.TestCase):
                             f"/git/ref/tags/{alias}"
                         )
                     )
+
+    def test_npm_only_promotion_does_not_write_git_or_docker_tags(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"GITHUB_REPOSITORY": "kjanat/shellcheck-rs", "REGISTRY": "npm"},
+            ),
+            patch.object(
+                aliases,
+                "metadata",
+                return_value={"version": "0.11.0", "commit": "a" * 40},
+            ),
+            patch.object(aliases, "verify_bindings"),
+            patch.object(aliases, "verify_native"),
+            patch.object(aliases, "load_native_record", return_value={"packages": []}),
+            patch.object(aliases, "load_record", return_value={"packages": []}),
+            patch.object(
+                aliases,
+                "api",
+                side_effect=[[], {"commit": {"verification": {"verified": True}}}],
+            ) as api,
+            patch.object(aliases, "promote_image") as image,
+        ):
+            aliases.promote(Path("dist"))
+            self.assertEqual(api.call_count, 2)
+            image.assert_not_called()
+
+    def test_alias_reads_retry_transient_errors_but_reject_permission_errors(self):
+        with (
+            patch.object(
+                subprocess,
+                "check_output",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["npm", "view"], output='{"error":{"code":"E503"}}'
+                ),
+            ),
+            self.assertRaises(aliases.NotVisibleYet),
+        ):
+            aliases.npm_tags("example", 30)
+        with (
+            patch.object(
+                subprocess,
+                "check_output",
+                side_effect=subprocess.CalledProcessError(
+                    1, ["npm", "view"], output='{"error":{"code":"E403"}}'
+                ),
+            ),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            aliases.npm_tags("example", 30)
 
     def test_upstream_pin_is_validated(self):
         with (

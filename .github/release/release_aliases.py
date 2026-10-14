@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -12,6 +13,7 @@ from binding_packages import load_record, members
 from binding_packages import verify as verify_bindings
 from native_packages import load_record as load_native_record
 from native_packages import verify as verify_native
+from registry_checks import NotVisibleYet, retry_read
 from release import TARGETS, metadata, upstream
 
 
@@ -79,7 +81,51 @@ def promote_image(source: str, alias: str) -> None:
         raise ValueError(f"Image alias digest mismatch: {alias}")
 
 
+def npm_tags(name: str, timeout: float) -> dict[str, str]:
+    try:
+        data = subprocess.check_output(
+            [
+                "npm",
+                "view",
+                name,
+                "dist-tags",
+                "--json",
+                "--registry=https://registry.npmjs.org",
+                "--fetch-retries=0",
+            ],
+            text=True,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise NotVisibleYet("npm tag read timed out") from error
+    except subprocess.CalledProcessError as error:
+        code = cast(dict[str, dict[str, str]], json.loads(cast(str, error.output)))[
+            "error"
+        ]["code"]
+        if code in {
+            "E404",
+            "E408",
+            "E429",
+            "ETIMEDOUT",
+            "ESOCKETTIMEDOUT",
+            "ECONNRESET",
+            "EAI_AGAIN",
+        } or (len(code) == 4 and code.startswith("E5") and code[1:].isdigit()):
+            raise NotVisibleYet(code) from error
+        raise
+    return cast(dict[str, str], json.loads(data))
+
+
 def promote_npm(name: str, version: str, alias: str) -> None:
+    tags = retry_read(
+        name, lambda timeout, name=name: npm_tags(name, timeout), seconds=60
+    )
+    if tags.get(alias) == version:
+        print(f"{name}: {alias} already points to {version}", flush=True)
+        return
+    if not advance(version, tags.get(alias)):
+        raise ValueError(f"Refusing to replace newer npm alias: {name}")
     _ = subprocess.run(
         [
             "npm",
@@ -90,22 +136,18 @@ def promote_npm(name: str, version: str, alias: str) -> None:
             "--registry=https://registry.npmjs.org",
         ],
         check=True,
+        timeout=120,
     )
-    tags = cast(
-        dict[str, str],
-        json.loads(
-            output(
-                "npm",
-                "view",
-                name,
-                "dist-tags",
-                "--json",
-                "--registry=https://registry.npmjs.org",
-            )
-        ),
-    )
-    if tags.get(alias) != version:
-        raise ValueError(f"npm alias mismatch: {name}")
+
+    def verify(timeout: float) -> None:
+        actual = npm_tags(name, timeout).get(alias)
+        if actual == version:
+            return
+        if not advance(version, actual):
+            raise ValueError(f"npm alias moved to a newer version: {name}")
+        raise NotVisibleYet(f"{alias} update not visible yet")
+
+    retry_read(f"{name}:{alias}", verify)
 
 
 def promote(directory: Path) -> None:
@@ -164,24 +206,16 @@ def promote(directory: Path) -> None:
     # A failed newer promotion may have moved npm aliases before its Git tag.
     # Inspect every package first so retrying an older run cannot undo that work.
     for name in names:
-        tags = cast(
-            dict[str, str],
-            json.loads(
-                output(
-                    "npm",
-                    "view",
-                    name,
-                    "dist-tags",
-                    "--json",
-                    "--registry=https://registry.npmjs.org",
-                )
-            ),
+        tags = retry_read(
+            name, lambda timeout, name=name: npm_tags(name, timeout), seconds=60
         )
         if not advance(version, tags.get(alias)):
             print(f"Keeping newer npm upstream alias for {name}.")
             return
-    for name in names:
-        promote_npm(name, version, alias)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda name: promote_npm(name, version, alias), names))
+    if os.environ.get("REGISTRY") == "npm":
+        return
     image = "ghcr.io/kjanat/shellcheck-rs"
     promote_image(f"{image}:{version}", f"{image}:{alias}")
     for target, _, _ in TARGETS:

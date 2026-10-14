@@ -695,6 +695,7 @@ jobs:
     name: Advance stable upstream aliases
     needs: [plan, npm-plan, npm, npm-wasm, npm-launcher, pypi, pypi-native, container, binary-images]
     env:
+      REGISTRY: ${{ inputs.registry }}
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
     if: ${{ !cancelled() && needs.npm-plan.result == 'success' && (needs.npm.result == 'success' || needs.npm-plan.outputs.native == 'false') && (needs.npm-wasm.result == 'success' || needs.npm-plan.outputs.wasm == 'false') && (needs.npm-launcher.result == 'success' || needs.npm-plan.outputs.launcher == 'false') && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.pypi-native.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
