@@ -15,12 +15,19 @@ cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknow
 Output: `target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm`.
 The **WASM core** CI workflow builds this module, tests all hosts and uploads a
 bundle of the module, wrappers, license, source commit and checksum. This is a
-CI artifact; npm/PyPI packages are not published automatically.
+CI artifact. Tagged releases also publish the JavaScript package to npm and Python bindings to PyPI.
 
 ## JavaScript / browser
 
+```sh
+npm install @kjanat/rshellcheck-wasm
+```
+
+The package includes the WASM module. In Node, `await createChecker()` loads it
+automatically. Browser bundlers must preserve the exported `./wasm` asset.
+
 ```js
-import { createChecker } from './js/shellcheck.mjs';
+import { createChecker } from '@kjanat/rshellcheck-wasm';
 
 const bytes = await (await fetch('./shellcheck_wasm.wasm')).arrayBuffer();
 const checker = await createChecker(bytes);
@@ -53,6 +60,10 @@ Use `context.WithTimeout` for execution deadlines. Cancellation invalidates that
 instance. Calls are serialized by a mutex; use separate instances for parallelism.
 
 ## Python (Wasmtime)
+
+```sh
+pip install rshellcheck-wasm
+```
 
 Install the local package with `pip install ./python` (from the artifact) or
 `uv pip install ./bindings/wasm/python` (from this checkout).

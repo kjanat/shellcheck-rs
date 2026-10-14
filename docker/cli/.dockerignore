@@ -1,0 +1,11 @@
+*
+!Dockerfile
+!LICENSE.txt
+!amd64/
+!amd64/rshellcheck
+!arm64/
+!arm64/rshellcheck
+!386/
+!386/rshellcheck
+!arm/
+!arm/rshellcheck

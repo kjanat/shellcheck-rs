@@ -2,9 +2,15 @@
 name            = "rshellcheck-wasm"
 version         = "0.11.0"
 description     = "ShellCheck core WASM bindings for Python"
+readme          = "README.md"
 requires-python = ">=3.12"
 license         = "GPL-3.0-or-later"
 dependencies    = ["wasmtime==38.0.0"]
+
+[project.urls]
+Documentation = "https://github.com/kjanat/shellcheck-rs/tree/master/bindings/wasm"
+Issues        = "https://github.com/kjanat/shellcheck-rs/issues"
+Repository    = "https://github.com/kjanat/shellcheck-rs"
 
 [build-system]
 requires      = ["setuptools>=77"]

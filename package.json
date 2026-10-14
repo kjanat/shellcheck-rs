@@ -1,9 +1,13 @@
 {
 	"name": "shellcheck-rs-workspace",
 	"private": true,
-	"workspaces": ["bindings/wasm/js"],
+	"workspaces": [
+		"bindings/wasm/js",
+		"bindings/native/npm"
+	],
 	"scripts": {
 		"test:browser": "npm run test:browser --workspace=@kjanat/rshellcheck-wasm",
+		"test:native": "node --test bindings/native/npm/test.mjs",
 		"test:wasm": "npm run test --workspace=@kjanat/rshellcheck-wasm"
 	}
 }

@@ -7,12 +7,44 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import binding_packages as packages
 from release import ROOT, metadata
 
 
 class PackageTests(unittest.TestCase):
+    def test_pypi_uploads_only_python_and_verifies_remote_hashes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_payload(root)
+            record = packages.load_record(root)
+            python = [p for p in record["packages"] if p["kind"] != "npm"]
+            response = {
+                "urls": [
+                    {"filename": p["name"], "digests": {"sha256": p["sha256"]}}
+                    for p in python
+                ]
+            }
+            with (
+                patch.object(packages, "metadata", return_value=metadata()),
+                patch.object(packages.subprocess, "run") as run,
+                patch.object(packages, "urlopen") as request,
+            ):
+                request.return_value.__enter__.return_value = io.BytesIO(
+                    json.dumps(response).encode()
+                )
+                packages.publish_pypi(root)
+                command = run.call_args.args[0]
+                self.assertIn("always", command)
+                self.assertEqual(command[-2:], [str(root / p["name"]) for p in python])
+                response["urls"][0]["digests"]["sha256"] = "wrong"
+                request.return_value.__enter__.return_value = io.BytesIO(
+                    json.dumps(response).encode()
+                )
+                with self.assertRaisesRegex(ValueError, "PyPI digest mismatch"):
+                    packages.publish_pypi(root)
+
     def make_payload(self, root: Path) -> None:
         records: list[packages.Package] = []
         for kind, name in (

@@ -167,6 +167,15 @@ def cargo_version() -> str:
     return version
 
 
+def upstream() -> dict[str, str]:
+    pin = json.loads((ROOT / "tools/oracle.json").read_text())
+    if not re.fullmatch(r"\d+\.\d+\.\d+", pin["version"]):
+        raise ValueError("Upstream version must be a stable release version")
+    if not re.fullmatch(r"[0-9a-f]{40}", pin["revision"]):
+        raise ValueError("Upstream revision must be a full commit SHA")
+    return {"upstream_version": pin["version"], "upstream_revision": pin["revision"]}
+
+
 def metadata() -> Metadata:
     version = cargo_version()
     toolchain = toml_string(ROOT / "Cargo.toml", "workspace", "package", "rust-version")
@@ -464,6 +473,7 @@ def pack(
                 json.dumps(
                     {
                         **meta,
+                        **upstream(),
                         "target": target,
                         "label": label,
                         "binary_sha256": hashlib.sha256(data).hexdigest(),

@@ -11,6 +11,7 @@ import tomllib
 import zipfile
 from pathlib import Path
 from typing import TypedDict, cast
+from urllib.request import urlopen
 
 from release import ROOT, metadata, read_member
 
@@ -44,7 +45,7 @@ def digest(data: bytes) -> str:
 
 
 def members(path: Path) -> dict[str, bytes]:
-    if path.suffix == ".whl":
+    if path.suffix in {".whl", ".zip"}:
         with zipfile.ZipFile(path) as archive:
             return {
                 n: archive.read(n) for n in archive.namelist() if not n.endswith("/")
@@ -111,6 +112,19 @@ def build(dest: Path) -> None:
             _ = shutil.copy2(js / name, npm / name)
         for name in ("pyproject.toml", "rshellcheck_wasm.py"):
             _ = shutil.copy2(py / name, python / name)
+        from release import upstream
+
+        pin = upstream()
+        upstream_url = (
+            f"https://github.com/koalaman/shellcheck/commit/{pin['upstream_revision']}"
+        )
+        project = python / "pyproject.toml"
+        project.write_text(
+            project.read_text().replace(
+                "[project.urls]\n",
+                f'[project.urls]\n"Upstream ShellCheck {pin["upstream_version"]}" = "{upstream_url}"\n',
+            )
+        )
         _ = shutil.copytree(
             py / "rshellcheck_wasm_data",
             python / "rshellcheck_wasm_data",
@@ -118,8 +132,18 @@ def build(dest: Path) -> None:
         )
         for directory in (npm, python):
             _ = shutil.copy2(ROOT / "LICENSE", directory / "LICENSE")
-            _ = shutil.copy2(ROOT / "bindings/wasm/README.md", directory / "README.md")
+            _ = shutil.copy2(
+                (py / "README.md")
+                if directory == python
+                else ROOT / "bindings/wasm/README.md",
+                directory / "README.md",
+            )
         _ = shutil.copy2(wasm, npm / wasm.name)
+        with (python / "README.md").open("a") as readme:
+            readme.write(
+                f"\nTracks ShellCheck {pin['upstream_version']} with upstream changes through "
+                f"[{pin['upstream_revision'][:12]}]({upstream_url}).\n"
+            )
         _ = shutil.copy2(wasm, python / "rshellcheck_wasm_data" / wasm.name)
         _ = subprocess.run(
             ["npm", "pack", "--ignore-scripts", "--pack-destination", str(dest)],
@@ -156,15 +180,47 @@ def build(dest: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    _ = parser.add_argument("command", choices=["build", "verify", "test"])
+    _ = parser.add_argument(
+        "command", choices=["build", "verify", "test", "publish-pypi"]
+    )
     _ = parser.add_argument("directory", type=Path)
     args = parser.parse_args(namespace=Args())
     if args.command == "build":
         build(args.directory)
     elif args.command == "verify":
         verify(args.directory)
+    elif args.command == "publish-pypi":
+        publish_pypi(args.directory)
     else:
         test_install(args.directory.resolve())
+
+
+def publish_pypi(dest: Path) -> None:
+    verify(dest)
+    record = load_record(dest)
+    packages = [p for p in record["packages"] if p["kind"] in {"wheel", "sdist"}]
+    _ = subprocess.run(
+        [
+            "uv",
+            "publish",
+            "--trusted-publishing",
+            "always",
+            "--check-url",
+            "https://pypi.org/simple/",
+            "--publish-url",
+            "https://upload.pypi.org/legacy/",
+            *(str((dest / p["name"]).resolve()) for p in packages),
+        ],
+        check=True,
+    )
+    with urlopen(
+        f"https://pypi.org/pypi/rshellcheck-wasm/{record['version']}/json", timeout=30
+    ) as response:
+        published = json.load(response)
+    hashes = {p["filename"]: p["digests"]["sha256"] for p in published["urls"]}
+    for package in packages:
+        if hashes.get(package["name"]) != package["sha256"]:
+            raise ValueError(f"PyPI digest mismatch: {package['name']}")
 
 
 def test_install(dest: Path) -> None:

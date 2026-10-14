@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from itertools import takewhile
 from pathlib import Path
 from typing import cast
 
@@ -60,9 +61,15 @@ class PublicationTests(unittest.TestCase):
     ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
         workflow = (release.ROOT / ".github/workflows/release.yml").read_text()
         script = textwrap.dedent(
-            workflow.split(
-                "      - name: Upload to a draft, then publish\n        run: |\n", 1
-            )[1]
+            "\n".join(
+                takewhile(
+                    lambda line: not line.strip() or line.startswith("          "),
+                    workflow.split(
+                        "      - name: Upload to a draft, then publish\n        run: |\n",
+                        1,
+                    )[1].splitlines(),
+                )
+            )
         )
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

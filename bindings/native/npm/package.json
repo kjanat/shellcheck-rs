@@ -1,0 +1,31 @@
+{
+	"name": "@kjanat/rshellcheck",
+	"version": "0.11.0",
+	"description": "Native Rust ShellCheck CLI",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kjanat/shellcheck-rs.git",
+		"directory": "bindings/native/npm"
+	},
+	"license": "GPL-3.0-or-later",
+	"type": "module",
+	"exports": {
+		".": "./index.mjs"
+	},
+	"bin": {
+		"rshellcheck": "bin.mjs"
+	},
+	"files": [
+		"bin.mjs",
+		"index.mjs",
+		"platforms.json",
+		"LICENSE",
+		"README.md"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!payload/
+!payload/rshellcheck
+!payload/rshellcheck.exe
+!payload/LICENSE.txt
+!payload/BUILD.json

@@ -7,7 +7,7 @@ dependencies    = ["rshellcheck-wasm"]
 [dependency-groups]
 dev       = [{ include-group = "lint" }, { include-group = "workspace" }]
 lint      = [
-  "basedpyright>=1.39.10,<1.40",                                           # https://github.com/microsoft/pyright/issues/11861
+  "basedpyright>=1.40.2",
   "ruff>=0.17.0",
   "ty>=0.0.86",
 ]

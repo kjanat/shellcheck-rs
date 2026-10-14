@@ -1,15 +1,35 @@
 {
 	"name": "@kjanat/rshellcheck-wasm",
 	"version": "0.11.0",
-	"private": true,
+	"description": "ShellCheck Rust core for JavaScript and browsers, powered by WebAssembly",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kjanat/shellcheck-rs.git",
+		"directory": "bindings/wasm/js"
+	},
 	"license": "GPL-3.0-or-later",
 	"type": "module",
-	"exports": { ".": "./shellcheck.mjs", "./worker": "./worker.mjs", "./wasm": "./shellcheck_wasm.wasm" },
-	"files": ["shellcheck.mjs", "worker.mjs", "shellcheck_wasm.wasm", "LICENSE", "README.md"],
+	"exports": {
+		".": "./shellcheck.mjs",
+		"./worker": "./worker.mjs",
+		"./wasm": "./shellcheck_wasm.wasm"
+	},
+	"files": [
+		"shellcheck.mjs",
+		"worker.mjs",
+		"shellcheck_wasm.wasm",
+		"LICENSE",
+		"README.md"
+	],
 	"scripts": {
 		"install:browser": "playwright install chromium",
 		"test": "node test.mjs",
 		"test:browser": "playwright test browser.spec.mjs"
 	},
-	"devDependencies": { "@playwright/test": "1.64.0" }
+	"devDependencies": {
+		"@playwright/test": "1.64.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
 }

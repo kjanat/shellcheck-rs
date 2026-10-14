@@ -169,4 +169,105 @@ archive hashes, bundled WASM equality and license contents gate assembly.
 `binding-packages.json` records their source identity and hashes. Packages and the
 manifest are covered by release checksums and tagged-release provenance attestations.
 The manual/PR workflow exposes separate npm, wheel and sdist artifacts as well.
-This does not publish packages to npm or PyPI, and does not change older releases.
+Tagged releases publish `@kjanat/rshellcheck-wasm` and the native CLI package
+`@kjanat/rshellcheck` to npm after GitHub release publication succeeds. The Python wheel and source distribution are published to PyPI as
+`rshellcheck-wasm` by a separate job.
+
+The native CLI has 15 optional platform packages containing the same verified
+binaries as the native release archives. Installation requires no scripts or
+compiler. `native-packages.json` records their checksums and source identity;
+all npm archives are included in the signed GitHub release payload.
+
+For the first publication, each npm package needs to be created by an authorized
+npm account. For this bootstrap run, store a short-lived granular token as
+`NPM_TOKEN` in the GitHub `npm` environment, with publish access to both
+`@kjanat` and `@rshellcheck`. Remove the token after configuring trusted publishing.
+Then configure its trusted publisher for repository
+`kjanat/shellcheck-rs`, workflow `release.yml`, environment `npm`, with direct publishing enabled:
+
+```sh
+npm trust github @kjanat/rshellcheck --repo kjanat/shellcheck-rs --file release.yml --environment npm --allow-publish
+```
+
+Repeat for `@kjanat/rshellcheck-wasm` and each `@rshellcheck/rshellcheck-<os>-<arch>`
+package listed in `bindings/native/npm/platforms.json`. The workflow uses OIDC
+and npm provenance; it does not need a permanent npm token. Existing versions
+are skipped only when their registry integrity matches the release archive.
+A partial npm publication can be resumed by rerunning its failed job.
+Prerelease versions use the `next` dist-tag; stable versions use `latest`.
+Also enable **Allow npm dist-tag** in each package's trusted publisher settings;
+upstream alias promotion needs this permission in addition to direct publishing.
+
+## Follow an upstream version
+
+After all distributions publish successfully, stable releases advance aliases
+derived from `tools/oracle.json`:
+
+- npm: `@kjanat/rshellcheck@upstream-0.11.0`, with the same dist-tag on WASM
+  and all platform packages.
+- Docker: `ghcr.io/kjanat/shellcheck-rs:upstream-0.11.0` and
+  `ghcr.io/kjanat/shellcheck-rs/binaries:upstream-0.11.0-TARGET`.
+- Git: the moving tag `upstream-0.11.0` points to our release commit, not the
+  original upstream commit. Existing `rshellcheck-v*` release tags stay fixed.
+
+These aliases track our latest stable release based on that upstream version,
+including the upstream changes identified by the exact revision in
+`tools/oracle.json`. Prereleases do not advance them. Promotion checks the
+previous Git alias version, requires a verified release commit, and verifies
+the resulting npm versions, OCI digests and Git target.
+
+PyPI has no distribution-tag equivalent. Install a specific version with
+`pip install rshellcheck-wasm==0.11.0`; the package description and upstream
+project link identify its upstream version and exact source revision.
+
+## Docker
+
+Releases publish `ghcr.io/kjanat/shellcheck-rs:VERSION` for Linux amd64,
+arm64, 386 and arm/v7. Stable releases also update `latest`.
+The image runs `rshellcheck` directly and defaults to `/w`, so mounted files
+can be passed by relative path:
+
+```sh
+docker run --rm -v "${PWD}:/w:ro" ghcr.io/kjanat/shellcheck-rs:0.11.0 script.sh
+```
+
+The minimal image contains the static CLI and license, with no shell or package
+manager. BuildKit includes SBOM and provenance attestations; GitHub also records
+an attestation for the published image digest.
+
+### Copy a binary without installing an archive tool
+
+Every release target also has a copy-only image tagged
+`ghcr.io/kjanat/shellcheck-rs/binaries:VERSION-TARGET`. These contain the exact
+release binary, `/LICENSE.txt` and `/BUILD.json`.
+
+```sh
+id=$(docker create ghcr.io/kjanat/shellcheck-rs/binaries:0.11.0-x86_64-apple-darwin)
+docker cp "$id:/rshellcheck" ./rshellcheck
+docker rm "$id"
+chmod +x ./rshellcheck
+```
+
+Windows targets contain `/rshellcheck.exe` instead. The image is never started:
+its Linux/amd64 container metadata is only an extraction envelope, while the
+tag and `BUILD.json` identify the binary's actual target. On other Docker host
+architectures, pass `--platform linux/amd64` to `docker create`.
+
+Linux applications can copy the matching binary directly:
+
+```dockerfile
+COPY --from=ghcr.io/kjanat/shellcheck-rs/binaries:0.11.0-x86_64-unknown-linux-musl /rshellcheck /usr/local/bin/rshellcheck
+```
+
+## PyPI setup
+
+Register a pending trusted publisher for `rshellcheck-wasm` in your PyPI account:
+owner `kjanat`, repository `shellcheck-rs`, workflow `release.yml`, environment
+`pypi`. PyPI can create the project on the first OIDC publication; no initial
+manual upload or permanent token is needed.
+
+The PyPI job runs after GitHub release publication and uploads only the verified
+wheel and source distribution. `uv publish` checks existing files by content so a
+partial upload can be retried safely. The job then verifies both published SHA-256
+digests using PyPI's API. GitHub release attestations cover these files; this job
+does not generate additional PyPI-native attestations.
