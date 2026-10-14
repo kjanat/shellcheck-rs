@@ -63,15 +63,15 @@ jobs:
       registry_only: ${{ steps.plan.outputs.registry_only }}
       commit: ${{ steps.plan.outputs.commit }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - &co0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.12.15" }
+      - &py
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with: { python-version-file: ".python-version", version: "0.13.0" }
       - name: Resolve once
         id: plan
-        env:
-          PUBLISH_EXISTING: ${{ inputs.publish_existing }}
-          GH_TOKEN: ${{ github.token }}
+        env: { PUBLISH_EXISTING: "${{ inputs.publish_existing }}", GH_TOKEN: "${{ github.token }}" }
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release plan
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with: { toolchain: "${{ steps.plan.outputs.rust }}" }
@@ -85,13 +85,14 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - &co1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with: { toolchain: "${{ needs.plan.outputs.rust }}" }
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
+          path: &cargoCachePaths |
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -118,10 +119,8 @@ jobs:
       CROSS_VERSION: ${{ needs.plan.outputs.cross }}
       NDK_VERSION: ${{ needs.plan.outputs.ndk }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.12.15" }
+      - *co1
+      - *py
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
@@ -129,10 +128,7 @@ jobs:
       - name: Cache Rust compilation
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
+          path: *cargoCachePaths
           key: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-${{ hashFiles('crates/**', 'rust/**') }}
           restore-keys: release-${{ matrix.target }}-${{ needs.plan.outputs.rust }}-${{ hashFiles('Cargo.lock', '.cargo/**', '.github/release/**') }}-
       - name: Cache cross
@@ -161,7 +157,7 @@ jobs:
           run: python3.14 .github/release/release.py smoke --target "${TARGET}"
       - name: Package binary, license and build metadata
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release pack --target "${TARGET}" --label "${LABEL}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: &ul actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binary-${{ matrix.target }}
           path: dist/*
@@ -177,16 +173,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - *co1
+      - *py
+      - &node26
+        uses: &node actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "26" }
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
-        with:
-          toolchain: ${{ needs.plan.outputs.rust }}
-          targets: wasm32-unknown-unknown
+        with: { toolchain: "${{ needs.plan.outputs.rust }}", targets: wasm32-unknown-unknown }
       - name: Build portable core
         run: cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
       - name: Test native package platform selection
@@ -195,25 +188,25 @@ jobs:
         run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages build dist-bindings
       - name: Install and test every distribution in isolation
         run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages test dist-bindings
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: binding-npm
           path: dist-bindings/*.tgz
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: binding-python-wheel
           path: dist-bindings/*.whl
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: binding-python-sdist
           path: dist-bindings/*.tar.gz
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: binding-manifest
           path: dist-bindings/binding-packages.json
@@ -227,20 +220,17 @@ jobs:
     timeout-minutes: 5
     env: { LABEL: "${{ needs.plan.outputs.label }}" }
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co1
+      - *py
+      - uses: &dl actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { pattern: "binary-*", path: dist, merge-multiple: true }
       - name: Check every target and add source archive and checksums
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release assemble --label "${LABEL}"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: *dl
         with: { pattern: "binding-*", path: dist, merge-multiple: true }
       - name: Verify all binding distributions and their source identity
         run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages verify dist
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with: { node-version: "26" }
+      - *node26
       - name: Package native npm binaries and launcher
         run: uv run --locked --no-dev --package rshellcheck-release python -m native_packages build dist --label "${LABEL}"
       - name: Test native npm installation without install scripts
@@ -250,8 +240,7 @@ jobs:
           uv run --locked --no-dev --package rshellcheck-release python -m native_wheels build dist --label "${LABEL}"
           uv run --locked --no-dev --package rshellcheck-release python -m native_wheels test dist
       - name: Prepare exact released source for SBOM scanning
-        run: mkdir sbom-source;
-          tar -xzf "dist/rshellcheck-${LABEL}-source.tar.gz" -C sbom-source --strip-components=1
+        run: mkdir -p sbom-source && tar -xzf "dist/rshellcheck-${LABEL}-source.tar.gz" -C sbom-source --strip-components=1
       - name: Generate source dependency SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         env:
@@ -267,7 +256,7 @@ jobs:
           dependency-snapshot: false
       - name: Validate SBOM and checksum the complete payload
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-supply-chain dist --lockfile sbom-source/Cargo.lock
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
           path: dist/*
@@ -288,13 +277,10 @@ jobs:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with: { node-version: "26" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co0
+      - *py
+      - *node26
+      - uses: *dl
         if: inputs.artifact_run_id != ''
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
@@ -318,7 +304,7 @@ jobs:
             fi
             uv run --locked --no-dev --package rshellcheck-release python -m native_wheels verify dist
           fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: *ul
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
           path: dist/*
@@ -339,7 +325,7 @@ jobs:
       TAG: ${{ needs.plan.outputs.tag }}
       LABEL: ${{ needs.plan.outputs.label }}
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Verify checksums
         working-directory: dist
@@ -413,9 +399,8 @@ jobs:
       IMAGE: ghcr.io/kjanat/shellcheck-rs
       PUBLISH: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co1
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Prepare verified static binaries
         shell: bash
@@ -441,9 +426,9 @@ jobs:
           status=0
           docker run --rm -v "${PWD}/docker/cli:/w:ro" rshellcheck-test -f quiet warning.sh || status=$?
           test "${status}" -eq 1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: &dockerLogin docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.PUBLISH == 'true'
-        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+        with: &dockerLoginOptions { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
       - name: Build multi-platform image
         id: image
         shell: bash
@@ -481,14 +466,13 @@ jobs:
       IMAGE: ghcr.io/kjanat/shellcheck-rs/binaries
       PUBLISH: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co1
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: *dockerLogin
         if: env.PUBLISH == 'true'
-        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+        with: *dockerLoginOptions
       - name: Package and verify every binary without executing it
         shell: bash
         run: |
@@ -546,13 +530,11 @@ jobs:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
       NPM_PLAN: "true"
     steps: &NpmPublishSteps
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - *co0
+      - uses: *node
         with: { node-version: "26", registry-url: "https://registry.npmjs.org" }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *py
+      - uses: *dl
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
           path: dist
@@ -563,24 +545,17 @@ jobs:
         run: sha256sum --check SHA256SUMS
       - name: Plan or publish verified npm archive
         id: npm
-        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: |
-          if [[ "${NPM_PLAN:-false}" == true ]]; then
-            uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --plan
-          else
-            uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --package "${NPM_PACKAGE}"
+          if [[ "${NPM_PLAN:-false}" == true ]]; then uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --plan
+          else uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --package "${NPM_PACKAGE}"
           fi
 
   npm:
     name: Publish ${{ matrix.package }}
     needs: [plan, npm-plan]
     if: ${{ !cancelled() && needs.npm-plan.result == 'success' && needs.npm-plan.outputs.native == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.npm-plan.outputs.matrix) }}
-    env:
-      NPM_PACKAGE: ${{ matrix.package }}
-      RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.npm-plan.outputs.matrix) }}" }
+    env: { NPM_PACKAGE: "${{ matrix.package }}", RELEASE_SOURCE_COMMIT: "${{ needs.plan.outputs.commit }}" }
     environment:
       name: npm
       url: https://www.npmjs.com/package/${{ matrix.package }}/v/${{ needs.plan.outputs.label }}
@@ -632,11 +607,9 @@ jobs:
     timeout-minutes: 15
     permissions: { contents: read, id-token: write }
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co0
+      - *py
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Verify complete payload checksums
         working-directory: dist
@@ -657,11 +630,9 @@ jobs:
     env:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co0
+      - *py
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Install native wheel without network and run CLI checks
         run: uv run --locked --no-dev --package rshellcheck-release python -m native_wheels test dist
@@ -679,11 +650,9 @@ jobs:
     env:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - *co0
+      - *py
+      - uses: *dl
         with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
       - name: Verify complete payload checksums
         working-directory: dist
@@ -708,16 +677,14 @@ jobs:
       cancel-in-progress: false
     permissions: { contents: write, actions: read, packages: write, id-token: write }
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, fetch-depth: 0 }
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - *co0
+      - uses: *node
         with: { node-version: "26", registry-url: "https://registry.npmjs.org" }
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with: { python-version: "3.14", version: "0.13.0" }
+      - *py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: *dockerLogin
+        with: *dockerLoginOptions
+      - uses: *dl
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
           path: dist
@@ -727,7 +694,5 @@ jobs:
         working-directory: dist
         run: sha256sum --check SHA256SUMS
       - name: Promote upstream aliases and verify their targets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: uv run --locked --no-dev --package rshellcheck-release python -m release_aliases dist
