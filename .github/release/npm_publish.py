@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import cast
 
@@ -66,19 +67,49 @@ def publish_one(path: Path) -> None:
         ],
         check=True,
     )
-    actual = subprocess.check_output(
-        [
-            "npm",
-            "view",
-            spec,
-            "dist.integrity",
-            "--json",
-            "--registry=https://registry.npmjs.org",
-        ],
-        text=True,
-    )
-    if json.loads(actual) != integrity(path):
-        raise ValueError(f"{spec}: registry integrity does not match published archive")
+    wait_for_integrity(spec, integrity(path))
+
+
+def wait_for_integrity(spec: str, expected: str) -> None:
+    for attempt in range(31):
+        try:
+            actual = subprocess.check_output(
+                [
+                    "npm",
+                    "view",
+                    spec,
+                    "dist.integrity",
+                    "--json",
+                    "--registry=https://registry.npmjs.org",
+                ],
+                text=True,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        except subprocess.CalledProcessError as error:
+            try:
+                code = cast(
+                    dict[str, dict[str, str]], json.loads(cast(str, error.output))
+                )["error"]["code"]
+            except (ValueError, KeyError, TypeError):
+                raise error from None
+            if code != "E404":
+                raise
+            if attempt == 30:
+                raise TimeoutError(
+                    f"{spec}: npm still processing after 5 minutes"
+                ) from error
+            print(
+                f"{spec}: waiting for npm registry visibility ({attempt + 1}/30)",
+                flush=True,
+            )
+            time.sleep(10)
+            continue
+        if json.loads(actual) != expected:
+            raise ValueError(
+                f"{spec}: registry integrity does not match published archive"
+            )
+        return
 
 
 def publish(dest: Path) -> None:

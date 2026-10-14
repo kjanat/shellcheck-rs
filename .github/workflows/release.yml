@@ -1,4 +1,5 @@
 name: Release rshellcheck
+run-name: ${{ inputs.publish_existing && format('Publish {0} to npm, PyPI and GHCR', inputs.publish_existing) || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
 
 on:
   push:
@@ -24,6 +25,10 @@ on:
     inputs:
       publish_existing:
         description: "Publish registries from an existing immutable release tag (blank builds only)"
+        type: string
+        default: ""
+      artifact_run_id:
+        description: "Resume publication using the unchanged payload from this release workflow run"
         type: string
         default: ""
 
@@ -263,6 +268,7 @@ jobs:
           retention-days: 14
 
   registry-payload:
+    permissions: { contents: read, actions: read }
     name: Repackage verified release for registries
     needs: plan
     if: needs.plan.outputs.registry_only == 'true' && github.repository == 'kjanat/shellcheck-rs'
@@ -278,8 +284,22 @@ jobs:
         with: { python-version: "3.14", version: "0.13.0" }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with: { node-version: "26" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.artifact_run_id != ''
+        with:
+          name: rshellcheck-${{ needs.plan.outputs.label }}
+          path: dist
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
       - name: Verify original signatures, package and smoke-test
+        if: inputs.artifact_run_id == ''
         run: uv run --locked --no-dev --package rshellcheck-release python -m registry_payload dist
+      - name: Verify resumed payload checksums and source identity
+        if: inputs.artifact_run_id != ''
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          uv run --locked --no-dev --package rshellcheck-release python -m binding_packages verify dist
+          uv run --locked --no-dev --package rshellcheck-release python -m native_packages verify dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
@@ -502,7 +522,7 @@ jobs:
       url: https://www.npmjs.com/package/@kjanat/rshellcheck/v/${{ needs.plan.outputs.label }}
     if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 90
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
