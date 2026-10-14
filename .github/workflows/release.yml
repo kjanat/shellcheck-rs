@@ -1,5 +1,5 @@
 name: Release rshellcheck
-run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.publish_existing, inputs.registry == 'npm' && 'npm' || 'npm, PyPI and GHCR') || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
+run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.publish_existing, inputs.registry == 'npm' && 'npm' || inputs.registry == 'pypi' && 'PyPI' || 'npm, PyPI and GHCR') || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
 
 on:
   push:
@@ -30,7 +30,7 @@ on:
       registry:
         description: "Registries to publish"
         type: choice
-        options: [all, npm]
+        options: [all, npm, pypi]
         default: all
       artifact_run_id:
         description: "Resume publication using the unchanged payload from this release workflow run"
@@ -246,6 +246,10 @@ jobs:
         run: uv run --locked --no-dev --package rshellcheck-release python -m native_packages build dist --label "${LABEL}"
       - name: Test native npm installation without install scripts
         run: uv run --locked --no-dev --package rshellcheck-release python -m native_packages test dist
+      - name: Build and install native Python wheels
+        run: |
+          uv run --locked --no-dev --package rshellcheck-release python -m native_wheels build dist --label "${LABEL}"
+          uv run --locked --no-dev --package rshellcheck-release python -m native_wheels test dist
       - name: Prepare exact released source for SBOM scanning
         run: mkdir sbom-source;
           tar -xzf "dist/rshellcheck-${LABEL}-source.tar.gz" -C sbom-source --strip-components=1
@@ -281,6 +285,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
+      REGISTRY: ${{ inputs.registry }}
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -306,6 +311,14 @@ jobs:
           (cd dist && sha256sum --check SHA256SUMS)
           uv run --locked --no-dev --package rshellcheck-release python -m binding_packages verify dist
           uv run --locked --no-dev --package rshellcheck-release python -m native_packages verify dist
+          if [[ "${REGISTRY}" != npm ]]; then
+            if [[ ! -f dist/native-wheels.json ]]; then
+              uv run --locked --no-dev --package rshellcheck-release python -m native_wheels build dist
+              uv run --locked --no-dev --package rshellcheck-release python -m native_wheels test dist
+              (cd dist && sha256sum rshellcheck-*-py3-none-*.whl native-wheels.json >> SHA256SUMS)
+            fi
+            uv run --locked --no-dev --package rshellcheck-release python -m native_wheels verify dist
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
@@ -391,7 +404,7 @@ jobs:
   container:
     name: Package CLI container
     needs: [plan, assemble, registry-payload]
-    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
+    if: ${{ (inputs.registry == '' || inputs.registry == 'all') && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions: { contents: read, packages: write, id-token: write, attestations: write }
@@ -458,7 +471,7 @@ jobs:
   binary-images:
     name: Package copy-only binary images
     needs: [plan, assemble, registry-payload]
-    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
+    if: ${{ (inputs.registry == '' || inputs.registry == 'all') && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions: { contents: read, packages: write }
@@ -530,7 +543,7 @@ jobs:
     environment:
       name: npm
       url: https://www.npmjs.com/package/${{ matrix.package }}/v/${{ needs.plan.outputs.label }}
-    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
+    if: ${{ inputs.registry != 'pypi' && !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions: { contents: read, id-token: write }
@@ -590,12 +603,59 @@ jobs:
       - name: Publish verified wheel and source distribution
         run: uv run --locked --no-dev --package rshellcheck-release python -m binding_packages publish-pypi dist
 
-  upstream-aliases:
-    name: Advance stable upstream aliases
-    needs: [plan, npm, npm-launcher, pypi, container, binary-images]
+  native-wheel-smoke:
+    name: Native wheel on ${{ matrix.runner }}
+    needs: [plan, assemble, registry-payload]
+    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
     env:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
-    if: ${{ !cancelled() && needs.npm.result == 'success' && needs.npm-launcher.result == 'success' && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with: { python-version: "3.14", version: "0.13.0" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
+      - name: Install native wheel without network and run CLI checks
+        run: uv run --locked --no-dev --package rshellcheck-release python -m native_wheels test dist
+
+  pypi-native:
+    name: Publish native Python wheels
+    needs: [plan, publish, registry-payload, native-wheel-smoke]
+    if: ${{ needs.native-wheel-smoke.result == 'success' && inputs.registry != 'npm' && !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions: { contents: read, id-token: write }
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rshellcheck/${{ needs.plan.outputs.label }}/
+    env:
+      RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with: { python-version: "3.14", version: "0.13.0" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with: { name: "rshellcheck-${{ needs.plan.outputs.label }}", path: dist }
+      - name: Verify complete payload checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Publish native wheels with trusted publishing
+        run: uv run --locked --no-dev --package rshellcheck-release python -m native_wheels publish dist
+
+  upstream-aliases:
+    name: Advance stable upstream aliases
+    needs: [plan, npm, npm-launcher, pypi, pypi-native, container, binary-images]
+    env:
+      RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+    if: ${{ !cancelled() && needs.npm.result == 'success' && needs.npm-launcher.result == 'success' && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.pypi-native.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment:

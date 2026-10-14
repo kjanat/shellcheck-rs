@@ -9,6 +9,7 @@ from pathlib import Path
 
 import binding_packages
 import native_packages
+import native_wheels
 from release import PREFIX, TARGETS, archive_name, metadata, run
 
 
@@ -77,11 +78,14 @@ def prepare(dest: Path) -> None:
             _ = shutil.copy2(original / name, dest / name)
         native_packages.build(dest, meta["version"])
         native_packages.test_install(dest.resolve())
+        native_wheels.build(dest, meta["version"])
+        native_wheels.test_install(dest.resolve())
     names = (
         {archive_name(meta["version"], target) for target, _, _ in TARGETS}
         | {p["name"] for p in binding_packages.load_record(dest)["packages"]}
         | {p["file"] for p in native_packages.load_record(dest)["packages"]}
-        | {binding_packages.MANIFEST, native_packages.MANIFEST}
+        | {p["name"] for p in native_wheels.load_record(dest)["packages"]}
+        | {binding_packages.MANIFEST, native_packages.MANIFEST, native_wheels.MANIFEST}
     )
     _ = (dest / "SHA256SUMS").write_text(
         "".join(

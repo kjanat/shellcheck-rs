@@ -33,7 +33,7 @@ cache-dir = ".venv/cache/ruff"
 package = false
 
 [tool.uv.workspace]
-members = ["bindings/wasm/python", ".github/release"]
+members = ["bindings/wasm/python", "bindings/native/python", ".github/release"]
 
 [tool.uv.sources]
 rshellcheck-wasm    = { workspace = true }

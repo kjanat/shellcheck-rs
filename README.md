@@ -329,6 +329,9 @@ cargo test --workspace --locked --lib --bins
 cargo conformance-snapshot
 ```
 
+Native Python wheels install the same CLI with `uv tool install rshellcheck`; see
+[native Python packaging](bindings/native/python/README.md).
+
 The executable is `target/release/rshellcheck`. See [WASM bindings](bindings/wasm/README.md)
 for Go, Python and JavaScript/browser embedding and workspace setup.
 
