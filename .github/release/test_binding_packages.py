@@ -31,7 +31,7 @@ class PackageTests(unittest.TestCase):
             with (
                 patch.object(packages, "metadata", return_value=metadata()),
                 patch.object(subprocess, "run") as run,
-                patch.object(packages, "urlopen") as request,
+                patch("registry_checks.urlopen") as request,
             ):
                 request.return_value = io.BytesIO(json.dumps(response).encode())
                 packages.publish_pypi(root)

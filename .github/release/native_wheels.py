@@ -12,12 +12,11 @@ import subprocess
 import tempfile
 import tomllib
 import zipfile
-from http.client import HTTPResponse
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.request import urlopen
 
 from binding_packages import members
+from registry_checks import verify_pypi
 from release import ROOT, Triple, archive_name, git, metadata, smoke, verify_binary
 
 SOURCE = ROOT / "bindings/native/python"
@@ -280,19 +279,11 @@ def publish(dest: Path) -> None:
         ],
         check=True,
     )
-    with cast(
-        HTTPResponse,
-        urlopen(
-            f"https://pypi.org/pypi/rshellcheck/{record['version']}/json", timeout=30
-        ),
-    ) as response:
-        data = cast(dict[str, list[dict[str, object]]], json.load(response))
-    hashes = {
-        str(p["filename"]): cast(dict[str, str], p["digests"])["sha256"]
-        for p in data["urls"]
-    }
-    if any(hashes.get(p["name"]) != p["sha256"] for p in record["packages"]):
-        raise ValueError("Published native wheel checksums differ")
+    verify_pypi(
+        "rshellcheck",
+        record["version"],
+        {p["name"]: p["sha256"] for p in record["packages"]},
+    )
 
 
 class Args(argparse.Namespace):

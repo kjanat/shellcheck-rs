@@ -27,6 +27,7 @@ setuptools            = { py-modules = [
   "npm_publish",
   "release_aliases",
   "registry_payload",
-  "native_wheels"
+  "native_wheels",
+  "registry_checks"
 ] }
 ty.environment.python = "../../.venv"

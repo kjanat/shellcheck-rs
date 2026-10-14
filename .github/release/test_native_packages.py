@@ -56,15 +56,14 @@ class NativeTests(unittest.TestCase):
                 )
                 with self.assertRaises(RuntimeError):
                     npm_publish.publish_one(path)
-            with (
-                patch.object(subprocess, "run") as run,
-                patch.object(subprocess, "check_output") as view,
-            ):
+            with patch.object(subprocess, "run") as run:
                 run.side_effect = [
                     subprocess.CompletedProcess([], 1, '{"error":{"code":"E404"}}', ""),
                     subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess(
+                        [], 0, json.dumps(npm_publish.integrity(path)), ""
+                    ),
                 ]
-                view.return_value = json.dumps(npm_publish.integrity(path))
                 npm_publish.publish_one(path)
                 command = cast(list[str], run.call_args_list[1].args[0])
                 self.assertEqual(command[:2], ["npm", "publish"])

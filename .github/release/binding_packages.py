@@ -9,11 +9,10 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from http.client import HTTPResponse
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.request import urlopen
 
+from registry_checks import verify_pypi
 from release import ROOT, git, metadata, read_member
 
 MANIFEST = "binding-packages.json"
@@ -201,11 +200,6 @@ def main() -> None:
         test_install(args.directory.resolve())
 
 
-class PublishedFile(TypedDict):
-    filename: str
-    digests: dict[str, str]
-
-
 def publish_pypi(dest: Path) -> None:
     verify(dest)
     record = load_record(dest)
@@ -224,18 +218,11 @@ def publish_pypi(dest: Path) -> None:
         ],
         check=True,
     )
-    with cast(
-        HTTPResponse,
-        urlopen(
-            f"https://pypi.org/pypi/rshellcheck-wasm/{record['version']}/json",
-            timeout=30,
-        ),
-    ) as response:
-        published = cast(dict[str, list[PublishedFile]], json.load(response))
-    hashes = {p["filename"]: p["digests"]["sha256"] for p in published["urls"]}
-    for package in packages:
-        if hashes.get(package["name"]) != package["sha256"]:
-            raise ValueError(f"PyPI digest mismatch: {package['name']}")
+    verify_pypi(
+        "rshellcheck-wasm",
+        record["version"],
+        {p["name"]: p["sha256"] for p in packages},
+    )
 
 
 def test_install(dest: Path) -> None:
