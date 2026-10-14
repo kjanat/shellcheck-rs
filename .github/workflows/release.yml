@@ -54,6 +54,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      npm_matrix: ${{ steps.plan.outputs.npm_matrix }}
       rust: ${{ steps.plan.outputs.rust }}
       cross: ${{ steps.plan.outputs.cross }}
       ndk: ${{ steps.plan.outputs.ndk }}
@@ -518,18 +519,22 @@ jobs:
           done <<< "${targets}"
 
   npm:
-    name: Publish npm packages
+    name: Publish ${{ matrix.package }}
     needs: [plan, publish, registry-payload]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.npm_matrix) }}
     env:
+      NPM_PACKAGE: ${{ matrix.package }}
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
     environment:
       name: npm
-      url: https://www.npmjs.com/package/@kjanat/rshellcheck/v/${{ needs.plan.outputs.label }}
+      url: https://www.npmjs.com/package/${{ matrix.package }}/v/${{ needs.plan.outputs.label }}
     if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 90
+    timeout-minutes: 15
     permissions: { contents: read, id-token: write }
-    steps:
+    steps: &NpmPublishSteps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: { persist-credentials: false, fetch-depth: 0 }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -543,7 +548,22 @@ jobs:
         run: sha256sum --check SHA256SUMS
       - name: Publish verified archives with npm provenance
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
-        run: uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist
+        run: uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --package "${NPM_PACKAGE}"
+
+  npm-launcher:
+    name: Publish @kjanat/rshellcheck
+    needs: [plan, npm]
+    if: ${{ !cancelled() && needs.npm.result == 'success' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions: { contents: read, id-token: write }
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@kjanat/rshellcheck/v/${{ needs.plan.outputs.label }}
+    env:
+      RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+      NPM_PACKAGE: "@kjanat/rshellcheck"
+    steps: *NpmPublishSteps
 
   pypi:
     name: Publish Python bindings to PyPI
@@ -572,10 +592,10 @@ jobs:
 
   upstream-aliases:
     name: Advance stable upstream aliases
-    needs: [plan, npm, pypi, container, binary-images]
+    needs: [plan, npm, npm-launcher, pypi, container, binary-images]
     env:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
-    if: ${{ !cancelled() && needs.npm.result == 'success' && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
+    if: ${{ !cancelled() && needs.npm.result == 'success' && needs.npm-launcher.result == 'success' && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment:

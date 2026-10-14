@@ -107,6 +107,7 @@ class Plan(Metadata):
     tag: str
     publish: bool
     registry_only: bool
+    npm_matrix: str
     cross: str
     ndk: str
     matrix: Matrix
@@ -280,6 +281,25 @@ def plan(ref: str = "", event: str = "") -> Plan:
         tag=expected,
         publish=publishing,
         registry_only=bool(existing),
+        npm_matrix=json.dumps(
+            {
+                "package": [
+                    *(
+                        f"@rshellcheck/rshellcheck-{key}"
+                        for key in cast(
+                            dict[str, str],
+                            json.loads(
+                                (
+                                    ROOT / "bindings/native/npm/platforms.json"
+                                ).read_text()
+                            ),
+                        )
+                    ),
+                    "@kjanat/rshellcheck-wasm",
+                ]
+            },
+            separators=(",", ":"),
+        ),
         cross=CROSS_VERSION,
         ndk=NDK_VERSION,
         matrix=Matrix(include=target_entries()),

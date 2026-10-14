@@ -130,23 +130,34 @@ def wait_for_integrity(spec: str, expected: str) -> None:
         return
 
 
-def publish(dest: Path) -> None:
+def publish(dest: Path, selected: str | None = None) -> None:
     verify_bindings(dest)
     verify_native(dest)
-    # Platform dependencies precede the wrapper so it is installable when visible.
-    native = load_native_record(dest)["packages"]
-    for package in native:
-        publish_one(dest / package["file"])
-    for package in load_record(dest)["packages"]:
-        if package["kind"] == "npm":
-            publish_one(dest / package["name"])
+    # In the workflow each dependency has its own job; the launcher runs last.
+    paths = [dest / p["file"] for p in load_native_record(dest)["packages"]]
+    paths.extend(
+        dest / p["name"] for p in load_record(dest)["packages"] if p["kind"] == "npm"
+    )
+    if selected is not None:
+        paths = [
+            path
+            for path in paths
+            if json.loads(members(path)["package/package.json"])["name"] == selected
+        ]
+        if len(paths) != 1:
+            raise ValueError(f"Expected exactly one archive for {selected}")
+    for path in paths:
+        publish_one(path)
 
 
 class Args(argparse.Namespace):
     directory: Path = Path()
+    package: str | None = None
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("directory", type=Path)
-    publish(parser.parse_args(namespace=Args()).directory)
+    _ = parser.add_argument("--package")
+    args = parser.parse_args(namespace=Args())
+    publish(args.directory, args.package)
