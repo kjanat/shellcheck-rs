@@ -77,10 +77,16 @@ def prepare(dest: Path) -> None:
             _ = shutil.copy2(original / name, dest / name)
         native_packages.build(dest, meta["version"])
         native_packages.test_install(dest.resolve())
+    names = (
+        {archive_name(meta["version"], target) for target, _, _ in TARGETS}
+        | {p["name"] for p in binding_packages.load_record(dest)["packages"]}
+        | {p["file"] for p in native_packages.load_record(dest)["packages"]}
+        | {binding_packages.MANIFEST, native_packages.MANIFEST}
+    )
     _ = (dest / "SHA256SUMS").write_text(
         "".join(
             f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
-            for path in sorted(dest.iterdir())
+            for path in (dest / name for name in sorted(names))
         )
     )
 
