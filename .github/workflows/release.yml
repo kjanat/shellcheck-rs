@@ -1,5 +1,5 @@
 name: Release rshellcheck
-run-name: ${{ inputs.publish_existing && format('Publish {0} to npm, PyPI and GHCR', inputs.publish_existing) || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
+run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.publish_existing, inputs.registry == 'npm' && 'npm' || 'npm, PyPI and GHCR') || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
 
 on:
   push:
@@ -27,6 +27,11 @@ on:
         description: "Publish registries from an existing immutable release tag (blank builds only)"
         type: string
         default: ""
+      registry:
+        description: "Registries to publish"
+        type: choice
+        options: [all, npm]
+        default: all
       artifact_run_id:
         description: "Resume publication using the unchanged payload from this release workflow run"
         type: string
@@ -385,7 +390,7 @@ jobs:
   container:
     name: Package CLI container
     needs: [plan, assemble, registry-payload]
-    if: ${{ !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
+    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions: { contents: read, packages: write, id-token: write, attestations: write }
@@ -452,7 +457,7 @@ jobs:
   binary-images:
     name: Package copy-only binary images
     needs: [plan, assemble, registry-payload]
-    if: ${{ !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
+    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions: { contents: read, packages: write }
@@ -548,7 +553,7 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/project/rshellcheck-wasm/${{ needs.plan.outputs.label }}/
-    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
+    if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions: { contents: read, id-token: write }
@@ -570,7 +575,7 @@ jobs:
     needs: [plan, npm, pypi, container, binary-images]
     env:
       RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
-    if: ${{ !cancelled() && needs.npm.result == 'success' && needs.pypi.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success' && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
+    if: ${{ !cancelled() && needs.npm.result == 'success' && (inputs.registry == 'npm' || (needs.pypi.result == 'success' && needs.container.result == 'success' && needs.binary-images.result == 'success')) && needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.label, '-') && github.repository == 'kjanat/shellcheck-rs' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment:

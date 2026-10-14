@@ -54,19 +54,37 @@ def publish_one(path: Path) -> None:
     if code != "E404":
         raise RuntimeError(f"Cannot check npm package {spec}: {result.stderr}")
     tag = "next" if "-" in manifest["version"] else "latest"
-    _ = subprocess.run(
-        [
-            "npm",
-            "publish",
-            str(path.resolve()),
-            "--access=public",
-            "--provenance",
-            "--tag",
-            tag,
-            "--registry=https://registry.npmjs.org",
-        ],
-        check=True,
-    )
+    try:
+        published = subprocess.run(
+            [
+                "npm",
+                "publish",
+                str(path.resolve()),
+                "--access=public",
+                "--provenance",
+                "--tag",
+                tag,
+                "--registry=https://registry.npmjs.org",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(published.stdout or "", end="", flush=True)
+        print(published.stderr or "", end="", flush=True)
+    except subprocess.CalledProcessError as error:
+        message = cast(str, error.stderr) or ""
+        if (
+            "E403" not in message
+            or "You cannot publish over the previously published versions:"
+            not in message
+        ):
+            print(message, flush=True)
+            raise
+        print(
+            f"{spec}: npm already accepted this version; verifying its integrity",
+            flush=True,
+        )
     wait_for_integrity(spec, integrity(path))
 
 
