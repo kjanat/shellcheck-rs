@@ -102,9 +102,9 @@ npm and PyPI publish through OIDC; the workflow needs no permanent registry toke
 
 After every distribution of a stable release publishes, `upstream-aliases` advances aliases derived from `tools/oracle.json`:
 
-- npm dist-tag `upstream-0.11.0` on `@kjanat/rshellcheck`, `@kjanat/rshellcheck-wasm` and every platform package.
-- `ghcr.io/kjanat/shellcheck-rs:upstream-0.11.0` and `ghcr.io/kjanat/shellcheck-rs/binaries:upstream-0.11.0-TARGET`.
-- The moving git tag `upstream-0.11.0` on the release commit. `rshellcheck-v*` tags never move.
+- npm dist-tag `upstream-<version>` on `@kjanat/rshellcheck`, `@kjanat/rshellcheck-wasm` and every platform package.
+- `ghcr.io/kjanat/shellcheck-rs:upstream-<version>` and `ghcr.io/kjanat/shellcheck-rs/binaries:upstream-<version>-TARGET`.
+- The moving git tag `upstream-<version>` on the release commit. `rshellcheck-v*` tags never move.
 
 Prereleases do not advance them. Promotion checks the previous git alias version, requires a verified release commit, and verifies the resulting npm versions, OCI digests and git target. PyPI has no equivalent; `pip install rshellcheck-wasm==1.0.0` pins a version and the package description names its upstream revision.
 

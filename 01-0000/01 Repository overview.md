@@ -35,12 +35,12 @@ Root manifests: `Cargo.toml` (workspace, edition 2024, `rust-version = "1.99"`, 
 
 ## 1.2 Branches
 
-| Branch         | Content                                                                                                          | Last commit                                                                                                       |
-| -------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `master`       | The Rust port, its harness, bindings, release pipeline and documents.                                            | [`b242c3c5`](https://github.com/kjanat/shellcheck-rs/commit/b242c3c583425c4b98c755bb45ce0366a0793e17), 2026-10-15 |
-| `bench`        | The benchmark harness, a Python project with its own `mise.toml`. See [Benchmark harness](08-Benchmark-harness). | [`a74f2aec`](https://github.com/kjanat/shellcheck-rs/commit/a74f2aecc271435af9409fabf8710e75e7acfdcf), 2026-10-10 |
-| `h2r-compiler` | The Haskell-to-Rust compiler experiment, finished. See [H2R compiler](09-H2R-compiler).                          | [`d64c96bd`](https://github.com/kjanat/shellcheck-rs/commit/d64c96bd3159a07c4af66acdc2fedf8b34ad953f), 2026-10-03 |
-| `wiki`         | These pages. `.github/workflows/wiki.yml` mirrors every push into the wiki repository.                           |                                                                                                                   |
+| Branch         | Content                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `master`       | The Rust port, its harness, bindings, release pipeline and documents.                                            |
+| `bench`        | The benchmark harness, a Python project with its own `mise.toml`. See [Benchmark harness](08-Benchmark-harness). |
+| `h2r-compiler` | The Haskell-to-Rust compiler experiment, finished. See [H2R compiler](09-H2R-compiler).                          |
+| `wiki`         | These pages. `.github/workflows/wiki.yml` mirrors every push into the wiki repository.                           |
 
 The Rust port was developed on a `rust-port` branch and merged into `master` through [pull request #1](https://github.com/kjanat/shellcheck-rs/pull/1). That branch is gone from the remote.
 
@@ -48,15 +48,15 @@ The Rust port was developed on a `rust-port` branch and merged into `master` thr
 
 ## 1.3 Tags and releases
 
-| Tag                                                                        | Points at              | Meaning                                                                  |
-| -------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------ |
-| `rshellcheck-v0.11.0`                                                      | `e0f0d778`, 2026-10-12 | First GitHub release, numbered after the upstream version it ported.     |
-| `rshellcheck-v1.0.0`                                                       | `b242c3c5`, 2026-10-15 | First release under the port's own version scheme.                       |
-| `go/v0.11.0`, `go/v1.0.0`                                                  | The same commits       | Go module tags for `go/`, required on the release commit by the planner. |
-| `go/v0.11.0-wrapper.1`                                                     | `beab2f17`             | A Go wrapper fix shipped without a new binary release.                   |
-| `h2r-m1` … `h2r-m2.4`, `h2r-dump-v5`, `h2r-dump-v6`, `h2r-a5-linkage-hole` | 2026-09-16             | Milestones of the H2R compiler experiment.                               |
+| Tag pattern                                                                | Meaning                                                                                                                             |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `rshellcheck-v<version>`                                                   | A binary release. `rshellcheck-v0.11.0` carried the upstream version number; from `rshellcheck-v1.0.0` the port has its own scheme. |
+| `go/v<version>`                                                            | Go module tag on the same commit as the binary release, required there by the planner.                                              |
+| `go/v<version>-wrapper.<n>`                                                | A Go wrapper fix shipped without a new binary release.                                                                              |
+| `upstream-<version>`                                                       | Moved by the release pipeline to the newest stable release of that upstream version.                                                |
+| `h2r-m1` … `h2r-m2.4`, `h2r-dump-v5`, `h2r-dump-v6`, `h2r-a5-linkage-hole` | Milestones of the H2R compiler experiment.                                                                                          |
 
-The release pipeline also moves an `upstream-<version>` git tag to the newest stable release of that upstream version. See [Releases and distributions](06-Releases-and-distributions).
+The [tags page](https://github.com/kjanat/shellcheck-rs/tags) lists the current tags. See [Releases and distributions](06-Releases-and-distributions).
 
 **[⬆ Top](#idtop)**
 

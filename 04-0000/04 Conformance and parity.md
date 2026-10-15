@@ -6,19 +6,11 @@ The port is bug-compatible with one pinned upstream revision: same codes, same m
 
 ## 4.1 The oracle
 
-`tools/oracle.json` pins the source:
+[`tools/oracle.json`](https://github.com/kjanat/shellcheck-rs/blob/master/tools/oracle.json) pins the source with three fields: `repository`, the full `revision` SHA and the upstream `version` the binary must report.
 
-```json
-{
-  "repository": "koalaman/shellcheck",
-  "revision": "c36c85a05ed3a1560e31bf7d89db040f84ef4556",
-  "version": "0.11.0"
-}
-```
+`python tools/oracle.py` clones that repository with `gh repo clone` (blob filter, depth 1), checks out the revision detached into `.cache/upstream-shellcheck`, runs `cabal build exe:shellcheck`, checks that the binary reports the pinned version, copies it to `.cache/shellcheck-oracle` and records the pin plus the binary's SHA-256 in `.cache/shellcheck-oracle.json`. The script refuses a checkout at another revision or with local changes. `--fetch-only` stops after the checkout; `--verify-only` checks the recorded identity without rebuilding. GHC, Cabal and an authenticated `gh` are required; mise does not install them.
 
-`python tools/oracle.py` clones that repository with `gh repo clone` (blob filter, depth 1), checks out the revision detached into `.cache/upstream-shellcheck`, runs `cabal build exe:shellcheck`, checks that the binary reports `version: 0.11.0`, copies it to `.cache/shellcheck-oracle` and records the pin plus the binary's SHA-256 in `.cache/shellcheck-oracle.json`. The script refuses a checkout at another revision or with local changes. `--fetch-only` stops after the checkout; `--verify-only` checks the recorded identity without rebuilding. GHC, Cabal and an authenticated `gh` are required; mise does not install them.
-
-`UPSTREAM.md` names the pinned revision, the date it was integrated (2026-10-14 for `c36c85a05ed3`) and one table row per imported upstream commit. The pinned source is newer than the published ShellCheck 0.11.0 binary.
+[`UPSTREAM.md`](https://github.com/kjanat/shellcheck-rs/blob/master/UPSTREAM.md) names the pinned revision, the date it was integrated and one table row per imported upstream commit.
 
 **[⬆ Top](#idtop)**
 
