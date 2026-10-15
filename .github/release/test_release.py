@@ -115,10 +115,11 @@ class ReleaseTests(unittest.TestCase):
             _ = release.plan("refs/tags/rshellcheck-v999.0.0", "push")
 
     def test_publishing_requires_the_go_tag_on_the_same_commit(self):
-        tag = "refs/tags/" + release.PREFIX + release.metadata()["version"]
+        version = release.metadata()["version"]
+        tag = "refs/tags/" + release.PREFIX + version
         with (
             patch.object(release, "git", return_value=""),
-            self.assertRaisesRegex(ValueError, "go/v0.11.0 is missing"),
+            self.assertRaisesRegex(ValueError, f"go/v{version} is missing"),
         ):
             _ = release.plan(tag, "push")
 

@@ -103,7 +103,7 @@ func moduleVersion() string {
 
 func resolve(version, goos, goarch, base, cache string) (*release, error) {
 	if !taggedVersion.MatchString(version) || pseudoVersion.MatchString(version) {
-		return nil, fmt.Errorf("built from %q; install a tagged version, for example go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v0.11.0", version)
+		return nil, fmt.Errorf("built from %q; install a tagged version, for example go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0", version)
 	}
 	target, ok := targets[goos+"/"+goarch]
 	if !ok {

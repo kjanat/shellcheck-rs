@@ -420,12 +420,15 @@ pub fn list_optional_text() -> String {
     s
 }
 
-/// The version banner (`printVersion`), using the crate version.
+/// The version banner (`printVersion`), using the crate version and the
+/// upstream ShellCheck pin from `tools/oracle.json`.
 #[must_use]
 pub fn version_banner() -> String {
     format!(
-        "ShellCheck - shell script analysis tool\nversion: {}\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net",
-        env!("CARGO_PKG_VERSION")
+        "ShellCheck - shell script analysis tool\nversion: {}\nupstream: {} (git {})\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net",
+        env!("CARGO_PKG_VERSION"),
+        env!("RSHELLCHECK_UPSTREAM_VERSION"),
+        &env!("RSHELLCHECK_UPSTREAM_REVISION")[..12]
     )
 }
 
@@ -1142,6 +1145,24 @@ mod tests {
     fn version_exits_zero() {
         assert_eq!(parse(&args(&["-V"])), Outcome::PrintVersion);
         assert_eq!(parse(&args(&["--version"])), Outcome::PrintVersion);
+    }
+
+    #[test]
+    fn version_banner_names_the_port_and_the_upstream_pin() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let pin: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
+        let upstream = pin["version"].as_str().ok_or("pin lacks version")?;
+        let revision = pin["revision"].as_str().ok_or("pin lacks revision")?;
+        let banner = version_banner();
+        let lines: Vec<&str> = banner.lines().collect();
+        assert_eq!(lines[1], concat!("version: ", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            lines[2],
+            format!("upstream: {upstream} (git {})", &revision[..12])
+        );
+        assert_ne!(upstream, env!("CARGO_PKG_VERSION"));
+        Ok(())
     }
 
     #[test]

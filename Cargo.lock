@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "shellcheck-cli"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "shellcheck-rs"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "im-rc",
  "regex",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "shellcheck-wasm"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
