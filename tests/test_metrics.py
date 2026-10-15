@@ -257,6 +257,33 @@ class MetricsTests(unittest.TestCase):
         )
         self.assertIn("lowest observed median", report)
 
+    def test_baseline_alone_earns_no_trophy(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        for name in ("rshellcheck", "h2r"):
+            run.precheck["medium"][name].parity = "differs"
+        _, report = self.analyze_run(run)
+        rows = [line for line in report.splitlines() if line.startswith("| ")]
+        self.assertTrue(any(row.startswith("| upstream | baseline |") for row in rows))
+        self.assertNotIn("🏆", "\n".join(rows))
+
+    def test_two_eligible_candidates_award_the_faster_one(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        run.precheck["medium"]["h2r"].parity = "differs"
+        samples = run.samples["medium"]["rshellcheck"]
+        for round_ in samples.rounds:
+            round_.times = [time / 2 for time in round_.times]
+        samples.times = [time for round_ in samples.rounds for time in round_.times]
+        _, report = self.analyze_run(run)
+        rows = {
+            name: next(
+                line for line in report.splitlines() if line.startswith(f"| {name} |")
+            )
+            for name in ("upstream", "rshellcheck", "h2r")
+        }
+        self.assertIn("🏆", rows["rshellcheck"])
+        self.assertNotIn("🏆", rows["upstream"])
+        self.assertNotIn("🏆", rows["h2r"])
+
     def test_timeout_kills_candidate_and_fast_children_are_reaped_once(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

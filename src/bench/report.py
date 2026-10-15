@@ -184,7 +184,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         "",
         "## The results",
         "",
-        "🏆 marks the lowest observed median with matching output. Noise and statistical significance appear in the status column.",
+        "🏆 marks the lowest observed median among at least two candidates with matching output. Noise and statistical significance appear in the status column.",
     ]
     for scenario in run.scenarios:
         lines += [
@@ -206,7 +206,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 for flag in summary.flags[scenario][name]
             )
         }
-        winner = min(eligible, key=eligible.__getitem__, default=None)
+        winner = min(eligible, key=eligible.__getitem__) if len(eligible) > 1 else None
         for name in names:
             check = run.precheck[scenario][name]
             cell = summary.descriptives[scenario][name]
