@@ -52,15 +52,22 @@ def main(argv: list[str] | None = None) -> None:
         args = parser.parse_args(arguments, namespace=Args())
         if args.omarchy_source and not args.omarchy:
             raise ValueError("--omarchy-source requires --omarchy")
+        if args.plan:
+            raise ValueError(
+                "the default command resolves its own plan; use bench run --plan"
+            )
         table = candidates.specs(args.config)
+        state = args.state.resolve()
         plan = candidates.resolve(
             table,
             args.candidates,
             candidates.overrides(args.binary, table),
             candidates.overrides(args.source, table),
-            args.state.resolve(),
+            state,
         )
-        candidates.prepare(plan, args.state.resolve(), args.prepared.resolve())
+        args.plan = state / "plan.json"
+        candidates.write_model(args.plan, plan)
+        candidates.prepare(plan, state, args.prepared.resolve())
         if args.omarchy or not (args.corpus / "corpus.json").exists():
             corpus_arguments = ["--out", str(args.corpus)]
             if args.omarchy:

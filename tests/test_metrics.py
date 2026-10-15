@@ -70,7 +70,7 @@ class MetricsTests(unittest.TestCase):
             with (
                 patch(
                     "bench.measure.load_candidates",
-                    return_value=(fixture.candidates, fixture.baseline),
+                    return_value=(fixture.candidates, fixture.baseline, []),
                 ),
                 patch("bench.measure.load_scenarios", return_value=scenarios),
                 patch("bench.measure.environment", return_value=fixture.environment),

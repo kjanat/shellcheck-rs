@@ -14,6 +14,7 @@ class CandidateSpec(BaseModel):
     ref: str = ""
     package: str = ""
     build: Literal["cargo", "cabal"] = "cargo"
+    release: str | None = None
     tools: list[str] = []
     tool: str | None = None
     jobs: int = Field(default=2, ge=1)
@@ -255,6 +256,7 @@ class Run(BaseModel):
     samples: dict[str, dict[str, Samples]]
     elapsed_s: float
     candidate_elapsed_s: dict[str, float] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
 
 
 type Verdict = Literal["faster", "slower", "no significant difference", "n/a"]

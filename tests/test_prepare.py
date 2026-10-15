@@ -88,6 +88,7 @@ if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
+        self.git("config", "tag.gpgSign", "false")
         (self.source / "main.rs").write_text("initial")
         (self.source / "Cargo.lock").write_text("version = 4\n")
         (self.source / "mise.toml").write_text('[tools]\nrust = "1.0"\n')
@@ -216,6 +217,107 @@ baseline = true
         self.assertIn("binary cache hit", warm.stderr)
         self.assertEqual(self.count(), 1)
         self.cli("prepare", *flags, "--candidates", "haskell", "--verify")
+
+    def upstream_config(self):
+        config = self.root / "upstream.toml"
+        config.write_text(f"""[candidates.upstream-release]
+binary = "shellcheck"
+tool = "shellcheck"
+[candidates.upstream-head]
+baseline = true
+repo = {json.dumps(str(self.source))}
+ref = "main"
+build = "cabal"
+package = "ShellCheck"
+binary = "shellcheck"
+release = "upstream-release"
+tools = ["ghcup", "ghc", "cabal"]
+[candidates.rshellcheck]
+repo = {json.dumps(str(self.source))}
+ref = "main"
+package = "shellcheck-cli"
+tools = ["rust"]
+""")
+        return ["--config", str(config), *self.flags[2:]]
+
+    def test_head_at_release_tag_skips_the_source_build_and_rebases(self):
+        flags = self.upstream_config()
+        self.git("tag", "vfixture")
+        head = self.git("rev-parse", "HEAD")
+        plan_path = self.root / "plan.json"
+        self.cli("prepare", *flags, "--resolve-only", "--plan", str(plan_path))
+        plan = json.loads(plan_path.read_text())
+        self.assertEqual(
+            [build["name"] for build in plan["builds"]],
+            ["upstream-release", "rshellcheck"],
+        )
+        self.assertEqual(plan["baseline"], "upstream-release")
+        self.assertEqual(
+            plan["notes"],
+            [
+                f"upstream-head skipped: default branch HEAD {head} is the vfixture release commit"
+            ],
+        )
+        self.cli("prepare", *flags, "--plan", str(plan_path))
+        self.assertEqual(self.count(), 1)
+        self.cli("prepare", *flags, "--verify", "--plan", str(plan_path))
+        corpus = self.root / "corpus"
+        out = self.root / "run"
+        self.cli("corpus", "--out", str(corpus))
+        self.cli(
+            "run",
+            "--plan",
+            str(plan_path),
+            "--prepared",
+            str(self.prepared),
+            "--corpus",
+            str(corpus),
+            "--out",
+            str(out),
+            "--scenarios",
+            "startup",
+            "--rounds",
+            "1",
+            "--runs",
+            "2",
+            "--warmup",
+            "0",
+        )
+        recorded = json.loads((out / "run.json").read_text())
+        self.assertEqual(recorded["baseline"], "upstream-release")
+        self.assertEqual(recorded["notes"], plan["notes"])
+        self.cli("report", str(out))
+        report = (out / "report.md").read_text()
+        self.assertIn("Baseline: **upstream-release**", report)
+        self.assertIn(plan["notes"][0], report)
+
+    def test_head_past_release_tag_keeps_the_source_build_as_baseline(self):
+        flags = self.upstream_config()
+        self.git("tag", "-a", "vfixture", "-m", "release")
+        released = self.git("rev-parse", "HEAD")
+        (self.source / "main.rs").write_text("after the release")
+        self.commit()
+        head = self.git("rev-parse", "HEAD")
+        plan_path = self.root / "plan.json"
+        self.cli("prepare", *flags, "--resolve-only", "--plan", str(plan_path))
+        plan = json.loads(plan_path.read_text())
+        self.assertEqual(
+            [build["name"] for build in plan["builds"]],
+            ["upstream-release", "upstream-head", "rshellcheck"],
+        )
+        self.assertEqual(plan["baseline"], "upstream-head")
+        self.assertEqual(
+            plan["notes"],
+            [
+                f"upstream-head: default branch HEAD {head} differs from the vfixture release commit {released}"
+            ],
+        )
+        self.cli("prepare", *flags, "--plan", str(plan_path))
+        self.assertEqual(self.count(), 2)
+        manifest = json.loads(
+            (self.prepared / "upstream-head/manifest.json").read_text()
+        )
+        self.assertEqual(manifest["pin"], head)
 
     def test_new_revision_reuses_build_directory_and_changes_binary_key(self):
         self.prepare()

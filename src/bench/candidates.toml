@@ -1,10 +1,15 @@
-[candidates.upstream]
+[candidates.upstream-release]
+binary = "shellcheck"
+tool   = "shellcheck"
+
+[candidates.upstream-head]
 baseline = true
 repo     = "https://github.com/koalaman/shellcheck.git"
-ref      = "c36c85a05ed3a1560e31bf7d89db040f84ef4556"
+ref      = "master"
 build    = "cabal"
 package  = "ShellCheck"
 binary   = "shellcheck"
+release  = "upstream-release"
 tools    = ["ghcup", "ghc", "cabal"]
 
 [candidates.rshellcheck]

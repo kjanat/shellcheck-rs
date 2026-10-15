@@ -43,6 +43,11 @@ class Plan(BaseModel):
     version: int = RECIPE
     baseline: str
     builds: list[Build]
+    notes: list[str] = []
+
+
+def plan_table(plan: Plan) -> dict[str, CandidateSpec]:
+    return {build.name: build.spec for build in plan.builds}
 
 
 def digest(data: bytes) -> str:
@@ -64,6 +69,29 @@ def command(argv: list[str], cwd: Path | None = None) -> str:
 
 def git(source: Path, *args: str) -> str:
     return command(["git", "-C", str(source), *args])
+
+
+def release_version(version_output: str) -> str:
+    return next(
+        (
+            line.partition(":")[2].strip()
+            for line in version_output.splitlines()
+            if line.startswith("version:")
+        ),
+        version_output,
+    )
+
+
+def tag_commit(repo: str, tag: str) -> str:
+    plain, peeled = f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"
+    refs: dict[str, str] = {}
+    for line in command(["git", "ls-remote", repo, plain, peeled]).splitlines():
+        sha, _, ref = line.partition("\t")
+        refs[ref] = sha
+    sha = refs.get(peeled) or refs.get(plain)
+    if not sha:
+        raise ValueError(f"{repo} has no tag {tag}")
+    return sha
 
 
 @contextmanager
@@ -282,10 +310,31 @@ def resolve(
                     layers_key=layers_key,
                 )
             )
-    return Plan(
-        baseline=next(name for name, spec in table.items() if spec.baseline),
-        builds=builds,
-    )
+    baseline = next(name for name, spec in table.items() if spec.baseline)
+    notes: list[str] = []
+    by_name = {build.name: build for build in builds}
+    for build in list(builds):
+        release = by_name.get(build.spec.release or "")
+        if release is None:
+            continue
+        if release.binary is None or not build.spec.repo:
+            raise ValueError(
+                f"{build.name}: {release.name} must resolve to a binary and {build.name} to a repository"
+            )
+        tag = "v" + release_version(command([release.binary, "--version"]))
+        released = tag_commit(build.spec.repo, tag)
+        if released == build.pin:
+            builds.remove(build)
+            if baseline == build.name:
+                baseline = release.name
+            notes.append(
+                f"{build.name} skipped: default branch HEAD {build.pin} is the {tag} release commit"
+            )
+        else:
+            notes.append(
+                f"{build.name}: default branch HEAD {build.pin} differs from the {tag} release commit {released}"
+            )
+    return Plan(baseline=baseline, builds=builds, notes=notes)
 
 
 def read_manifest(directory: Path) -> Manifest:
@@ -331,16 +380,7 @@ def publish(binary: Path, build: Build, directory: Path) -> Manifest:
     temp.replace(destination)
     version = command([str(destination), "--version"])
     kind = "git" if build.source else "path" if build.spec.repo else "release"
-    pin = build.pin
-    if kind == "release":
-        pin = next(
-            (
-                line.partition(":")[2].strip()
-                for line in version.splitlines()
-                if line.startswith("version:")
-            ),
-            version,
-        )
+    pin = release_version(version) if kind == "release" else build.pin
     manifest = Manifest(
         name=build.name,
         kind=kind,
@@ -599,7 +639,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--plan",
         type=Path,
-        help="consume a resolved plan; with --resolve-only, write it here",
+        help="consume a resolved plan; with --resolve-only or --verify, write or read it here",
     )
     parser.add_argument("--resolve-only", action="store_true")
     parser.add_argument(
@@ -611,6 +651,8 @@ def main(argv: list[str] | None = None) -> None:
     table = specs(args.config)
     state = args.state.resolve()
     if args.verify:
+        if args.plan:
+            table = plan_table(Plan.model_validate_json(args.plan.read_text()))
         for name in selected(table, args.candidates):
             manifest = read_manifest(args.prepared / name)
             if manifest.name != name:
@@ -629,7 +671,6 @@ def main(argv: list[str] | None = None) -> None:
             overrides(args.source, table),
             state,
         )
-    if args.resolve_only:
         write_model(args.plan or state / "plan.json", plan)
-    else:
+    if not args.resolve_only:
         prepare(plan, state, args.prepared.resolve(), args.candidates)

@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv" }
+        with: { install_args: "python uv github:koalaman/shellcheck" }
       - name: Prepare bench plan
         run: uv run bench prepare --resolve-only --plan .bench/plan.json
       - name: Resolve once
@@ -45,7 +45,7 @@ jobs:
           plan = json.loads(Path('.bench/plan.json').read_text())
           matrix = [
               {key: item[key] for key in ('name', 'key', 'layers_key')}
-              | {'build': item['spec']['build'], 'cabal': 'cabal' in item['spec']['tools']}
+              | {'build': item['spec']['build'] if item['source'] else 'binary', 'cabal': 'cabal' in item['spec']['tools']}
               for item in plan['builds']
           ]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv" }
+        with: { install_args: "python uv github:koalaman/shellcheck" }
       - uses: actions/download-artifact@v8
         with: { name: candidate-plan, path: .bench }
       - name: Restore completed binary and provenance
@@ -76,7 +76,7 @@ jobs:
           key: bench-binary-${{ matrix.name }}-${{ matrix.key }}
       - name: Restore compatible build layers
         id: layers
-        if: steps.binary.outputs.cache-hit != 'true'
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.build != 'binary'
         uses: actions/cache/restore@v6
         with:
           path: &BuildLayers |
@@ -136,13 +136,15 @@ jobs:
       - name: Install measurement runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
       - uses: actions/download-artifact@v8
+        with: { name: candidate-plan, path: .bench }
+      - uses: actions/download-artifact@v8
         with: { pattern: prepared-*, path: .bench/artifacts }
       - name: Assemble and verify prepared artifacts
         run: |
           mkdir -p .bench/prepared
-          for name in upstream rshellcheck h2r; do mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"; done
+          for directory in .bench/artifacts/prepared-*; do mv "${directory}" ".bench/prepared/${directory##*/prepared-}"; done
           chmod +x .bench/prepared/*/*/rshellcheck
-          uv run bench prepare --verify
+          uv run bench prepare --verify --plan .bench/plan.json
       - name: Restore pinned Omarchy source
         uses: actions/cache@v6
         with:
@@ -158,7 +160,7 @@ jobs:
           WARMUP: ${{ inputs.warmup || '1' }}
           MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '2' }}
           SCENARIOS: ${{ inputs.scenarios }}
-        run: uv run bench run --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
+        run: uv run bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
           ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
       - name: Report
         run: uv run bench report .bench/results/ci

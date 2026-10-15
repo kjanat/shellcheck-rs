@@ -92,19 +92,29 @@ def warn(msg: str) -> None:
 
 
 def load_candidates(
-    prepared: Path, only: list[str] | None, config: Path = HERE / "candidates.toml"
-) -> tuple[list[Manifest], str]:
-    from bench.candidates import read_manifest, selected, specs
+    prepared: Path,
+    only: list[str] | None,
+    config: Path = HERE / "candidates.toml",
+    plan: Path | None = None,
+) -> tuple[list[Manifest], str, list[str]]:
+    from bench.candidates import Plan, plan_table, read_manifest, selected, specs
 
-    table = specs(config)
+    notes: list[str] = []
+    if plan:
+        resolved = Plan.model_validate_json(plan.read_text())
+        table = plan_table(resolved)
+        baseline = resolved.baseline
+        notes = resolved.notes
+    else:
+        table = specs(config)
+        baseline = next(name for name, spec in table.items() if spec.baseline)
     names = selected(table, ",".join(only or []))
-    baseline = next(name for name, spec in table.items() if spec.baseline)
     if baseline not in names or len(names) < 2:
         raise ValueError(f"select {baseline} and at least one other candidate")
     found = [read_manifest(prepared / name) for name in names]
     if [manifest.name for manifest in found] != names:
         raise ValueError("prepared manifest names do not match candidate selection")
-    return found, baseline
+    return found, baseline, notes
 
 
 def load_scenarios(corpus: Path, only: list[str] | None) -> dict[str, Scenario]:
@@ -574,6 +584,7 @@ def hyperfine_one(
 
 class Args(argparse.Namespace):
     config: Path = HERE / "candidates.toml"
+    plan: Path | None = None
     prepared: Path = BENCH / "prepared"
     corpus: Path = BENCH / "corpus"
     out: Path | None = None
@@ -597,6 +608,11 @@ def parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _ = ap.add_argument("--config", type=Path)
+    _ = ap.add_argument(
+        "--plan",
+        type=Path,
+        help="resolved plan written by bench prepare; supplies candidates, baseline and notes",
+    )
     _ = ap.add_argument("--prepared", type=Path)
     _ = ap.add_argument("--corpus", type=Path)
     _ = ap.add_argument("--out", type=Path)
@@ -684,7 +700,9 @@ def main(argv: list[str] | None = None) -> Path:
 
     only_c = [s for s in args.candidates.split(",") if s] or None
     only_s = [s for s in args.scenarios.split(",") if s] or None
-    candidates, baseline = load_candidates(args.prepared, only_c, args.config)
+    candidates, baseline, notes = load_candidates(
+        args.prepared, only_c, args.config, args.plan
+    )
     scenarios = load_scenarios(corpus, only_s)
     timeout = args.timeout or (
         1200.0 if any(scenario.cwd for scenario in scenarios.values()) else 600.0
@@ -841,6 +859,7 @@ def main(argv: list[str] | None = None) -> Path:
         samples=samples,
         elapsed_s=time.time() - started,
         candidate_elapsed_s={name: budget.spent_s for name, budget in budgets.items()},
+        notes=notes,
     )
     _ = (out / "run.json").write_text(run.model_dump_json(indent=1) + "\n")
     log(f"wrote {out / 'run.json'} ({run.elapsed_s:.0f}s of timing)")

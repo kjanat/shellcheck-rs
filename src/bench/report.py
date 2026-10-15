@@ -108,6 +108,8 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         f"Baseline: **{baseline}**. Ratios are candidate ÷ baseline; higher means more cost.",
         "",
     ]
+    for note in run.notes:
+        lines += [note, ""]
     actions: list[str] = []
     for name in names:
         if name == baseline:

@@ -5,16 +5,17 @@
 min_version = "2026.10.0"
 
 [tools]
-cabal                  = "latest"
-ghc                    = "9.6.7"
-ghcup                  = "latest"
-hyperfine              = "1.20.0"
-python                 = "3.14"
-ruff                   = "latest"
-rust                   = "latest"
-uv                     = "0.12.23"
-"github:kjanat/runner" = "latest"
-"github:kjanat/dprint" = "latest"
+cabal                        = "latest"
+ghc                          = "9.6.7"
+ghcup                        = "latest"
+hyperfine                    = "1.20.0"
+python                       = "3.14"
+ruff                         = "latest"
+rust                         = "latest"
+uv                           = "0.12.23"
+"github:kjanat/runner"       = "latest"
+"github:kjanat/dprint"       = "latest"
+"github:koalaman/shellcheck" = "latest"
 
 [tool_alias]
 ghc = "mise-ghcup:ghc"

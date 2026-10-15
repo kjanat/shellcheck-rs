@@ -49,7 +49,7 @@ flowchart LR
 
 For each scenario and candidate show correctness status, median elapsed time, runtime relative to upstream with a confidence interval, peak RSS with its ratio to upstream, and measurement status. Define ratios once: candidate divided by upstream, so higher values always mean more cost. Keep baseline measurements visible.
 
-The baseline is upstream ShellCheck built with Cabal from the commit the port's conformance oracle pins. Output differences then show port defects. A release binary measures a different revision.
+The baseline is upstream ShellCheck built with Cabal from its default branch HEAD, resolved once per run. The latest release binary runs alongside as `upstream-release`. When HEAD is the commit of that release's tag, the plan drops the source build and the release binary is the baseline; the plan, `run.json` and the report record the decision with both commits.
 
 The first screen should answer: where does each implementation produce different output, where does it spend more time or memory, and which measurements need repeating? Summarize the largest reliable cost differences before detailed rows. Show links to output diffs and raw samples. Diagnose mechanisms such as algorithmic complexity only when measurements or profiling support them.
 
