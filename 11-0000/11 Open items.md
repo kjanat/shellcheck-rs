@@ -42,7 +42,7 @@ As of 2026-10-15, from `DIVERGENCES.md`, the GitHub issues, `rust/PERF.md` and t
 
 ## 11.6 Other branches
 
-- `bench`: `src/bench/candidates.toml` names ref `rust-port` for the Rust candidate; the remote has no such ref.
+- `bench`: the Cabal build of the `upstream` candidate has run only in the unit test fixture; the first CI run after the baseline change proves the GHC install and build on the runner.
 - `h2r-compiler`: `todo.md` lists the open compiler items in [[H2R Compiler|09 H2R compiler]]. No further work is planned there.
 
 **[⬆ Top](#idtop)**

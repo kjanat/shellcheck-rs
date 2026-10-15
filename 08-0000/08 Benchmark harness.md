@@ -6,15 +6,15 @@ Branch `bench`. A Python project that measures upstream ShellCheck, the Rust por
 
 ## 8.1 Candidates
 
-`src/bench/candidates.toml` at `a74f2aec`:
+`src/bench/candidates.toml`:
 
-| Candidate   | Source                                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------------------------- |
-| `upstream`  | The ShellCheck release pinned by the branch's `mise.lock` (`github:koalaman/shellcheck`). The baseline.         |
-| `rust-port` | Repository `kjanat/shellcheck-rs`, ref `rust-port`, package `shellcheck-cli`.                                   |
-| `h2r`       | Repository `kjanat/shellcheck-rs`, ref `h2r-compiler`, package `rshellcheck`; needs ghcup, GHC, Cabal and Rust. |
+| Candidate     | Source                                                                                                                                                                           |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upstream`    | Repository `koalaman/shellcheck` at the revision `tools/oracle.json` pins on `master`, built with Cabal (`ShellCheck:exe:shellcheck`); needs ghcup, GHC and Cabal. The baseline. |
+| `rshellcheck` | Repository `kjanat/shellcheck-rs`, ref `master`, package `shellcheck-cli`, built with Cargo.                                                                                     |
+| `h2r`         | Repository `kjanat/shellcheck-rs`, ref `h2r-compiler`, package `rshellcheck`; needs ghcup, GHC, Cabal and Rust.                                                                  |
 
-The remote has no `rust-port` ref; the port lives on `master` (see [[Repository Overview|01 Repository overview]]).
+A candidate's `build` field selects the Cargo or Cabal recipe. Moving the pin in `tools/oracle.json` on `master` also moves the `upstream` ref here, so output parity is judged against the revision the port follows. 🏆 in a report marks the lowest median only when at least two candidates have matching output.
 
 **[⬆ Top](#idtop)**
 
