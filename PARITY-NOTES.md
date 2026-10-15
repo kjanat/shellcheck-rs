@@ -7,10 +7,11 @@ Most items here are reproduced by the port **on purpose**; an entry's **Port**
 line says when it is not. A fix that makes the port better than the oracle needs
 a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
-is one class, `upstream-false-parse-error`: the oracle rejects the file, the port
-does not, and `<shell> -n` agrees with the port. See
-`crates/conformance/src/deviations.rs`; no shell to ask means the difference
-counts as a divergence, so it fails closed.
+are five classes: `upstream-false-parse-error` (the oracle rejects the file, the
+port does not, and `<shell> -n` agrees with the port), `interpreter-path-typo`,
+`upstream-function-tail-cd`, `completed-statement-notes` and
+`unclosed-test-quote`. See `crates/conformance/src/deviations.rs`; missing
+evidence means the difference counts as a divergence, so each class fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
 the port's output and files it as a port bug would be wrong — and "fixing" it

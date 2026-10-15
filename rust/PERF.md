@@ -47,7 +47,7 @@ Implemented:
 - Token and parent maps use the existing integer-keyed `IdMap`. Current consumers use keyed lookups; no diagnostic ordering depends on map iteration.
 - Remove the parser's write-only `reach_pos` field. Updating it copied the filename at every furthest cursor advance, even though diagnostics use the separate failure coordinates. Keep the `reach` index and all failure/recovery behavior.
 
-`--jobs` remains opt-in and defaults to 1. Quiet mode and invocations with non-regular root inputs keep sequential behavior. Worker ASTs stay local to each worker; output order, source resolution, rc warnings and native filename handling remain covered by integration tests.
+`--jobs` defaults to the available CPUs, capped at 4; `-j 1` keeps the serial path. Quiet mode and invocations with non-regular root inputs keep sequential behavior. Worker ASTs stay local to each worker; output order, source resolution, rc warnings and native filename handling remain covered by integration tests.
 
 **Rust API compatibility:** `ProgramState::exit_codes` is now `Rc<BTreeSet<Id>>`; direct mutations use `Rc::make_mut`. The `exit_codes()` accessor still returns `&BTreeSet<Id>`, but is no longer `const`. `Parameters::{parent_map,id_map}` and `build_maps()` now expose `IdMap` rather than `BTreeMap`; their iteration order is unspecified. External constructors and callers requiring ordered map iteration must adapt. The CLI diagnostic contract is unchanged.
 
