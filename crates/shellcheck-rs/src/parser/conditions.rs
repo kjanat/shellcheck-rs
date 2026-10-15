@@ -178,13 +178,13 @@ impl Parser {
         // there, so a mismatched pair still parses and gets reported.
         let close_pos = self.pos();
         let close = if self.string("]]").is_ok() {
-            "]]"
+            ConditionType::DoubleBracket
         } else if self.char(']').is_ok() {
-            "]"
+            ConditionType::SingleBracket
         } else {
             return self.fail_with("Expected test to end here (don't wrap commands in []/[[]])");
         };
-        if dbl && close != "]]" {
+        if dbl && close != ConditionType::DoubleBracket {
             self.problem_at(
                 close_pos.clone(),
                 close_pos,
@@ -193,7 +193,7 @@ impl Parser {
                 "Test expression was opened with double [[ but closed with single ]. Make sure they match.",
             );
         }
-        if single && close != "]" {
+        if single && close != ConditionType::SingleBracket {
             self.problem_at(
                 start.clone(),
                 start.clone(),
@@ -206,7 +206,10 @@ impl Parser {
         // `endSpan` before the trailing `spacing`, so the span ends at the
         // closing bracket.
         self.spacing();
-        Ok(Token::new(id, InnerToken::T_Condition { typ, token }))
+        Ok(Token::new(
+            id,
+            InnerToken::T_Condition { typ, close, token },
+        ))
     }
 
     /// `condSpacing`: spacing within a condition, where the shell needs it and

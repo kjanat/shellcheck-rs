@@ -1,11 +1,18 @@
 # Upstream source baseline
 
 Upstream changes are integrated through
-[`98deabe126a2`](https://github.com/koalaman/shellcheck/commit/98deabe126a26861fb02aa2b431eaf31e39e6abe)
-(2026-10-08). This source baseline is newer than the published ShellCheck 0.11.0
+[`c36c85a05ed3`](https://github.com/koalaman/shellcheck/commit/c36c85a05ed3a1560e31bf7d89db040f84ef4556)
+(2026-10-14). This source baseline is newer than the published ShellCheck 0.11.0
 binary; use the pinned upstream oracle for port-conformance comparisons.
 rshellcheck's own version number is independent of the upstream version;
 `rshellcheck --version` prints both, the upstream one from `tools/oracle.json`.
+
+The October 15 integration imports the changes after `98deabe1`: one ordinary
+commit and its merge commit.
+
+| Commit                                                             | Change                                                                                       |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| [814a2d24](https://github.com/koalaman/shellcheck/commit/814a2d24) | SC2292 fix adds no `]` when the test was closed with `]]`; `T_Condition` records the closer. |
 
 The October 11 integration imports the changes after `6dce0df7`: nine ordinary
 commits and three merge commits. The Rust SC2164 function-tail correction is preserved. The oracle now uses

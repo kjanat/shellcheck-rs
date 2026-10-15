@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Upstream: ShellCheck 0.11.0 at `c36c85a05ed3`.
+
+### Fixed
+
+- The SC2292 fix adds no second `]` when the test was closed with `]]`
+  (upstream #3558)
+
+## v1.0.0 - 2026-10-15
+
 Upstream: ShellCheck 0.11.0 at `98deabe126a2`.
 
 ### Added
