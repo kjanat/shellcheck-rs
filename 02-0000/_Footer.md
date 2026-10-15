@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="01-Repository-overview">← 1 Repository overview</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="03-Rust-port-performance">3 Rust port performance →</a>
+  <a href="01-Repository-overview">← 1 Repository overview</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="03-Additional-diagnostics">3 Additional diagnostics →</a>
 </p>
 
 <p align="center">

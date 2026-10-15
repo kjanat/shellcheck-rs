@@ -2,16 +2,18 @@
 
 1. [Repository overview](01-Repository-overview)
 2. [Rust port](02-Rust-port)
-3. [Rust port performance](03-Rust-port-performance)
-4. [H2R compiler](04-H2R-compiler)
-5. [H2R runtime performance](05-H2R-runtime-performance)
-6. [Benchmark harness](06-Benchmark-harness)
-7. [Working method](07-Working-method)
-8. [Environment and pitfalls](08-Environment-and-pitfalls)
-9. **[Open items](09-Open-items)**
-   - [9.1 rust-port](09-Open-items#91-rust-port)
-   - [9.2 h2r-compiler](09-Open-items#92-h2r-compiler)
-   - [9.3 bench](09-Open-items#93-bench)
-   - [9.4 Housekeeping](09-Open-items#94-housekeeping)
+3. [Additional diagnostics](03-Additional-diagnostics)
+4. [Conformance and parity](04-Conformance-and-parity)
+5. [Validity matrix](05-Validity-matrix)
+6. [Releases and distributions](06-Releases-and-distributions)
+7. [Performance](07-Performance)
+8. [Benchmark harness](08-Benchmark-harness)
+9. **[H2R compiler](09-H2R-compiler)**
+   - [9.1 Pipeline](09-H2R-compiler#91-pipeline)
+   - [9.2 Crates on the branch](09-H2R-compiler#92-crates-on-the-branch)
+   - [9.3 Milestones](09-H2R-compiler#93-milestones)
+   - [9.4 Why it stopped](09-H2R-compiler#94-why-it-stopped)
+10. [Working method](10-Working-method)
+11. [Open items](11-Open-items)
 
 <sub><a href="#idend">↓ End of page</a></sub>

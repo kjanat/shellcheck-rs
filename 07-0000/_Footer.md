@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="06-Benchmark-harness">← 6 Benchmark harness</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="08-Environment-and-pitfalls">8 Environment and pitfalls →</a>
+  <a href="06-Releases-and-distributions">← 6 Releases and distributions</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="08-Benchmark-harness">8 Benchmark harness →</a>
 </p>
 
 <p align="center">

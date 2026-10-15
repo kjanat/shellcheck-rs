@@ -45,12 +45,15 @@ jobs:
           --exclude .git --exclude .github
           "./${src}/" "./${dst}/"
 
+      - name: Stage every change
+        run: git add --all
+
       - name: Check for changes
         id: changes
-        run: git diff --exit-code
+        run: git diff --cached --exit-code
         continue-on-error: true
 
       - name: Commit and push when anything changed
         if: steps.changes.outcome == 'failure'
         env: { m: "Mirror wiki branch at ${{ github.sha }}" }
-        run: git commit -am "${m}" && git push
+        run: git commit -m "${m}" && git push

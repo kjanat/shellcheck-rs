@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="07-Working-method">← 7 Working method</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="09-Open-items">9 Open items →</a>
+  <a href="07-Performance">← 7 Performance</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="09-H2R-compiler">9 H2R compiler →</a>
 </p>
 
 <p align="center">

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="04-H2R-compiler">← 4 H2R compiler</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="06-Benchmark-harness">6 Benchmark harness →</a>
+  <a href="04-Conformance-and-parity">← 4 Conformance and parity</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="06-Releases-and-distributions">6 Releases and distributions →</a>
 </p>
 
 <p align="center">

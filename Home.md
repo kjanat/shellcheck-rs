@@ -2,29 +2,31 @@
 
 # shellcheck-rs knowledge base
 
-`kjanat/shellcheck-rs` is a fork of [koalaman/shellcheck](https://github.com/koalaman/shellcheck) that carries three experiments on top of the upstream Haskell code. This wiki distils what was learned while building, measuring and optimising them, so that anyone (a person or an agent) can pick the work up without re-deriving it.
+`kjanat/shellcheck-rs` ships `rshellcheck`, a Rust port of [koalaman/shellcheck](https://github.com/koalaman/shellcheck), as GitHub release archives, npm and PyPI packages, container images, a Go installer and WASM bindings for JavaScript, Python and Go. This wiki records how the repository is laid out, how parity with upstream is proven, how releases are made, and what is still open.
 
-| branch         | what it is                                                                             | PR                                                   | state (2026-10-02)                                                                                                      |
-| -------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `master`       | mirror of upstream ShellCheck (0.11.0 line, head `9af7ee2`)                            |                                                      | the oracle every experiment is gated against                                                                            |
-| `rust-port`    | a hand-written, structurally faithful Rust port under `rust/`                          | [#1](https://github.com/kjanat/shellcheck-rs/pull/1) | byte-identical to upstream on every gate; 6–13× faster than upstream, 2–10× less memory                                 |
-| `h2r-compiler` | a Haskell→Rust compiler that consumes GHC Core and emits Rust (`compiler/`, `crates/`) | [#2](https://github.com/kjanat/shellcheck-rs/pull/2) | compiles all of ShellCheck, output byte-identical; ~8× slower than upstream, floor reached for incremental runtime work |
-| `bench`        | a statistically rigorous benchmark harness comparing the three (`bench/`)              |                                                      | runs in CI, results trustworthy including per-candidate peak RSS                                                        |
+| Branch         | What it is                                                                               | State (2026-10-15)                                                                                                                                         |
+| -------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `master`       | The Rust port: `crates/`, bindings, release pipeline, validity matrix, parity documents. | Head `b242c3c5`. Upstream pin `98deabe126a2` (ShellCheck 0.11.0 line). Release `rshellcheck-v1.0.0` published 2026-10-15 to GitHub, npm, PyPI and ghcr.io. |
+| `bench`        | The benchmark harness comparing upstream, the port and the H2R program.                  | Head `a74f2aec` (2026-10-10). Its Rust candidate still names the merged `rust-port` ref.                                                                   |
+| `h2r-compiler` | A Haskell-to-Rust compiler that compiled all of ShellCheck through GHC Core.             | Finished. Head `d64c96bd` (2026-10-03). Output byte-identical to upstream; about 8× slower.                                                                |
+| `wiki`         | These pages, mirrored into the wiki repository on push.                                  |                                                                                                                                                            |
 
 ## Pages
 
-- [[Repository Overview|01 Repository overview]] — layout, branches, PRs, CI, tooling and conventions shared by all branches.
-- [[Rust Port|02 Rust port]] — architecture of the hand-written port, the conformance harness (gate, fuzz, shells, audit, snapshot, bench), parity documents, rules for changing it.
-- [[Rust Port Performance|03 Rust port performance]] — the profiling story: what was slow, what was changed (WP-R0…WP-R4), the numbers, and what is next.
-- [[H2R Compiler|04 H2R compiler]] — the Core-to-Rust compiler: pipeline, milestones, crates, mise tasks, limits.
-- [[H2R Runtime Performance|05 H2R runtime performance]] — the runtime (`h2r-rt`) optimisation programme: representation, invariants, WP1–WP18, census results, why it hit a floor.
-- [[Benchmark Harness|06 Benchmark harness]] — how the bench branch measures, why its numbers can be trusted, the results so far, and the peak-RSS bug it had.
-- [[Working Method|07 Working method]] — how the optimisation rounds were run: PERF.md-driven work packages, cheap agents in worktrees, one rebuild per round, verification chains, hand-back format.
-- [[Environment and Pitfalls|08 Environment and pitfalls]] — concrete paths, commands, tool quirks and mistakes made along the way, so they are not repeated.
-- [[Open Items|09 Open items]] — everything that is pending or was deliberately left for later, per branch.
+- [[Repository Overview|01 Repository overview]]: layout of `master`, branches, tags, CI workflows, toolchain, licences.
+- [[Rust Port|02 Rust port]]: crates, the source map from Haskell to Rust, test conventions, the `rshellcheck` command, the library, the WASM module and bindings, the native launchers.
+- [[Additional Diagnostics|03 Additional diagnostics]]: SC9001, SC9002, RSC1001, json1 `sources`, parser messages, the SC2064 and SC2164 differences.
+- [[Conformance and Parity|04 Conformance and parity]]: the oracle, the harness commands, the frozen corpus and snapshot, the divergence policy, the five deviation classes, the parity documents, syncing upstream.
+- [[Validity Matrix|05 Validity matrix]]: 17 shells in 43 cells, specs and outcomes, the runner, the images, the `shells.yml` workflow.
+- [[Releases and Distributions|06 Releases and distributions]]: version policy, the 15 targets, running and resuming a release, assets and verification, every registry, trusted publishing, upstream aliases.
+- [[Performance|07 Performance]]: the measurements in `rust/PERF.md`, the method, the open work packages.
+- [[Benchmark Harness|08 Benchmark harness]]: the `bench` branch: candidates, commands, workloads, measurement rules, reading the report, CI caching.
+- [[H2R Compiler|09 H2R compiler]]: the finished compiler experiment: pipeline, crates, milestones, why it stopped.
+- [[Working Method|10 Working method]]: build and test commands, rules for a change, issue handling, measuring, environment facts.
+- [[Open Items|11 Open items]]: open divergences, the open boxes of issues #3 and #4, document gaps, pending work packages.
 
 ## The one-paragraph summary
 
-Upstream ShellCheck is the oracle. Two routes were taken to a Rust binary: a hand port (`rust-port`) that mirrors the Haskell module by module and is held to byte-identical output by a differential harness (an extracted upstream property corpus plus a seeded fuzzer, both run against the GHC binary), and a compiler (`h2r-compiler`) that lets GHC do parsing, typing and optimisation and translates the resulting Core into Rust with a small lazy runtime. The hand port is now the faster program by a wide margin; the compiled program is correct but pays for emulating laziness and allocation without a GC. A third branch (`bench`) measures all three on the same machine in the same session, with bootstrap intervals, non-parametric tests and Holm correction, and its CI job caches binaries per candidate commit so a run costs minutes.
+The port reproduces ShellCheck module by module in Rust and is held to the pinned upstream revision by a differential harness: a gate that replays every extracted upstream property through both tools, a seeded fuzzer, and an offline behaviour snapshot. The port deviates only through classes the harness can prove from the AST or from a shell's own verdict, and every deviation is written down in `PARITY-NOTES.md`. A validity matrix runs each diagnostic's reproducer in 43 shell builds, so a claim about a shell is proven by executing it. Releases are versioned independently of upstream from 1.0.0; one workflow builds 15 targets, signs them with Sigstore through GitHub OIDC, and publishes archives, npm and PyPI packages, container images and a Go installer, with `upstream-<version>` aliases naming the newest port release of each upstream version.
 
 <a name="idend"></a>

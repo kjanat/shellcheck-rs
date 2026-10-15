@@ -2,94 +2,110 @@
 
 # 2 Rust port
 
-*Branch `rust-port`, [PR #1](https://github.com/kjanat/shellcheck-rs/pull/1).*
+A module-for-module port of ShellCheck's Haskell to Rust. Each port function keeps the Haskell name in snake_case and carries every Haskell comment, so a difference from upstream can be traced to one line of the original source. Parity is enforced by the harness described in [[Conformance and Parity|04 Conformance and parity]].
 
-A structural, module-for-module port of the Haskell to Rust. The guiding principle: **the port reads like the Haskell**, so a divergence can be traced to a line in `Parser.hs`, and an invented condition stands out as one. Parity is enforced mechanically, not by review.
+## 2.1 Crates
 
-## 2.1 Layout
+| Crate             | Kind                    | Version | Dependencies                                                     | Role                                                                                   |
+| ----------------- | ----------------------- | ------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `shellcheck-rs`   | library `shellcheck_rs` | 1.0.0   | `im-rc`, `regex`                                                 | Parse and analyse. IO-free, so an editor integration can embed it.                     |
+| `shellcheck-cli`  | binary `rshellcheck`    | 1.0.0   | `serde`, `serde_json`, `shellcheck-rs`                           | The command line and the TTY, JSON, JSON1, GCC, CheckStyle, Diff and Quiet formatters. |
+| `shellcheck-wasm` | `cdylib` and `rlib`     | 1.0.0   | `serde`, `serde_json`, `shellcheck-rs`                           | A JSON request and response ABI over the library for `wasm32-unknown-unknown`.         |
+| `conformance`     | binary `conformance`    | 0.0.0   | `actions-rs`, `clap`, `serde`, `serde_json`, `toml`, both crates | The differential harness. MIT, `publish = false`.                                      |
 
+The three published crates share one version number, set together with the four binding manifests under `bindings/` at release time.
+
+**[⬆ Top](#idtop)**
+
+## 2.2 Source map
+
+Upstream Haskell module to Rust location, from `.claude/CLAUDE.md`:
+
+| Upstream                   | Rust                                                 |
+| -------------------------- | ---------------------------------------------------- |
+| `AnalyzerLib.hs`           | `crates/shellcheck-rs/src/analyzer_lib.rs`           |
+| `Analytics.hs`             | `crates/shellcheck-rs/src/analytics/<theme>.rs`      |
+| `Checks/*.hs`              | `crates/shellcheck-rs/src/checks/`                   |
+| `Data.hs`                  | `crates/shellcheck-rs/src/data.rs`                   |
+| `Parser.hs`                | `crates/shellcheck-rs/src/parser/`                   |
+| `CFG.hs`, `CFGAnalysis.hs` | `crates/shellcheck-rs/src/cfg.rs`, `cfg_analysis.rs` |
+| `Checker.hs`               | `crates/shellcheck-rs/src/checker.rs`                |
+| CLI, formatters            | `crates/shellcheck-cli`                              |
+| WASM bindings              | `crates/shellcheck-wasm`                             |
+| differential harness       | `crates/conformance`                                 |
+
+Analytics themes: `variables.rs` holds scope and subshell checks, `flow.rs` holds variable-flow checks (SC2034, errexit), then `commands.rs`, `quoting.rs`, `conditions.rs`, `arithmetic.rs`, `loops.rs`, `redirections.rs`, `script.rs`. `extensions.rs` holds every SC9xxx check. A new check goes in the file that holds its upstream neighbours.
+
+Parser modules: `arithmetic.rs`, `commands.rs`, `compound.rs`, `conditions.rs`, `directives.rs`, `words.rs`, `tests.rs`. Other library modules: `ast.rs`, `ast_lib.rs`, `interface.rs`, `editor_config.rs`, `regex_lib.rs`, `tdfa.rs` (a parser accepting exactly what Haskell's regex-tdfa accepts, used for EditorConfig globs), `idhash.rs` (an integer-key hasher for node and id maps), `test_support.rs`.
+
+**[⬆ Top](#idtop)**
+
+## 2.3 Test conventions
+
+- Each upstream `prop_` becomes `#[test] fn prop_<sameCamelName>()` in the `tests` module of the file holding the check. Upstream numbering is kept.
+- Rust-only regressions use a descriptive snake_case name in the same module.
+- A deviation class in `crates/conformance/src/deviations.rs` carries two negative tests: a shifted span and an unrelated extra finding both break the sanction.
+- Unit tests: `cargo test --workspace --locked --lib --bins`. `rust/PERF.md` records 2,145 workspace tests at its latest measurement.
+
+**[⬆ Top](#idtop)**
+
+## 2.4 The `rshellcheck` command
+
+`rshellcheck` takes ShellCheck's command line. Differences a user sees:
+
+- `--version` prints a `version:` line with the port's own version and an `upstream:` line with the ported ShellCheck version and the first twelve characters of the git revision from `tools/oracle.json`.
+- Checking several regular files uses up to four CPUs by default. `-j N` or `--jobs N` sets the worker count; `-j 1` is serial. Quiet mode and runs with non-regular inputs stay serial. Diagnostics keep input order.
+- `--files-from` reads the input list from a file. EditorConfig `shellcheck.*` keys are honoured.
+- json1 documents carry a `sources` member listing every file the run read through `source` or `.`.
+- `--enable=clarify-parse-errors` selects clearer fatal-parser messages. See [[Additional Diagnostics|03 Additional diagnostics]] for this and the SC9xxx codes.
+- When a dataflow invariant fails, the run reports `RSC1001` on stderr, prints the file's other comments and exits 2. Upstream dies with an internal error there.
+- A filename starting with `-` is read as a file when the option does not exist or the file exists. Upstream stops with an unrecognized option.
+
+Build and install:
+
+```sh
+cargo build --release --locked -p shellcheck-cli      # target/release/rshellcheck
+cargo install --locked --git 'https://github.com/kjanat/shellcheck-rs' 'shellcheck-cli' --bin 'rshellcheck'
 ```
-rust/
-  PERF.md                      performance notes and work packages (see Rust Port Performance)
-  snapshot.txt                 one line per corpus input: output hash + codes/spans/message hash
-  crates/
-    shellcheck-rs/             the library: parser/, analytics/, checks/{commands/,shell_support.rs},
-                               cfg.rs, cfg_analysis.rs, analyzer_lib.rs, ast.rs, ast_lib.rs, data.rs,
-                               checker.rs, interface.rs, formatter(s), idhash.rs
-    shellcheck-cli/            the binary `rshellcheck` (same CLI surface as `shellcheck`)
-    conformance/               the differential harness binary `conformance`
-DIVERGENCES.md                 open port defects (currently none) and how to reproduce fuzz runs
-PARITY-NOTES.md                upstream oddities reproduced on purpose, with shell evidence
-.cargo/config.toml             cargo aliases
+
+**[⬆ Top](#idtop)**
+
+## 2.5 The library
+
+`CheckResult` carries the comments, `sources` (the sourced files, each once, in first-read order) and `dataflow_error`. A non-empty `dataflow_error` means the dataflow checks were skipped for that file; no include, exclude, severity or disable filter removes it. The WASM response exposes both as `sources` and `dataflowError`.
+
+`rust/PERF.md` records API facts of the latest optimisation rounds: `ProgramState::exit_codes` is an `Rc<BTreeSet<Id>>`, `Parameters::{parent_map,id_map}` and `build_maps()` expose `IdMap` with unspecified iteration order, and `CFGResult::cf_id_to_nodes` and `CFGAnalysis::token_to_nodes` are `NodeAssociations`. The analysis state holds `Rc` values, so it is not `Send`.
+
+**[⬆ Top](#idtop)**
+
+## 2.6 WASM module and bindings
+
+One `shellcheck_wasm.wasm` runs in Go, Python and JavaScript. It contains the analysis core and a JSON adapter, with no WASI, filesystem or JavaScript imports.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
 ```
 
-Haskell → Rust file mapping: `ASTLib.hs` = `ast_lib.rs`, `Data.hs` = `data.rs`, `Parser.hs` = `parser/`, `Analytics.hs` = `analytics/`, `Checks/Commands.hs` = `checks/commands/`, `Checks/ShellSupport.hs` = `checks/shell_support.rs`, `CFG.hs` = `cfg.rs`, `CFGAnalysis.hs` = `cfg_analysis.rs`, `AnalyzerLib.hs` = `analyzer_lib.rs`. A check keeps its Haskell shape: a plain `fn`, a `CommandCheck::new(Basename("x"), ..)`, or a `ForShell::new(&[Shell::Sh], ..)`.
+ABI v1 exports `memory`, `sc_abi_version() -> 1`, `sc_prepare(len) -> ptr`, `sc_check() -> ptr`, `sc_output_len() -> len`, `sc_reset()`. A caller writes the request bytes into the range `sc_prepare` returns, calls `sc_check`, copies `sc_output_len` bytes from the result pointer, and parses the response before the next call. Input is limited to 16 MiB of UTF-8 JSON. One request at a time per instance; an instance is never reused after a trap.
 
-Dependencies of the library: `regex` (mirrors regex-tdfa) and, since WP-R1, `im-rc` 15.1 (persistent `OrdMap`, MPL-2.0; GPL-compatible, flagged by Socket as license score 70). Everything else is std. The core is IO-free so an LSP or other tool can embed it.
+Request fields: `script` (required), `filename` (default `script.sh`), `shell` (`bash`, `sh`, `dash`, `ksh`, `busybox`, else inferred), `files` (virtual source files), `checkSourced`, `exclude`, `include`, `optionalChecks`, `extendedAnalysis`, `severity`. The response is `{comments, dataflowError, sources}`. Columns are 1-based character columns with eight-column tab stops.
 
-**[⬆ Top](#idtop)**
+| Host       | Package                                                                                 | Runtime                                 |
+| ---------- | --------------------------------------------------------------------------------------- | --------------------------------------- |
+| JavaScript | `@kjanat/rshellcheck-wasm`: `createChecker()`, `./worker` module Worker, `./wasm` asset | Node or a browser                       |
+| Python     | `rshellcheck-wasm`: `Checker()`; Python 3.12 or later                                   | `wasmtime` 38.0.0, fuel budget per call |
+| Go         | `github.com/kjanat/shellcheck-rs/bindings/wasm/go`, package `shellcheck`                | wazero 1.9.0, no CGO                    |
 
-## 2.2 The conformance harness
-
-*`cargo run --release -p conformance -- <cmd>`.*
-
-The oracle is the Haskell binary built from the same tree (`.cache/shellcheck-oracle` in CI; `--oracle PATH` or `ORACLE=` otherwise). The banner says MISMATCH if the oracle's version is not the tree's.
-
-| command                                     | what it does                                                                                                                                                                              | invariant                                                                                                                        |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `gate`                                      | extracts the shell script from every `prop_` in `src/ShellCheck/**/*.hs` (2026 of 2252) plus 22 optional-check examples, runs both tools' full pipeline, compares the whole json1 payload | **0 divergences**; prints `2048 agree, 0 diverge, 0 sanctioned deviations`                                                       |
-| `fuzz --seed N --iterations K`              | generated + mutated shell through both tools; shrinks reproducers; survives oracle crashes (re-runs the batch one script at a time)                                                       | **0 divergences** for seed 0 ×2000 and the wide seeds in `DIVERGENCES.md` (1013, 148, 156 ×4000); CI uses the run number as seed |
-| `shells --iterations N`                     | both tools against bash, dash, ksh93, busybox `-n`: external validity                                                                                                                     | a missing shell is reported, never skipped                                                                                       |
-| `audit`                                     | where the port rewinds over a commitment instead of using `try` (needs a **debug** build)                                                                                                 |                                                                                                                                  |
-| `snapshot [--write]`                        | freeze/check the port's own behaviour on 2026 property scripts + 2000 generated inputs × 6 dialect settings = 4026 entries                                                                | unchanged, or regenerated with the reason in the commit                                                                          |
-| `bench --input FILE` / `--lines N --seed S` | per-phase in-process timing: parse, maps, cfg, params-other, checks, resolve (a residual)                                                                                                 |                                                                                                                                  |
-
-In CI every finding is also a GitHub Actions annotation (via the `actions-rs` crate): `error` for a divergence pointing at the `prop_` file and line, `warning` for an oracle crash, `notice` for a sanctioned deviation.
-
-**What the gate is not:** it replays the *script* a property names through the whole pipeline, not the helper (`verifyTree`, `verifyCodes`) the property called; and it covers only properties with an extractable script. A green gate with a divergent fuzz means the port is incomplete. The fuzzer is the only instrument that says anything about parity beyond upstream's own tests.
-
-**Sanctioned deviations** (`rust/crates/conformance/src/deviations.rs`): the one class is `upstream-false-parse-error` (the oracle rejects a file, the port accepts it, and `<shell> -n` agrees with the port). Anything the harness cannot justify from shell evidence counts as a divergence; it fails closed.
-
-**Refactor instruments** (`mise run snapshot | coverage | mutants`): snapshot gates every refactor (it is deliberately not an oracle comparison, so "still diverges identically" is success); coverage is 85.1 % regions / 84.7 % lines of `shellcheck-rs` from the corpus; `cargo mutants` has 7499 mutants workspace-wide, run it scoped.
+The same 26 fixture cases run against the native core in Go, Python, Node and a Chromium module worker (`bindings/wasm/fixtures.py`, `npm run test:wasm`, `npm run test:browser`, the Python `unittest` suite, `go test -race`).
 
 **[⬆ Top](#idtop)**
 
-## 2.3 Known parity facts
+## 2.7 Native launchers
 
-- Upstream oracle crash: `checkCmd` is non-exhaustive on `coproc` inside `$(...)`; the fuzzer reports it as an upstream defect, not a divergence.
-- `PARITY-NOTES.md` lists upstream diagnostics that are wrong or strange, each run through bash 5.2.21 and dash 0.5.12 as the arbiter; most are reproduced on purpose.
-- The latest two defects fixed (WP-R0, `a8266e6`, found by CI seed 156): a `time` flag word that fails after consuming input must commit the parse and fail, as Parsec's `many readFlag` cannot recover from a consuming failure; and `T_CoProc`'s `children()` must yield only the body, as Haskell's traversal of `Inner_T_CoProc (Maybe Token) t` does not visit the name.
-- Command-check ordering: for two checks registered under one `CommandName`, the port runs them in registration order with `Exactly`/`Basename` interleaved, Haskell's `insertWith composeAnalyzers` runs the later-registered first and all `Exactly` before all `Basename`. It is unobservable because the final comment list is sorted; recorded in `rust/PERF.md` under WP-R4.
-- Pre-existing nondeterminism (not observable today): `Ctx::invocations` in `cfg_analysis.rs` is a `HashMap<Vec<Node>, _>` with `RandomState`, iterated before merging the states of nodes reached from several call paths; Haskell's `M.Map` iterates by key. Fix proposed as WP-R5 (`BTreeMap`).
-
-**[⬆ Top](#idtop)**
-
-## 2.4 Rules for changing the port
-
-*From `.claude/CLAUDE.md` and PERF.md.*
-
-1. One definition per helper (grep before adding one); no blanket `#![allow(..)]`; every touched file clippy-clean under `cargo lint`.
-2. A check is only registered once both conformance commands agree about its codes.
-3. The CFG analysis is a port of `CFGAnalysis.hs`: keep versions, cache, invocation paths, merge/patch semantics and observable iteration order; **change representations, not the algorithm**.
-4. Output parity: gate 0, fuzz 0 (seed 0 ×2000 at least; a new seed when in doubt), `-f gcc` and `-f json1` byte-identical to the oracle on the corpus scripts, snapshot unchanged or regenerated with a reason.
-5. Add unit tests next to the code (`cargo test -p shellcheck-rs`, 1524 tests at `0c9cb40`); the Rust tests are the `prop_` tests ported plus the port's own.
-6. `mise run fmt` (dprint) before committing; CI enforces it.
-
-**[⬆ Top](#idtop)**
-
-## 2.5 Fast loops
-
-*Measured in the cloud container.*
-
-| loop                                                                    |                time |
-| ----------------------------------------------------------------------- | ------------------: |
-| `cargo test -p shellcheck-rs`                                           | ~25 s (incremental) |
-| `cargo build --release` (CLI + harness, thin LTO)                       |        40 s – 4 min |
-| `conformance gate --quiet`                                              |               ~10 s |
-| `conformance fuzz --seed 0 --iterations 2000`                           |             1–3 min |
-| `conformance snapshot`                                                  |             seconds |
-| byte parity on the four corpus scripts (sha256 of stdout, both formats) |             seconds |
-| callgrind on `large.sh`                                                 |              ~1 min |
+- `@kjanat/rshellcheck` on npm installs the `rshellcheck` command through optional platform packages `@rshellcheck/rshellcheck-<os>-<arch>` listed in `bindings/native/npm/platforms.json`. `binaryPath()` returns the executable path for programmatic use.
+- `rshellcheck` on PyPI ships platform wheels containing the release executable: `uv tool install rshellcheck`.
+- `go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0` installs a `shellcheck` command. Its first run downloads the matching `rshellcheck-v<version>` release archive for `GOOS/GOARCH`, checks it against `SHA256SUMS`, verifies SLSA provenance when a signed-in `gh` is on `PATH`, and caches the binary under the user cache directory. Later runs exec the binary directly. The command exits 69 when it cannot resolve, download, verify or start the binary; ShellCheck never uses that code.
 
 **[⬆ Top](#idtop)**
 

@@ -2,62 +2,109 @@
 
 # 1 Repository overview
 
-## 1.1 Branches
+`kjanat/shellcheck-rs` holds `rshellcheck`, a Rust port of [ShellCheck](https://github.com/koalaman/shellcheck). The port lives on `master`. The Haskell source is never checked in; `tools/oracle.py` fetches the pinned upstream revision into the ignored `.cache/` directory and builds it as the conformance oracle.
 
-| branch         | base                                                                         | commits past master | purpose                                                                                                                                                                              |
-| -------------- | ---------------------------------------------------------------------------- | ------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `master`       | upstream `koalaman/shellcheck` at [`9af7ee2`] (merge of upstream [PR #3445]) |                   0 | the Haskell ShellCheck 0.11.0 code, built with cabal; it is the **oracle**                                                                                                           |
-| `rust-port`    | master                                                                       |                 211 | hand-written Rust port in `rust/` plus the conformance harness, `DIVERGENCES.md`, `PARITY-NOTES.md`, `rust/PERF.md`                                                                  |
-| `h2r-compiler` | master                                                                       |                 179 | GHC-Core-to-Rust compiler (`compiler/`, `crates/h2r-*`), the generated-program layer crates (`crates/hs-*`, `crates/shellcheck-core`, `crates/rshellcheck`), `crates/h2r-rt/PERF.md` |
-| `bench`        | master                                                                       |                   7 | benchmark harness in `bench/`, `.github/workflows/bench.yml`, archived results under `bench/results/`                                                                                |
+## 1.1 Layout of `master`
 
-[`9af7ee2`]: https://github.com/koalaman/shellcheck/commit/9af7ee28ce587baadd950b85dd6826a16b9c068d
-[PR #3445]: https://github.com/koalaman/shellcheck/pull/3445
+| Path                           | Holds                                                                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/shellcheck-rs`         | The analysis library: parser, analytics, checks, control-flow graph and dataflow analysis. Depends on `regex` and `im-rc` only.               |
+| `crates/shellcheck-cli`        | The `rshellcheck` binary and its formatters.                                                                                                  |
+| `crates/shellcheck-wasm`       | The JSON ABI over the library, built for `wasm32-unknown-unknown`.                                                                            |
+| `crates/conformance`           | The differential harness binary `conformance`: gate, fuzz, shells, extract, audit, snapshot, bench, validity.                                 |
+| `bindings/wasm/{js,python,go}` | Host wrappers for the WASM module: `@kjanat/rshellcheck-wasm`, `rshellcheck-wasm`, module `github.com/kjanat/shellcheck-rs/bindings/wasm/go`. |
+| `bindings/native/{npm,python}` | Launchers for the native binary: `@kjanat/rshellcheck` with its platform packages, and the `rshellcheck` Python wheels.                       |
+| `go/`                          | Module `github.com/kjanat/shellcheck-rs/go`: a `shellcheck` command that downloads and runs the matching release binary.                      |
+| `docker/{cli,binaries,shells}` | Dockerfiles for the CLI image, the copy-only binary images and one interpreter image per shell of the validity matrix.                        |
+| `docs/`                        | `diagnostics.md` (every SC9xxx code) and `validity.md` (the validity matrix design).                                                          |
+| `rust/`                        | `conformance-corpus.json` (the frozen property corpus), `snapshot.txt` (frozen behaviour), `PERF.md` (measurements and work packages).        |
+| `tools/`                       | `oracle.json` (the upstream pin), `oracle.py`, `affected_shell_cells.py`, with unit tests.                                                    |
+| `validity/`                    | `sources.toml` (hand-written), generated `matrix.toml`, `outcomes.toml`, `REPORT.md`, and `specs/SC<code>.toml`.                              |
+| `.github/workflows/`           | `rust.yml`, `wasm.yml`, `go.yml`, `shells.yml`, `release.yml`.                                                                                |
+| `.github/release/`             | The Python release tooling, a private uv package named `rshellcheck-release`, with its README and unit tests.                                 |
+| `.cargo/config.toml`           | Cargo aliases and `rustflags = ["-Dwarnings"]`.                                                                                               |
+| `.claude/CLAUDE.md`            | The contributor guide: build commands, source map, test rules, document rules, divergence policy, issue rules, gates.                         |
+| `UPSTREAM.md`                  | The pinned upstream revision, one table row per imported commit, corpus provenance.                                                           |
+| `PARITY-NOTES.md`              | Upstream oddities reproduced on purpose, and the sanctioned deviations with evidence.                                                         |
+| `DIVERGENCES.md`               | Open port defects from the last fuzz run, and the fixed ledger.                                                                               |
+| `CHANGELOG.md`                 | User-facing release notes for `rshellcheck`, followed by upstream ShellCheck's own history.                                                   |
 
-All three experiment branches keep the upstream Haskell tree in place (`src/ShellCheck/*.hs`, `ShellCheck.cabal`, `test/`) because every one of them builds the Haskell binary as its oracle. Each branch has its own `mise.toml` and `mise.lock`; the bench branch builds the other two in git worktrees using *their* lockfiles.
-
-**[⬆ Top](#idtop)**
-
-## 1.2 Pull requests
-
-- **#1 "Scaffold Rust port, conformance harness, and corpus"** — `rust-port` → `master`, open since 2026-09-11. Has 22 unresolved review threads from an automated review bot on 2026-09-11; the author answered all of them ("fixed, resolved") and most are outdated against the current diff. CI is green on the head (`0c9cb40`).
-- **#2 "h2r-compiler"** — `h2r-compiler` → `master`, open since 2026-09-14. Head `f0009d0` (a `mise lock` commit on top of the last PERF.md commit `b705a31`).
-
-Both PRs were watched from the Claude session through the server-side webhook subscription (`subscribe_pr_activity`); events arrive as wake-ups, nothing polls. The Socket bot re-posts its dependency table on every push (it flags `im-rc`, MPL-2.0, license score 70; that is informational).
-
-**[⬆ Top](#idtop)**
-
-## 1.3 CI workflows
-
-| workflow                                             | branch    | what it runs                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/rust.yml` "Rust port conformance" | rust-port | actionlint; format + `cargo lint` (clippy `--workspace --all-targets --all-features -D warnings -D clippy::all`); build the Haskell oracle with cabal (cached), `cargo build --release`, `cargo test -p shellcheck-rs`, `cargo test -p shellcheck-cli`, `cargo conformance-gate`, `cargo conformance-fuzz --seed "$GITHUB_RUN_NUMBER" --iterations 4000` |
-| `.github/workflows/bench.yml`                        | bench     | resolve candidates → build each in its own job with a content-keyed binary cache → measure all three on one runner → report in the job summary, raw data as the `bench-results` artifact                                                                                                                                                                 |
-| upstream `build.yml` and friends                     | all       | inherited from koalaman                                                                                                                                                                                                                                                                                                                                  |
-
-The fuzz seed in the rust-port workflow is the run number, so **every CI run fuzzes a different seed** ("seed roulette"). A docs-only push can therefore fail CI by exposing a latent divergence; that is by design and it is how seed 156 was found (see [[Rust Port|02 Rust port]]).
-
-Checks that also post on PRs: Socket Security (dependency diff), GitGuardian (secrets, neutral), actionlint.
+Root manifests: `Cargo.toml` (workspace, edition 2024, `rust-version = "1.99"`, release profile `opt-level = 3` and thin LTO), `mise.toml`, `dprint.toml`, `pyproject.toml` (uv workspace), `package.json` (npm workspaces), `mutants.toml`, `clippy.toml`, `rustfmt.toml`, `tombi.toml`.
 
 **[⬆ Top](#idtop)**
 
-## 1.4 Tooling conventions
+## 1.2 Branches
 
-- **mise** (`mise.toml`, `mise.lock`) pins every tool: rust, cabal/GHC (9.6.7 on h2r), hyperfine (bench branch and h2r branch; *not* on rust-port), uv/python (bench), dprint. Run tools through `mise exec -- <tool>` or `mise run <task>`. If a tool is not in the branch's `mise.toml`, `mise exec <tool>@<version> -- <tool>` still works (e.g. `mise exec hyperfine@1.20.0 -- hyperfine` on rust-port).
-- **dprint** formats Markdown and TOML (`mise run fmt`, `dprint check`). CI fails on unformatted Markdown; always run it before committing docs.
-- **Cargo aliases** live in the repo-root `.cargo/config.toml`: `cargo lint`, `cargo conformance-gate`, `cargo conformance-fuzz`, `cargo conformance-snapshot`, `cargo conformance-audit` (rust-port); `cargo locked-release` (h2r).
-- **Workspace root is the repository root** (`Cargo.toml` with `members = ["rust/crates/*"]` on rust-port; `crates/*` on h2r). Edition 2024, `rust-version = 1.85`, release profile `opt-level = 3`, `lto = "thin"`.
-- **`.claude/CLAUDE.md`** on each branch is the agent-facing guide (build/test commands, architecture, rules). The rust-port one also documents the conformance tools and the "before refactoring" instruments.
-- **No model names** in commits, PR text or code comments (session rule).
-- Commits are written as sentences describing what changed and why, no conventional-commit prefixes, no emoji.
+| Branch         | Content                                                                                                          | Last commit                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `master`       | The Rust port, its harness, bindings, release pipeline and documents.                                            | [`b242c3c5`](https://github.com/kjanat/shellcheck-rs/commit/b242c3c583425c4b98c755bb45ce0366a0793e17), 2026-10-15 |
+| `bench`        | The benchmark harness, a Python project with its own `mise.toml`. See [Benchmark harness](08-Benchmark-harness). | [`a74f2aec`](https://github.com/kjanat/shellcheck-rs/commit/a74f2aecc271435af9409fabf8710e75e7acfdcf), 2026-10-10 |
+| `h2r-compiler` | The Haskell-to-Rust compiler experiment, finished. See [H2R compiler](09-H2R-compiler).                          | [`d64c96bd`](https://github.com/kjanat/shellcheck-rs/commit/d64c96bd3159a07c4af66acdc2fedf8b34ad953f), 2026-10-03 |
+| `wiki`         | These pages. `.github/workflows/wiki.yml` mirrors every push into the wiki repository.                           |                                                                                                                   |
+
+The Rust port was developed on a `rust-port` branch and merged into `master` through [pull request #1](https://github.com/kjanat/shellcheck-rs/pull/1). That branch is gone from the remote.
 
 **[⬆ Top](#idtop)**
 
-## 1.5 Upstream Haskell architecture
+## 1.3 Tags and releases
 
-*What all ports reproduce.*
+| Tag                                                                        | Points at              | Meaning                                                                  |
+| -------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------ |
+| `rshellcheck-v0.11.0`                                                      | `e0f0d778`, 2026-10-12 | First GitHub release, numbered after the upstream version it ported.     |
+| `rshellcheck-v1.0.0`                                                       | `b242c3c5`, 2026-10-15 | First release under the port's own version scheme.                       |
+| `go/v0.11.0`, `go/v1.0.0`                                                  | The same commits       | Go module tags for `go/`, required on the release commit by the planner. |
+| `go/v0.11.0-wrapper.1`                                                     | `beab2f17`             | A Go wrapper fix shipped without a new binary release.                   |
+| `h2r-m1` … `h2r-m2.4`, `h2r-dump-v5`, `h2r-dump-v6`, `h2r-a5-linkage-hole` | 2026-09-16             | Milestones of the H2R compiler experiment.                               |
 
-ShellCheck runs in three stages: parsing (`Parser.hs`, Parsec, emits SC1xxx), AST analysis (`Analytics.hs`, `Checks/Commands.hs`, `Checks/ShellSupport.hs`, `CFG.hs` + `CFGAnalysis.hs` for the control-flow dataflow, emits SC2xxx/SC3xxx), output formatting (`Formatter/`). Checks are pure functions `Parameters -> Token -> Writer [TokenComment] ()`, either node checks (every AST node) or tree checks (once at the root). `cabal test` auto-discovers `prop_` functions; there are 2252 `prop_` definitions, 2026 of which name a shell script that the Rust conformance gate replays.
+The release pipeline also moves an `upstream-<version>` git tag to the newest stable release of that upstream version. See [Releases and distributions](06-Releases-and-distributions).
+
+**[⬆ Top](#idtop)**
+
+## 1.4 CI workflows
+
+| Workflow                                 | Trigger                                                                                                                                                        | Jobs                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rust.yml` "Rust port conformance"       | Push to `master` and pull requests touching `crates/**`, `rust/**`, Cargo files, `.cargo/**`, `mise.toml`, `mutants.toml`, `tools/oracle*`.                    | `actionlint`; `lint` (mise toolchain, `kjanat/dprint-check`, `cargo lint`); `conformance-gate` (fetch and build the cached Haskell oracle, `cargo build --release`, `cargo test -p shellcheck-rs`, `cargo test -p shellcheck-cli`, `cargo conformance-gate`, `cargo conformance-fuzz`); `validity-smoke` (build and run the `bash:5.3` and `dash:0.5.13` cells). |
+| `wasm.yml` "WASM core"                   | Push to `master` and pull requests touching crates, bindings, lockfiles; manual dispatch.                                                                      | `test` "One module, Go / Python / browser": builds the module with Rust 1.99.0, runs the native parity example, then the Node, Go, Python and Chromium tests.                                                                                                                                                                                                    |
+| `go.yml` "Go installer"                  | Push to `master` and pull requests touching `go/**`.                                                                                                           | `test` per operating system: `go vet` and `go test -race` in `go/`.                                                                                                                                                                                                                                                                                              |
+| `shells.yml` "Shell images and validity" | Mondays at 04:00 UTC, manual dispatch with `rebuild-all`, push to `master`, pull requests touching `docker/shells/**`, `validity/**`, `crates/conformance/**`. | `pin` (`cargo validity pin`, select affected cells); `build` per cell (push the image to ghcr.io with build provenance and an SPDX SBOM attestation); `run` (`cargo validity --record`, then open a pull request from branch `validity/drift` when `matrix.toml`, `outcomes.toml` or `REPORT.md` changed).                                                       |
+| `release.yml`                            | Tags `rshellcheck-v*`, pull requests touching release inputs, manual dispatch.                                                                                 | See [Releases and distributions](06-Releases-and-distributions).                                                                                                                                                                                                                                                                                                 |
+
+The `bench` branch carries `.github/workflows/bench.yml` (jobs `resolve`, `prepare`, `measure`). The `wiki` branch carries `wiki.yml` (jobs `actionlint`, `publish`).
+
+**[⬆ Top](#idtop)**
+
+## 1.5 Toolchain
+
+`mise.toml` pins the tools. `mise install` provides rust (with `rustfmt`, `clippy`, `rust-src`), dprint from `github:kjanat/dprint`, go 1.27, node 26, python, tombi 1.8, uv 0.13, cargo-binstall, cargo-mutants, droast and `shellcheck` itself from the `github:kjanat/shellcheck-rs` backend. No Haskell tool is installed by mise; the oracle needs GHC, Cabal and an authenticated `gh` separately.
+
+mise tasks: `format` (`dprint fmt`), `snapshot` (`cargo conformance-snapshot`), `coverage` (`cargo llvm-cov` over the snapshot run), `mutants` (`cargo mutants`), `check-py` (`ruff check`, `ty check`, `basedpyright`), `oracle` (`python tools/oracle.py`).
+
+Cargo aliases in `.cargo/config.toml`:
+
+| Alias                        | Expands to                                                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `cargo lint`                 | `clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all`                            |
+| `cargo conformance-gate`     | `run --release -p conformance -- gate --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck` |
+| `cargo conformance-fuzz`     | `run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck` |
+| `cargo conformance-shells`   | `run --release -p conformance -- shells --iterations 300`                                                  |
+| `cargo conformance-snapshot` | `run --release -q -p conformance -- snapshot`                                                              |
+| `cargo conformance-audit`    | `run -q -p conformance -- audit`                                                                           |
+| `cargo validity`             | `run --release -q -p conformance -- validity`                                                              |
+| `cargo install-bin`          | `install --path=crates/shellcheck-cli --bin=rshellcheck --force`                                           |
+| `cargo rshellcheck`          | `run --release --bin rshellcheck --`                                                                       |
+
+An alias is the argument list after `cargo`, so none of them starts with the word `cargo`.
+
+Formatting: `dprint fmt` formats Markdown, TOML (through `tombi`) and Rust (through `rustfmt`). `dprint.toml` excludes `shellcheck.1.md`, the issue templates and the generated validity files. Python tooling runs through `uv run` from the root `.venv`; the uv workspace members are `bindings/wasm/python`, `bindings/native/python` and `.github/release`. The npm workspaces are `bindings/wasm/js` and `bindings/native/npm`.
+
+Workspace lints: clippy `all`, `pedantic` and `nursery` at warn with a long deny list (`unwrap_used`, `expect_used`, `redundant_clone`, `uninlined_format_args` and others), `unsafe_code = "forbid"` (the WASM crate lowers it to `deny` for its export attributes), `missing_docs = "warn"`, and `non_camel_case_types = "allow"` so the port keeps ShellCheck's constructor names such as `T_Literal` and `TC_Binary`.
+
+**[⬆ Top](#idtop)**
+
+## 1.6 Licences
+
+`shellcheck-rs`, `shellcheck-cli`, `shellcheck-wasm` and every binding are GPL-3.0-or-later. The `conformance` crate is MIT and never published.
 
 **[⬆ Top](#idtop)**
 

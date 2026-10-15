@@ -2,15 +2,20 @@
 
 1. [Repository overview](01-Repository-overview)
 2. [Rust port](02-Rust-port)
-3. [Rust port performance](03-Rust-port-performance)
-4. [H2R compiler](04-H2R-compiler)
-5. [H2R runtime performance](05-H2R-runtime-performance)
-6. [Benchmark harness](06-Benchmark-harness)
-7. [Working method](07-Working-method)
-8. **[Environment and pitfalls](08-Environment-and-pitfalls)**
-   - [8.1 Useful paths and commands](08-Environment-and-pitfalls#81-useful-paths-and-commands)
-   - [8.2 Pitfalls met, and the fix](08-Environment-and-pitfalls#82-pitfalls-met-and-the-fix)
-   - [8.3 Session rules that were stated by the user and should be kept](08-Environment-and-pitfalls#83-session-rules-that-were-stated-by-the-user-and-should-be-kept)
-9. [Open items](09-Open-items)
+3. [Additional diagnostics](03-Additional-diagnostics)
+4. [Conformance and parity](04-Conformance-and-parity)
+5. [Validity matrix](05-Validity-matrix)
+6. [Releases and distributions](06-Releases-and-distributions)
+7. [Performance](07-Performance)
+8. **[Benchmark harness](08-Benchmark-harness)**
+   - [8.1 Candidates](08-Benchmark-harness#81-candidates)
+   - [8.2 Commands](08-Benchmark-harness#82-commands)
+   - [8.3 Workloads](08-Benchmark-harness#83-workloads)
+   - [8.4 Measurement rules](08-Benchmark-harness#84-measurement-rules)
+   - [8.5 Reading the report](08-Benchmark-harness#85-reading-the-report)
+   - [8.6 CI and caching](08-Benchmark-harness#86-ci-and-caching)
+9. [H2R compiler](09-H2R-compiler)
+10. [Working method](10-Working-method)
+11. [Open items](11-Open-items)
 
 <sub><a href="#idend">↓ End of page</a></sub>

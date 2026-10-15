@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="08-Environment-and-pitfalls">← 8 Environment and pitfalls</a>&ensp;·&ensp;<a href="Home">Home</a>
+  <a href="08-Benchmark-harness">← 8 Benchmark harness</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="10-Working-method">10 Working method →</a>
 </p>
 
 <p align="center">

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="02-Rust-port">← 2 Rust port</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="04-H2R-compiler">4 H2R compiler →</a>
+  <a href="02-Rust-port">← 2 Rust port</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="04-Conformance-and-parity">4 Conformance and parity →</a>
 </p>
 
 <p align="center">

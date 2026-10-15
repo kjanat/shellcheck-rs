@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="03-Rust-port-performance">← 3 Rust port performance</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="05-H2R-runtime-performance">5 H2R runtime performance →</a>
+  <a href="03-Additional-diagnostics">← 3 Additional diagnostics</a>&ensp;·&ensp;<a href="Home">Home</a>&ensp;·&ensp;<a href="05-Validity-matrix">5 Validity matrix →</a>
 </p>
 
 <p align="center">
