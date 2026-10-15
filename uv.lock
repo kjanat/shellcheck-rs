@@ -49,7 +49,7 @@ wheels = [
 
 [[package]]
 name = "rshellcheck"
-version = "0.11.0"
+version = "1.0.0"
 source = { editable = "bindings/native/python" }
 
 [[package]]
@@ -59,7 +59,7 @@ source = { editable = ".github/release" }
 
 [[package]]
 name = "rshellcheck-wasm"
-version = "0.11.0"
+version = "1.0.0"
 source = { editable = "bindings/wasm/python" }
 dependencies = [
     { name = "wasmtime" },

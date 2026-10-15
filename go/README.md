@@ -1,7 +1,7 @@
 # shellcheck: Go installer for the native rshellcheck binary
 
 ```sh
-go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v0.11.0
+go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0
 ```
 
 The command installs as `shellcheck`. On its first run it downloads the
@@ -17,7 +17,7 @@ standard streams and exit code.
   hooks:
     - id: actionlint-shellcheck
       additional_dependencies:
-        - github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v0.11.0
+        - github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0
 ```
 
 actionlint looks for `shellcheck` on `PATH`, which is where `go install` puts
@@ -25,8 +25,8 @@ this command inside the hook environment.
 
 ## What the first run does
 
-1. Reads the module version from the build info. `v0.11.0` selects the GitHub
-   release tagged `rshellcheck-v0.11.0`.
+1. Reads the module version from the build info. `v1.0.0` selects the GitHub
+   release tagged `rshellcheck-v1.0.0`.
 2. Maps `GOOS/GOARCH` to a release target. Linux uses the static musl build.
    Supported: linux amd64, 386, arm64, arm; darwin amd64, arm64; windows
    amd64, 386, arm64; freebsd amd64, 386; android arm64, arm, amd64, 386.
@@ -67,12 +67,12 @@ for the binaries and `go/v<version>` for this module. The release workflow's
 plan step fails when `go/v<version>` is absent or names another commit.
 
 A fix to this command alone ships as `go/v<version>-wrapper.<n>` on the fix
-commit, with `n` counting from 1, for a pre-release `go/v0.12.0-rc.1-wrapper.1`.
+commit, with `n` counting from 1, for a pre-release `go/v1.1.0-rc.1-wrapper.1`.
 That build runs the same `rshellcheck-v<version>` binaries. Go treats the tag
 as a pre-release, so users pin it explicitly:
 
 ```sh
-go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v0.11.0-wrapper.1
+go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0-wrapper.1
 ```
 
 ## Exit codes

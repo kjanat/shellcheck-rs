@@ -1,4 +1,29 @@
-## Git
+# rshellcheck
+
+## Unreleased
+
+Upstream: ShellCheck 0.11.0 at `98deabe126a2`.
+
+### Added
+
+- `--version` prints the ported upstream version and git revision on an
+  `upstream:` line
+- json1 documents carry `sources`, the files a run read through `source`
+- `go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@<version>`
+  installs a `shellcheck` command that fetches and runs the matching native
+  rshellcheck release
+
+### Changed
+
+- Version numbers are the port's own. Releases continue at 1.0.0 with semver:
+  patch for port fixes, minor for a new upstream pin or new diagnostics, major
+  for breaking CLI or API changes. The `upstream-<version>` aliases on npm,
+  ghcr.io and git name the newest port release of an upstream version.
+
+## v0.11.0 - 2026-10-12
+
+Upstream: ShellCheck 0.11.0 at `98deabe126a2`, including these changes after
+the upstream 0.11.0 release:
 
 ### Added
 
@@ -7,20 +32,16 @@
   (bash `require-double-equals`)
 - Add `--files-from` option to read input files from a file
 - Support EditorConfig `shellcheck.*` keys
-- json1 documents carry `sources`, the files a run read through `source`
-- `go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@<version>`
-  installs a `shellcheck` command that fetches and runs the matching native
-  rshellcheck release
 
 ### Changed
 
 - SC3040: Support `pipefail` as specified in POSIX.1-2024
 
-### Fixed
-
 ### Removed
 
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024
+
+# ShellCheck
 
 ## v0.11.0 - 2025-08-03
 

@@ -34,17 +34,25 @@ Builds use `Cargo.lock`, pinned cross/NDK versions, target-specific Cargo caches
 and at most six concurrent build jobs. Only the Rust CLI is cross-compiled;
 no Haskell oracle or H2R compiler is built.
 
-1. Set the same version in both `shellcheck-cli` and `shellcheck-rs` manifests.
-   Refresh `Cargo.lock` with `cargo check -p shellcheck-cli` and include it
-   in the version commit; release builds use `--locked`.
+Versions are the port's own, semver from 1.0.0: patch for port fixes, minor
+for a new upstream pin or new diagnostics, major for breaking CLI or API
+changes. `rshellcheck --version` prints the ported upstream ShellCheck version
+on its `upstream:` line, and the `upstream-<version>` aliases below map that
+version to the newest port release.
+
+1. Set the same version in the `shellcheck-cli`, `shellcheck-rs` and
+   `shellcheck-wasm` manifests and in the four binding manifests under
+   `bindings/`. Refresh `Cargo.lock` with `cargo check -p shellcheck-cli` and
+   `package-lock.json` with `npm install --package-lock-only`, and include
+   both in the version commit; release builds use `--locked`.
 2. Review the tests and build artifacts from the pull request. The workflow
    builds all 15 targets on relevant PR changes and checks workspace unit tests
    and the 4,067-entry behavior snapshot.
 3. After the intended commit is merged, verify its required signature, then
-   create and push a tag such as `rshellcheck-v0.11.0`, and on the same commit
-   the Go installer's tag `go/v0.11.0`. A mismatched version or a missing
+   create and push a tag such as `rshellcheck-v1.0.0`, and on the same commit
+   the Go installer's tag `go/v1.0.0`. A mismatched version or a missing
    `go/v<version>` tag fails before any build job starts. Prerelease versions
-   use tags such as `rshellcheck-v0.12.0-rc.1` and `go/v0.12.0-rc.1` and
+   use tags such as `rshellcheck-v1.1.0-rc.1` and `go/v1.1.0-rc.1` and
    become GitHub prereleases.
 4. All targets must succeed. Assembly verifies target headers, binary hashes,
    version, toolchain and source commit for every archive, then adds the source
@@ -217,7 +225,7 @@ previous Git alias version, requires a verified release commit, and verifies
 the resulting npm versions, OCI digests and Git target.
 
 PyPI has no distribution-tag equivalent. Install a specific version with
-`pip install rshellcheck-wasm==0.11.0`; the package description and upstream
+`pip install rshellcheck-wasm==1.0.0`; the package description and upstream
 project link identify its upstream version and exact source revision.
 
 ## Docker
@@ -228,7 +236,7 @@ The image runs `rshellcheck` directly and defaults to `/w`, so mounted files
 can be passed by relative path:
 
 ```sh
-docker run --rm -v "${PWD}:/w:ro" ghcr.io/kjanat/shellcheck-rs:0.11.0 script.sh
+docker run --rm -v "${PWD}:/w:ro" ghcr.io/kjanat/shellcheck-rs:1.0.0 script.sh
 ```
 
 The minimal image contains the static CLI and license, with no shell or package
@@ -242,7 +250,7 @@ Every release target also has a copy-only image tagged
 release binary, `/LICENSE.txt` and `/BUILD.json`.
 
 ```sh
-id=$(docker create ghcr.io/kjanat/shellcheck-rs/binaries:0.11.0-x86_64-apple-darwin)
+id=$(docker create ghcr.io/kjanat/shellcheck-rs/binaries:1.0.0-x86_64-apple-darwin)
 docker cp "$id:/rshellcheck" ./rshellcheck
 docker rm "$id"
 chmod +x ./rshellcheck
@@ -256,7 +264,7 @@ architectures, pass `--platform linux/amd64` to `docker create`.
 Linux applications can copy the matching binary directly:
 
 ```dockerfile
-COPY --from=ghcr.io/kjanat/shellcheck-rs/binaries:0.11.0-x86_64-unknown-linux-musl /rshellcheck /usr/local/bin/rshellcheck
+COPY --from=ghcr.io/kjanat/shellcheck-rs/binaries:1.0.0-x86_64-unknown-linux-musl /rshellcheck /usr/local/bin/rshellcheck
 ```
 
 ## PyPI setup
