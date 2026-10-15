@@ -23,21 +23,21 @@ from bench.schema import (
 
 MIB = 2**20
 # What each candidate really peaks at when it runs alone, MiB (the shape of the CI run
-# that exposed the cumulative-maximum problem: upstream small, h2r and rust-port large).
-TRUE_RSS = {"upstream": 220, "h2r": 767, "rust-port": 1374}
+# that exposed the cumulative-maximum problem: upstream small, h2r and rshellcheck large).
+TRUE_RSS = {"upstream": 220, "h2r": 767, "rshellcheck": 1374}
 SELFTEST_ORDERS = [
-    ["upstream", "h2r", "rust-port"],
-    ["h2r", "upstream", "rust-port"],
-    ["rust-port", "h2r", "upstream"],
-    ["h2r", "rust-port", "upstream"],
+    ["upstream", "h2r", "rshellcheck"],
+    ["h2r", "upstream", "rshellcheck"],
+    ["rshellcheck", "h2r", "upstream"],
+    ["h2r", "rshellcheck", "upstream"],
 ]
 # Orders in which upstream, the smallest, is never first: every cumulative value it
 # reports is inflated by a larger candidate that ran before it.
 NEVER_FIRST_ORDERS = [
-    ["h2r", "upstream", "rust-port"],
-    ["rust-port", "upstream", "h2r"],
-    ["h2r", "rust-port", "upstream"],
-    ["rust-port", "h2r", "upstream"],
+    ["h2r", "upstream", "rshellcheck"],
+    ["rshellcheck", "upstream", "h2r"],
+    ["h2r", "rshellcheck", "upstream"],
+    ["rshellcheck", "h2r", "upstream"],
 ]
 
 

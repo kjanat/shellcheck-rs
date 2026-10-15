@@ -2,11 +2,11 @@
 
 Compare upstream ShellCheck with the handwritten Rust port and the GHC Core → Rust implementation. Measure output agreement, runtime, and peak memory on identical workloads, with uncertainty estimates and a compact report showing where to investigate next.
 
-| Candidate   | Source                                   |
-| ----------- | ---------------------------------------- |
-| `upstream`  | ShellCheck release pinned by `mise.lock` |
-| `rust-port` | `rust-port` branch                       |
-| `h2r`       | `h2r-compiler` branch                    |
+| Candidate     | Source                                    |
+| ------------- | ----------------------------------------- |
+| `upstream`    | ShellCheck release pinned by `mise.lock`  |
+| `rshellcheck` | `master` branch, package `shellcheck-cli` |
+| `h2r`         | `h2r-compiler` branch                     |
 
 Requires Linux, [mise](https://mise.jdx.dev), git, and GNU time (`/usr/bin/time`). For a cold h2r build, install GHC's system dependencies (`libgmp-dev libnuma-dev zlib1g-dev pkg-config` on Debian/Ubuntu). The first h2r preparation can take several hours.
 
@@ -29,7 +29,7 @@ uv run bench report .bench/results/<run>   # report from recorded samples; no co
 For a focused run:
 
 ```sh
-uv run bench run --candidates upstream,rust-port --scenarios startup,small \
+uv run bench run --candidates upstream,rshellcheck --scenarios startup,small \
   --rounds 5 --runs 10 --warmup 3 --pin 2
 ```
 

@@ -79,7 +79,7 @@ if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
 binary = "shellcheck"
 tool = "shellcheck"
 baseline = true
-[candidates.rust-port]
+[candidates.rshellcheck]
 repo = {json.dumps(str(self.source))}
 ref = "main"
 package = "shellcheck-cli"
@@ -126,13 +126,13 @@ tools = ["rust"]
             "prepare",
             *self.flags,
             "--candidates",
-            "rust-port",
+            "rshellcheck",
             *arguments,
             success=success,
         )
 
     def manifest(self):
-        return json.loads((self.prepared / "rust-port/manifest.json").read_text())
+        return json.loads((self.prepared / "rshellcheck/manifest.json").read_text())
 
     def count(self):
         return int(self.counter.read_text()) if self.counter.exists() else 0
@@ -179,7 +179,7 @@ tools = ["rust"]
         self.assertNotEqual(first["binary_sha256"], self.manifest()["binary_sha256"])
         import hashlib
 
-        old_binary = self.prepared / "rust-port" / first["binary"]
+        old_binary = self.prepared / "rshellcheck" / first["binary"]
         self.assertEqual(
             hashlib.sha256(old_binary.read_bytes()).hexdigest(), first["binary_sha256"]
         )
@@ -188,12 +188,12 @@ tools = ["rust"]
         (self.source / "main.rs").write_text("modified")
         (self.source / "extra.rs").write_text("local addition")
         before = self.git("status", "--porcelain")
-        self.prepare("--source", f"rust-port={self.source}")
+        self.prepare("--source", f"rshellcheck={self.source}")
         first = self.manifest()
         self.assertTrue(first["dirty"])
         self.assertEqual(before, self.git("status", "--porcelain"))
         (self.source / "extra.rs").write_text("different local addition")
-        self.prepare("--source", f"rust-port={self.source}")
+        self.prepare("--source", f"rshellcheck={self.source}")
         self.assertNotEqual(first["build_key"], self.manifest()["build_key"])
         self.assertEqual(self.count(), 2)
 
@@ -223,7 +223,7 @@ tools = ["rust"]
         plan = self.root / "plan.json"
         self.prepare(
             "--source",
-            f"rust-port={self.source}",
+            f"rshellcheck={self.source}",
             "--resolve-only",
             "--plan",
             str(plan),
@@ -232,12 +232,12 @@ tools = ["rust"]
         result = self.prepare("--plan", str(plan), success=False)
         self.assertIn("source changed after resolution", result.stderr)
         self.assertEqual(self.count(), 0)
-        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
+        self.assertFalse((self.prepared / "rshellcheck/manifest.json").exists())
 
     def test_corrupt_binary_cache_is_rebuilt(self):
         self.prepare()
         key = self.manifest()["build_key"]
-        (self.state / "cache/rust-port" / key / self.manifest()["binary"]).write_text(
+        (self.state / "cache/rshellcheck" / key / self.manifest()["binary"]).write_text(
             "corrupt"
         )
         self.prepare()
@@ -247,8 +247,8 @@ tools = ["rust"]
     def test_failed_build_preserves_partial_state_without_publishing(self):
         (self.root / "fail").touch()
         self.prepare(success=False)
-        self.assertTrue((self.state / "build/rust-port/partial").exists())
-        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
+        self.assertTrue((self.state / "build/rshellcheck/partial").exists())
+        self.assertFalse((self.prepared / "rshellcheck/manifest.json").exists())
         self.assertFalse(any(self.state.glob("cache/*/*/manifest.json")))
         (self.root / "fail").unlink()
         result = self.prepare()
@@ -261,7 +261,7 @@ tools = ["rust"]
         self.assertIn("during toolchain setup", result.stderr)
         self.assertIn("main.rs", result.stderr)
         self.assertEqual(self.count(), 0)
-        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
+        self.assertFalse((self.prepared / "rshellcheck/manifest.json").exists())
 
     def test_postinstall_inherits_locked_mode_without_unrelated_auto_installs(self):
         (self.root / "mutation").write_text("postinstall")
@@ -276,7 +276,7 @@ tools = ["rust"]
         self.assertIn("source changed during preparation", result.stderr)
         self.assertIn("main.rs", result.stderr)
         self.assertEqual(self.count(), 1)
-        self.assertFalse((self.prepared / "rust-port/manifest.json").exists())
+        self.assertFalse((self.prepared / "rshellcheck/manifest.json").exists())
 
     def test_concurrent_preparation_builds_only_once(self):
         plan = self.root / "plan.json"
@@ -288,7 +288,7 @@ tools = ["rust"]
             "prepare",
             *self.flags,
             "--candidates",
-            "rust-port",
+            "rshellcheck",
             "--plan",
             str(plan),
         ]
@@ -311,7 +311,7 @@ tools = ["rust"]
         plan = self.root / "plan.json"
         self.prepare(
             "--binary",
-            f"rust-port={self.binary}",
+            f"rshellcheck={self.binary}",
             "--resolve-only",
             "--plan",
             str(plan),
@@ -393,7 +393,7 @@ tools = ["rust"]
             "--binary",
             f"upstream={self.binary}",
             "--source",
-            f"rust-port={self.source}",
+            f"rshellcheck={self.source}",
             "--corpus",
             str(self.root / "corpus"),
             "--out",

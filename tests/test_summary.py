@@ -12,7 +12,7 @@ class SummaryTests(unittest.TestCase):
     def test_ci_links_download_existing_evidence_and_keep_revision_links(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            diff = "precheck/omarchy-commands/rust-port.diff"
+            diff = "precheck/omarchy-commands/rshellcheck.diff"
             (root / diff).parent.mkdir(parents=True)
             for file in (diff, "run.json", "summary.json", "timing.svg"):
                 (root / file).write_text("evidence")
@@ -20,7 +20,7 @@ class SummaryTests(unittest.TestCase):
             report = (
                 f"[source]({revision})\n"
                 f"[output diff]({diff})\n"
-                f"| rust-port | [diff]({diff}) |\n"
+                f"| rshellcheck | [diff]({diff}) |\n"
                 "[raw run](run.json), [statistics](summary.json), [plot](timing.svg)\n"
             )
             (root / "report.md").write_text(report)

@@ -95,7 +95,7 @@ else:
             )
             for scenario in scenarios:
                 self.assertIn(checks[scenario]["upstream"].status, ("ok", "slow"))
-                self.assertIn(checks[scenario]["rust-port"].status, ("ok", "slow"))
+                self.assertIn(checks[scenario]["rshellcheck"].status, ("ok", "slow"))
             proc = Path("/proc") / child_pid.read_text() / "stat"
             self.assertTrue(not proc.exists() or proc.read_text().split()[2] == "Z")
             fixture.scenarios = scenarios

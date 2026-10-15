@@ -136,7 +136,7 @@ jobs:
       - name: Assemble and verify prepared artifacts
         run: |
           mkdir -p .bench/prepared
-          for name in upstream rust-port h2r; do mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"; done
+          for name in upstream rshellcheck h2r; do mv ".bench/artifacts/prepared-${name}" ".bench/prepared/${name}"; done
           chmod +x .bench/prepared/*/*/rshellcheck
           uv run bench prepare --verify
       - name: Restore pinned Omarchy source

@@ -3,9 +3,9 @@ binary   = "shellcheck"
 baseline = true
 tool     = "shellcheck"
 
-[candidates.rust-port]
+[candidates.rshellcheck]
 repo    = "https://github.com/kjanat/shellcheck-rs.git"
-ref     = "rust-port"
+ref     = "master"
 package = "shellcheck-cli"
 tools   = ["rust"]
 

@@ -103,7 +103,7 @@ class MetricsTests(unittest.TestCase):
         )
         self.assertNotIn(("round03-medium-upstream.json", "upstream"), calls)
         self.assertEqual(run.samples["after"]["upstream"].n, 30)
-        self.assertEqual(run.samples["medium"]["rust-port"].n, 30)
+        self.assertEqual(run.samples["medium"]["rshellcheck"].n, 30)
         summary, report = self.analyze_run(run)
         self.assertIsNone(summary.descriptives["medium"]["upstream"])
         self.assertFalse(
@@ -176,16 +176,16 @@ class MetricsTests(unittest.TestCase):
 
     def test_mismatched_output_never_earns_speed_verdict(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
-        run.precheck["medium"]["rust-port"].parity = "differs"
+        run.precheck["medium"]["rshellcheck"].parity = "differs"
         summary, report = self.analyze_run(run)
         comparisons = [
             pair
             for pair in summary.comparisons
-            if pair.candidate == "rust-port" and pair.reference == "upstream"
+            if pair.candidate == "rshellcheck" and pair.reference == "upstream"
         ]
         self.assertEqual(comparisons[0].verdict, "n/a")
         row = next(
-            line for line in report.splitlines() if line.startswith("| rust-port |")
+            line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertIn("not comparable", row)
         self.assertNotIn("🏆", row)
@@ -193,19 +193,19 @@ class MetricsTests(unittest.TestCase):
 
     def test_changed_exit_status_during_timing_is_not_comparable(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
-        run.samples["medium"]["rust-port"].exit_codes.append(2)
+        run.samples["medium"]["rshellcheck"].exit_codes.append(2)
         summary, report = self.analyze_run(run)
         comparisons = [
             pair
             for pair in summary.comparisons
-            if pair.candidate == "rust-port" and pair.reference == "upstream"
+            if pair.candidate == "rshellcheck" and pair.reference == "upstream"
         ]
         self.assertEqual(comparisons[0].verdict, "n/a")
         self.assertIn(
-            "exit status changed", " ".join(summary.flags["medium"]["rust-port"])
+            "exit status changed", " ".join(summary.flags["medium"]["rshellcheck"])
         )
         row = next(
-            line for line in report.splitlines() if line.startswith("| rust-port |")
+            line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertNotIn("faster", row)
         self.assertNotIn("🏆", row)
@@ -214,26 +214,26 @@ class MetricsTests(unittest.TestCase):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
         summary, report = self.analyze_run(run)
         base = summary.descriptives["medium"]["upstream"]
-        candidate = summary.descriptives["medium"]["rust-port"]
+        candidate = summary.descriptives["medium"]["rshellcheck"]
         self.assertIsNotNone(base)
         self.assertIsNotNone(candidate)
         assert base and candidate
         row = next(
-            line for line in report.splitlines() if line.startswith("| rust-port |")
+            line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertIn(f"{candidate.median / base.median:.2f}×", row)
         self.assertIn(f"{candidate.peak_rss_median / base.peak_rss_median:.2f}×", row)
         pair = next(
             pair
             for pair in summary.comparisons
-            if pair.candidate == "rust-port" and pair.reference == "upstream"
+            if pair.candidate == "rshellcheck" and pair.reference == "upstream"
         )
         low, high = pair.speedup_median_ci
         self.assertIn(f"[{1 / high:.2f}, {1 / low:.2f}]", row)
 
     def test_fastest_observed_result_keeps_highlight_and_noise_qualification(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
-        samples = run.samples["medium"]["rust-port"]
+        samples = run.samples["medium"]["rshellcheck"]
         for round_ in samples.rounds:
             round_.times = [0.001 if i % 2 else 0.009 for i in range(len(round_.times))]
         samples.times = [time for round_ in samples.rounds for time in round_.times]
@@ -241,11 +241,11 @@ class MetricsTests(unittest.TestCase):
         self.assertTrue(
             any(
                 flag.startswith("noisy")
-                for flag in summary.flags["medium"]["rust-port"]
+                for flag in summary.flags["medium"]["rshellcheck"]
             )
         )
         row = next(
-            line for line in report.splitlines() if line.startswith("| rust-port |")
+            line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertIn("🏆", row)
         self.assertIn("repeat: noise/drift", row)
