@@ -1,19 +1,29 @@
 #:schema https://mise.jdx.dev/schema/mise.json
 # Benchmark tools. Candidate locks take precedence over the harness build toolchain.
+# ShellCheck 0.11.0 builds with GHC 9.6.7, the GHC the h2r-compiler branch pins.
 
 min_version = "2026.10.0"
 
 [tools]
-hyperfine                    = "1.20.0"
-python                       = "3.14"
-ruff                         = "latest"
-rust                         = "latest"
-uv                           = "0.12.23"
-"github:kjanat/runner"       = "latest"
-"github:kjanat/dprint"       = "latest"
-"github:koalaman/shellcheck" = "latest"
+cabal                  = "latest"
+ghc                    = "9.6.7"
+ghcup                  = "latest"
+hyperfine              = "1.20.0"
+python                 = "3.14"
+ruff                   = "latest"
+rust                   = "latest"
+uv                     = "0.12.23"
+"github:kjanat/runner" = "latest"
+"github:kjanat/dprint" = "latest"
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
 
 [settings]
+experimental                        = true
 lockfile                            = true
 minimum_release_age                 = "0s"
 python.uv_venv_auto                 = "create|source"

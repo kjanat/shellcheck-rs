@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv github:koalaman/shellcheck" }
+        with: { install_args: "python uv" }
       - name: Prepare bench plan
         run: uv run bench prepare --resolve-only --plan .bench/plan.json
       - name: Resolve once
@@ -43,7 +43,11 @@ jobs:
           import os
           from pathlib import Path
           plan = json.loads(Path('.bench/plan.json').read_text())
-          matrix = [{key: item[key] for key in ('name', 'key', 'layers_key')} for item in plan['builds']]
+          matrix = [
+              {key: item[key] for key in ('name', 'key', 'layers_key')}
+              | {'build': item['spec']['build'], 'cabal': 'cabal' in item['spec']['tools']}
+              for item in plan['builds']
+          ]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('candidates=' + json.dumps(matrix, separators=(',', ':')) + '\n')
       - uses: actions/upload-artifact@v7
@@ -61,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv github:koalaman/shellcheck" }
+        with: { install_args: "python uv" }
       - uses: actions/download-artifact@v8
         with: { name: candidate-plan, path: .bench }
       - name: Restore completed binary and provenance
@@ -72,7 +76,7 @@ jobs:
           key: bench-binary-${{ matrix.name }}-${{ matrix.key }}
       - name: Restore compatible build layers
         id: layers
-        if: steps.binary.outputs.cache-hit != 'true' && matrix.name != 'upstream'
+        if: steps.binary.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: &BuildLayers |
@@ -86,14 +90,14 @@ jobs:
           restore-keys: bench-layers-${{ matrix.name }}-${{ matrix.layers_key }}-
       - name: Restore Rust dependency downloads
         id: dependencies
-        if: steps.binary.outputs.cache-hit != 'true' && matrix.name != 'upstream'
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.build == 'cargo'
         uses: actions/cache/restore@v6
         with:
           path: .bench/dependencies/cargo
           key: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-
-      - name: Install h2r system libraries
-        if: matrix.name == 'h2r'
+      - name: Install GHC system libraries
+        if: matrix.cabal
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
       - name: Prepare or verify cached binary
         run: uv run bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"

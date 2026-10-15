@@ -13,6 +13,7 @@ class CandidateSpec(BaseModel):
     repo: str | None = None
     ref: str = ""
     package: str = ""
+    build: Literal["cargo", "cabal"] = "cargo"
     tools: list[str] = []
     tool: str | None = None
     jobs: int = Field(default=2, ge=1)

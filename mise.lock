@@ -2,10 +2,81 @@
 
 lockfile_version = 3
 
+[[tools.cabal]]
+version = "3.18.2.0"
+backend = "aqua:haskell/cabal/cabal-install"
+specifiers = ["latest"]
+
+[tools.cabal."platforms.linux-arm64"]
+checksum = "sha256:e4d940131ab0b78943a4b5ce64a9ef5acc452ea849df197787eaeecb1c3bf276"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-aarch64-linux-unknown.tar.xz"
+
+[tools.cabal."platforms.linux-arm64-musl"]
+checksum = "sha256:e4d940131ab0b78943a4b5ce64a9ef5acc452ea849df197787eaeecb1c3bf276"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-aarch64-linux-unknown.tar.xz"
+
+[tools.cabal."platforms.linux-x64"]
+checksum = "sha256:b4f4c83135da77cfc18ccd6056398ca714a2dad86d5f635621ffdda8f9afe587"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-x86_64-linux-unknown.tar.xz"
+
+[tools.cabal."platforms.linux-x64-musl"]
+checksum = "sha256:b4f4c83135da77cfc18ccd6056398ca714a2dad86d5f635621ffdda8f9afe587"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-x86_64-linux-unknown.tar.xz"
+
+[tools.cabal."platforms.macos-arm64"]
+checksum = "sha256:d91f76cf9539d927205858c42d0c1fe3868dea89f54a5dd6151f9c3fdd56f21f"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-aarch64-apple-darwin.tar.xz"
+
+[tools.cabal."platforms.macos-x64"]
+checksum = "sha256:23ae56d6b4c98e6564e875d6a1a5b683a54c7102d602d6d43284b3958cbe4878"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-x86_64-apple-darwin.tar.xz"
+
+[tools.cabal."platforms.windows-x64"]
+checksum = "sha256:7430982fd2aedef41539155d819e7e24349c664206ecf8c6e53c1c31acdbe630"
+url = "https://downloads.haskell.org/~cabal/cabal-install-3.18.2.0/cabal-install-3.18.2.0-x86_64-mingw64.zip"
+
 [[tools.dprint]]
 version = "0.60.1"
 backend = "github:kjanat/dprint"
 specifiers = ["latest"]
+
+[[tools.ghc]]
+version = "9.6.7"
+backend = "mise-ghcup:ghc"
+specifiers = ["9.6.7"]
+
+[[tools.ghcup]]
+version = "0.2.6.2"
+backend = "aqua:haskell/ghcup-hs"
+specifiers = ["latest"]
+
+[tools.ghcup."platforms.linux-arm64"]
+checksum = "sha256:65a5f05120288ee4f1a81d28825374b6af317456a351a586adfce90c6dc29e3b"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/aarch64-linux-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.linux-arm64-musl"]
+checksum = "sha256:65a5f05120288ee4f1a81d28825374b6af317456a351a586adfce90c6dc29e3b"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/aarch64-linux-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.linux-x64"]
+checksum = "sha256:9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-linux-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.linux-x64-musl"]
+checksum = "sha256:9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-linux-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.macos-arm64"]
+checksum = "sha256:4e521e008fe0813db6db4b91cfeebd0c44c80c68afb458ea32a1c94cf5c7cc1d"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/aarch64-apple-darwin-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.macos-x64"]
+checksum = "sha256:e713b9f213d7da01fa4791f39e04e0892b5c5f082d5a38712281f529bab88e56"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-apple-darwin-ghcup-0.2.6.2"
+
+[tools.ghcup."platforms.windows-x64"]
+checksum = "sha256:94da902a2853b1de1df509d04da900a05258480759efdb4f654e66956b6f30db"
+url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-mingw64-ghcup-0.2.6.2.exe"
 
 [[tools."github:kjanat/dprint"]]
 version = "0.59.0-kjanat"
@@ -93,46 +164,6 @@ checksum = "sha256:721007318fc1be52dfb7256488b5d8ca120732acfab6cf85df60230930f95
 url = "https://github.com/kjanat/runner/releases/download/v0.27.1/runner-v0.27.1-x86_64-pc-windows-msvc.tar.gz"
 url_api = "https://api.github.com/repos/kjanat/runner/releases/assets/600424284"
 provenance = "github-attestations"
-
-[[tools."github:koalaman/shellcheck"]]
-version = "0.11.0"
-backend = "github:koalaman/shellcheck"
-specifiers = ["latest"]
-
-[tools."github:koalaman/shellcheck"."platforms.linux-arm64"]
-checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
-
-[tools."github:koalaman/shellcheck"."platforms.linux-arm64-musl"]
-checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
-
-[tools."github:koalaman/shellcheck"."platforms.linux-x64"]
-checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
-
-[tools."github:koalaman/shellcheck"."platforms.linux-x64-musl"]
-checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
-
-[tools."github:koalaman/shellcheck"."platforms.macos-arm64"]
-checksum = "sha256:56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056932"
-
-[tools."github:koalaman/shellcheck"."platforms.macos-x64"]
-checksum = "sha256:3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056930"
-
-[tools."github:koalaman/shellcheck"."platforms.windows-x64"]
-checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
 
 [[tools.hyperfine]]
 version = "1.20.0"
@@ -318,46 +349,6 @@ provenance = "github-attestations"
 version = "1.99.0"
 backend = "core:rust"
 specifiers = ["latest"]
-
-[[tools.shellcheck]]
-version = "0.11.0"
-backend = "aqua:koalaman/shellcheck"
-specifiers = ["latest"]
-
-[tools.shellcheck."platforms.linux-arm64"]
-checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
-
-[tools.shellcheck."platforms.linux-arm64-musl"]
-checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
-
-[tools.shellcheck."platforms.linux-x64"]
-checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
-
-[tools.shellcheck."platforms.linux-x64-musl"]
-checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
-
-[tools.shellcheck."platforms.macos-arm64"]
-checksum = "sha256:56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056932"
-
-[tools.shellcheck."platforms.macos-x64"]
-checksum = "sha256:3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056930"
-
-[tools.shellcheck."platforms.windows-x64"]
-checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e"
-url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
-url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
 
 [[tools.uv]]
 version = "0.12.23"

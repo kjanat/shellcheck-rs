@@ -49,6 +49,25 @@ if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'p
 if sys.argv[1:3] == ['which', 'shellcheck']:
     print({str(self.binary)!r})
     sys.exit(0)
+if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cabal':
+    arguments = sys.argv[sys.argv.index('--') + 2:]
+    if arguments[:2] == ['path', '--remote-repo-cache']:
+        print({str(self.root / "cabal-cache")!r})
+        sys.exit(0)
+    if arguments[0] == 'update':
+        sys.exit(0)
+    builddir = pathlib.Path(arguments[arguments.index('--builddir') + 1])
+    if arguments[0] == 'list-bin':
+        print(builddir / 'shellcheck')
+        sys.exit(0)
+    counter = pathlib.Path(os.environ['TEST_BUILD_COUNTER'])
+    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
+    builddir.mkdir(parents=True, exist_ok=True)
+    (builddir / 'partial').write_text('preserved')
+    if pathlib.Path(os.environ['TEST_BUILD_FAILURE']).exists():
+        sys.exit(7)
+    shutil.copy2({str(self.binary)!r}, builddir / 'shellcheck')
+    sys.exit(0)
 if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
     counter = pathlib.Path(os.environ['TEST_BUILD_COUNTER'])
     counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
@@ -72,7 +91,12 @@ if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
         (self.source / "main.rs").write_text("initial")
         (self.source / "Cargo.lock").write_text("version = 4\n")
         (self.source / "mise.toml").write_text('[tools]\nrust = "1.0"\n')
-        (self.source / "mise.lock").write_text('[[tools.rust]]\nversion = "1.0"\n')
+        (self.source / "mise.lock").write_text(
+            '[[tools.rust]]\nversion = "1.0"\n'
+            '[[tools.ghcup]]\nversion = "0.2"\n'
+            '[[tools.ghc]]\nversion = "9.6"\n'
+            '[[tools.cabal]]\nversion = "3.18"\n'
+        )
         self.commit()
         self.config = self.root / "candidates.toml"
         self.config.write_text(f"""[candidates.upstream]
@@ -166,6 +190,32 @@ tools = ["rust"]
         self.assertEqual(manifest["kind"], "release")
         self.assertEqual(manifest["ref"], str(self.binary))
         self.assertEqual(self.count(), 0)
+
+    def test_cabal_recipe_publishes_listed_executable_and_reuses_it(self):
+        config = self.root / "cabal.toml"
+        config.write_text(f"""[candidates.haskell]
+repo = {json.dumps(str(self.source))}
+ref = "main"
+build = "cabal"
+package = "ShellCheck"
+binary = "shellcheck"
+tools = ["ghcup", "ghc", "cabal"]
+baseline = true
+""")
+        flags = ["--config", str(config), *self.flags[2:]]
+        cold = self.cli("prepare", *flags, "--candidates", "haskell")
+        self.assertIn("cold build", cold.stderr)
+        manifest = json.loads((self.prepared / "haskell/manifest.json").read_text())
+        self.assertEqual(manifest["kind"], "git")
+        self.assertEqual(manifest["pin"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(manifest["version_output"], "version: fixture")
+        self.assertFalse(manifest["dirty"])
+        self.assertTrue((self.state / "build/haskell/partial").exists())
+        self.assertEqual(self.count(), 1)
+        warm = self.cli("prepare", *flags, "--candidates", "haskell")
+        self.assertIn("binary cache hit", warm.stderr)
+        self.assertEqual(self.count(), 1)
+        self.cli("prepare", *flags, "--candidates", "haskell", "--verify")
 
     def test_new_revision_reuses_build_directory_and_changes_binary_key(self):
         self.prepare()

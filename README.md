@@ -2,13 +2,15 @@
 
 Compare upstream ShellCheck with the handwritten Rust port and the GHC Core → Rust implementation. Measure output agreement, runtime, and peak memory on identical workloads, with uncertainty estimates and a compact report showing where to investigate next.
 
-| Candidate     | Source                                    |
-| ------------- | ----------------------------------------- |
-| `upstream`    | ShellCheck release pinned by `mise.lock`  |
-| `rshellcheck` | `master` branch, package `shellcheck-cli` |
-| `h2r`         | `h2r-compiler` branch                     |
+| Candidate     | Source                                                                     |
+| ------------- | -------------------------------------------------------------------------- |
+| `upstream`    | `koalaman/shellcheck` at the commit in `candidates.toml`, built with Cabal |
+| `rshellcheck` | `master` branch, package `shellcheck-cli`                                  |
+| `h2r`         | `h2r-compiler` branch                                                      |
 
-Requires Linux, [mise](https://mise.jdx.dev), git, and GNU time (`/usr/bin/time`). For a cold h2r build, install GHC's system dependencies (`libgmp-dev libnuma-dev zlib1g-dev pkg-config` on Debian/Ubuntu). The first h2r preparation can take several hours.
+Requires Linux, [mise](https://mise.jdx.dev), git, and GNU time (`/usr/bin/time`). For cold upstream and h2r builds, install GHC's system dependencies (`libgmp-dev libnuma-dev zlib1g-dev pkg-config` on Debian/Ubuntu). The first h2r preparation can take several hours.
+
+The upstream commit matches the conformance oracle in `tools/oracle.json` on `master`. Move both together.
 
 ```sh
 mise install
@@ -95,7 +97,7 @@ precheck/      outputs, errors, and diffs
 
 Preparation resolves refs once and builds the exact revision. Completed binaries and manifests are cached by source identity, platform/ABI, locked toolchain, and preparation recipe. A valid binary cache hit skips compilation. Changing report code or workloads does not invalidate candidate builds.
 
-Tool versions come from the candidate's lockfile, with the harness lockfile supplying missing tools (the handwritten port currently has no lockfile). Builds use two Cargo workers by default. Prepared binaries have content-addressed paths, so preparing a new revision preserves binaries referenced by earlier runs.
+Tool versions come from the candidate's lockfile, with the harness lockfile supplying missing tools (upstream ShellCheck and the handwritten port have no lockfile). A `build = "cabal"` candidate builds `<package>:exe:<binary>` with Cabal in the candidate's build directory and publishes the executable Cabal lists. Builds use two Cargo workers by default. Prepared binaries have content-addressed paths, so preparing a new revision preserves binaries referenced by earlier runs.
 
 Candidate toolchain hooks inherit locked mode and skip unrelated task auto-installs. Preparation checks source identity after toolchain setup, dependency preparation, and compilation; failures identify changed paths and publish no binary.
 

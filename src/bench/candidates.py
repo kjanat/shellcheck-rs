@@ -436,17 +436,30 @@ def build_candidate(build: Build, state: Path) -> Path:
         ).stdout.strip()
         if not (Path(cache) / "hackage.haskell.org/01-index.tar").exists():
             run([*execute, "cabal", "update"])
-        run(
-            [
-                *execute,
-                "cabal",
-                "build",
-                "--only-dependencies",
-                "h2r-plugin",
-            ],
-            source / "compiler/canary",
-        )
-        verify_source(build, "during dependency preparation")
+        if build.spec.build == "cargo":
+            run(
+                [
+                    *execute,
+                    "cabal",
+                    "build",
+                    "--only-dependencies",
+                    "h2r-plugin",
+                ],
+                source / "compiler/canary",
+            )
+            verify_source(build, "during dependency preparation")
+    if build.spec.build == "cabal":
+        component = f"{build.spec.package}:exe:{build.spec.binary}"
+        run([*execute, "cabal", "build", "--builddir", str(target), component])
+        listed = subprocess.run(
+            [*execute, "cabal", "list-bin", "--builddir", str(target), component],
+            cwd=source,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return Path(listed)
     run([
         *execute,
         "cargo",
