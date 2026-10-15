@@ -8,13 +8,14 @@ Branch `bench`. A Python project that measures upstream ShellCheck, the Rust por
 
 `src/bench/candidates.toml`:
 
-| Candidate     | Source                                                                                                                                                                           |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `upstream`    | Repository `koalaman/shellcheck` at the revision `tools/oracle.json` pins on `master`, built with Cabal (`ShellCheck:exe:shellcheck`); needs ghcup, GHC and Cabal. The baseline. |
-| `rshellcheck` | Repository `kjanat/shellcheck-rs`, ref `master`, package `shellcheck-cli`, built with Cargo.                                                                                     |
-| `h2r`         | Repository `kjanat/shellcheck-rs`, ref `h2r-compiler`, package `rshellcheck`; needs ghcup, GHC, Cabal and Rust.                                                                  |
+| Candidate          | Source                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `upstream-release` | The latest `koalaman/shellcheck` GitHub release binary, installed through mise (`github:koalaman/shellcheck`, pinned in `mise.lock`).      |
+| `upstream-head`    | Repository `koalaman/shellcheck`, ref `master`, resolved at prepare time and built with Cabal (`ShellCheck:exe:shellcheck`). The baseline. |
+| `rshellcheck`      | Repository `kjanat/shellcheck-rs`, ref `master`, package `shellcheck-cli`, built with Cargo.                                               |
+| `h2r`              | Repository `kjanat/shellcheck-rs`, ref `h2r-compiler`, package `rshellcheck`; needs ghcup, GHC, Cabal and Rust.                            |
 
-A candidate's `build` field selects the Cargo or Cabal recipe. Moving the pin in `tools/oracle.json` on `master` also moves the `upstream` ref here, so output parity is judged against the revision the port follows. 🏆 in a report marks the lowest median only when at least two candidates have matching output.
+A candidate's `build` field selects the Cargo or Cabal recipe. `upstream-head` names `upstream-release` in its `release` field: when the resolved HEAD is the commit of the release tag, the plan drops the source build and makes `upstream-release` the baseline. Either way the plan, `run.json` and the report carry one note naming the commits. `bench prepare` writes the resolved plan; `bench run --plan` and `bench prepare --verify --plan` read candidates, baseline and notes from it. 🏆 in a report marks the lowest median only when at least two candidates have matching output.
 
 **[⬆ Top](#idtop)**
 

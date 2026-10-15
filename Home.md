@@ -4,12 +4,12 @@
 
 `kjanat/shellcheck-rs` ships `rshellcheck`, a Rust port of [koalaman/shellcheck](https://github.com/koalaman/shellcheck), as GitHub release archives, npm and PyPI packages, container images, a Go installer and WASM bindings for JavaScript, Python and Go. This wiki records how the repository is laid out, how parity with upstream is proven, how releases are made, and what is still open.
 
-| Branch         | What it is                                                                               | State (2026-10-15)                                                                                                                        |
-| -------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `master`       | The Rust port: `crates/`, bindings, release pipeline, validity matrix, parity documents. | Upstream pin `c36c85a05ed3` (ShellCheck 0.11.0 line). Release `rshellcheck-v1.0.0` published 2026-10-15 to GitHub, npm, PyPI and ghcr.io. |
-| `bench`        | The benchmark harness comparing upstream, the port and the H2R program.                  | Candidates: `upstream` built from the pinned revision, `rshellcheck` from `master`, `h2r` from `h2r-compiler`.                            |
-| `h2r-compiler` | A Haskell-to-Rust compiler that compiled all of ShellCheck through GHC Core.             | Finished. Head `d64c96bd` (2026-10-03). Output byte-identical to upstream; about 8× slower.                                               |
-| `wiki`         | These pages, mirrored into the wiki repository on push.                                  |                                                                                                                                           |
+| Branch         | What it is                                                                               | State (2026-10-15)                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `master`       | The Rust port: `crates/`, bindings, release pipeline, validity matrix, parity documents. | Upstream pin `c36c85a05ed3` (ShellCheck 0.11.0 line). Release `rshellcheck-v1.0.0` published 2026-10-15 to GitHub, npm, PyPI and ghcr.io.   |
+| `bench`        | The benchmark harness comparing upstream, the port and the H2R program.                  | Candidates: the latest upstream release binary, upstream `master` HEAD built with Cabal (the baseline), `rshellcheck` from `master`, `h2r`. |
+| `h2r-compiler` | A Haskell-to-Rust compiler that compiled all of ShellCheck through GHC Core.             | Finished. Head `d64c96bd` (2026-10-03). Output byte-identical to upstream; about 8× slower.                                                 |
+| `wiki`         | These pages, mirrored into the wiki repository on push.                                  |                                                                                                                                             |
 
 ## Pages
 
