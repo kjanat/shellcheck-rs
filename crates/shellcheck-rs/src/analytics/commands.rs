@@ -1142,9 +1142,6 @@ mod tests {
         assert!(emits(check_uuoe_var, "foo $(echo $(<file))"));
     }
 
-    // `couldBeOptimized` turns nothing down for a backtick -- only globs,
-    // extglobs and brace expansions. A backtick as data, and one escaped
-    // inside the substitution.
     #[test]
     fn uuoe_var_reports_backtick_arguments() {
         assert!(emits(check_uuoe_var, "foo \"$(echo '`')\""));
