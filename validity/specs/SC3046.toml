@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3046
 claim = "sh has no source: it is a missing command and the file is not read"
 shell = "sh"

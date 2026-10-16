@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3039
 claim = "sh has no let: it is a missing command and x stays unset"
 shell = "sh"

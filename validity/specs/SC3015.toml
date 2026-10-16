@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3015
 claim = "sh has no =~: the [[ test is a missing command and the else branch runs"
 shell = "sh"

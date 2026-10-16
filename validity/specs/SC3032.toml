@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3032
 claim = "sh has no coproc: it is a missing command"
 shell = "sh"

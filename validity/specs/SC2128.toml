@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 2128
 claim = "expanding an array without an index gives only the first element"
 

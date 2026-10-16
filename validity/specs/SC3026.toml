@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3026
 claim = "sh takes ^ in a bracket expression literally: it does not negate"
 shell = "sh"

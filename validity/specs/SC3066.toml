@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3066
 claim = "sh's test has no -G: the test errors and the else branch runs"
 shell = "sh"

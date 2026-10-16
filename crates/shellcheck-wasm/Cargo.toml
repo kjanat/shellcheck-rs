@@ -10,9 +10,13 @@ license.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+schemars                = { workspace = true, optional = true }
 serde.workspace         = true
 serde_json.workspace    = true
 shellcheck-rs.workspace = true
+
+[features]
+schema = ["dep:schemars"]
 
 # Export attributes require an unsafe-code lint exception in the ABI module.
 # The core retains its workspace-wide unsafe_code = forbid policy.

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3020
 claim = "sh has no &>: the command is backgrounded and the file stays empty"
 shell = "sh"

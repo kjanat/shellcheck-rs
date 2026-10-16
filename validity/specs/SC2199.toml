@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 2199
 claim = "an array in [[ ]] concatenates instead of matching any element"
 

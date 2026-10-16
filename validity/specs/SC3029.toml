@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3029
 claim = "sh rejects |& as syntax"
 shell = "sh"

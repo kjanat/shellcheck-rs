@@ -3,12 +3,12 @@
 
 pub mod docker;
 pub mod matrix;
-mod outcomes;
+pub mod outcomes;
 mod pin;
 mod rules;
 mod run;
-mod sources;
-mod spec;
+pub mod sources;
+pub mod spec;
 
 use clap::ValueEnum;
 

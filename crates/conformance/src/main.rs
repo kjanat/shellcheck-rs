@@ -28,6 +28,7 @@ mod corpus;
 mod deviations;
 mod fuzz;
 mod oracle;
+mod schemas;
 mod shells;
 mod snapshot;
 mod validity;
@@ -522,6 +523,8 @@ pub enum Command {
     Bench,
     /// Each diagnostic's reproducer and fix, run in real shells per version.
     Validity,
+    /// Write the JSON Schemas of the files and messages the crates own.
+    Schemas,
 }
 
 #[derive(Parser)]
@@ -704,6 +707,7 @@ fn main() -> ExitCode {
         Command::Snapshot => snapshot::run(&args),
         Command::Bench => bench::run(&args),
         Command::Validity => validity::run(args.step, &args.validity),
+        Command::Schemas => schemas::run(),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::coverage(&src).and_then(|coverage| {
@@ -815,6 +819,11 @@ mod tests {
         let a = parse(&["fuzz", "--seed", "7"]);
         assert!(a.cmd == Command::Fuzz);
         assert_eq!(a.fuzzing.seed, 7);
+    }
+
+    #[test]
+    fn schemas_is_a_command() {
+        assert!(parse(&["schemas"]).cmd == Command::Schemas);
     }
 
     #[test]

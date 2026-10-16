@@ -11,6 +11,7 @@ use shellcheck_rs::interface::{InsertionPoint, PositionedComment};
 
 /// The json1 document: `{"comments": [...], "sources": [...]}`.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Output {
     /// Every comment of every checked file.
     pub comments: Vec<Comment>,
@@ -21,6 +22,7 @@ pub struct Output {
 
 /// One comment, in the field order of the Haskell `toEncoding`.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Comment {
     /// The file the comment starts in.
     pub file: String,
@@ -46,6 +48,7 @@ pub struct Comment {
 
 /// A fix: the replacements that make it.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Fix {
     /// The replacements, in the order the checker produced them.
     pub replacements: Vec<Replacement>,
@@ -54,6 +57,7 @@ pub struct Fix {
 /// Fields in alphabetical order to match aeson's sorted-key `object` encoding
 /// of `Replacement` (which defines only `toJSON`), so json1 is byte-exact.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Replacement {
     /// The 1-based column the replaced range starts at.
     pub column: i64,

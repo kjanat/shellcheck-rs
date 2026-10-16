@@ -317,15 +317,12 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
         std::fs::read_to_string(&cabal_path)
             .map_err(|e| format!("{}: {e}", cabal_path.display()))?
     } else {
-        let pin = std::path::Path::new(repo).join("tools/oracle.json");
-        let value: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&pin).map_err(|e| format!("{}: {e}", pin.display()))?,
+        let path = std::path::Path::new(repo).join("tools/oracle.json");
+        let pin: shellcheck_cli::oracle::UpstreamPin = serde_json::from_str(
+            &std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?,
         )
         .map_err(|e| e.to_string())?;
-        format!(
-            "Version: {}",
-            value["version"].as_str().ok_or("missing oracle version")?
-        )
+        format!("Version: {}", pin.version)
     };
     let expected = cabal
         .lines()
@@ -419,5 +416,13 @@ mod tests {
         let crashes = o.crashes();
         assert_eq!(crashes.len(), 1, "one recorded crash: {crashes:?}");
         assert!(crashes[0].0.contains("coproc"));
+    }
+
+    #[test]
+    fn without_a_cabal_file_the_pin_supplies_the_version() {
+        let Some(o) = oracle() else { return };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let banner = verify(&o, &root.to_string_lossy(), false).unwrap();
+        assert!(banner.starts_with("oracle: "), "{banner}");
     }
 }

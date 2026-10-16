@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3063
 claim = "sh has no namerefs and no test -R: the test errors and the else branch runs"
 shell = "sh"

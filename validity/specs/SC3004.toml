@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3004
 claim = 'sh has no $"..": the dollar sign is printed'
 shell = "sh"

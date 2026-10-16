@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3058
 claim = "sh applies ${*%pat} to the joined string instead of each parameter"
 shell = "sh"

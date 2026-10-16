@@ -1,3 +1,4 @@
+#:schema ../schemas/validity-sources.schema.json
 #:tombi toml-version = "v1.1.0"
 # `cargo validity pin` resolves this file into matrix.toml.
 

@@ -19,6 +19,7 @@ lint                 = "clippy --workspace --all-targets --all-features -- -D wa
 rb                   = "run --bin"
 rbr                  = "run --release --bin"
 rshellcheck          = "rbr rshellcheck --"
+schemas              = "run -q -p conformance -- schemas"
 shellcheck           = "rbr rshellcheck --"
 validity             = "run --release -q -p conformance -- validity"
 

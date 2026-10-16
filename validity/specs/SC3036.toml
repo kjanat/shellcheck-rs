@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3036
 claim = "dash's echo takes only -n: another flag is printed"
 shell = "dash"

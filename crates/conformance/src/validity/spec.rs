@@ -1,8 +1,9 @@
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     pub code: i64,
@@ -13,13 +14,13 @@ pub struct Spec {
     pub observe: Vec<Observe>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
     pub script: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Observe {
     pub kind: Kind,
@@ -27,7 +28,7 @@ pub struct Observe {
     pub fixed: String,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Stdout,

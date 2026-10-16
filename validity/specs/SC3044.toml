@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3044
 claim = "sh has no declare: it is a missing command and x stays unset"
 shell = "sh"

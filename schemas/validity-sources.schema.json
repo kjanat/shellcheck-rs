@@ -1,0 +1,125 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/validity-sources.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Defaults": {
+      "type": "object",
+      "required": [
+        "base",
+        "parse"
+      ],
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "parse": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "tarball",
+        "git",
+        "crate",
+        "image"
+      ]
+    },
+    "Source": {
+      "type": "object",
+      "required": [
+        "argv",
+        "kind",
+        "versions"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "dialect": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "image": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "parse": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "repo": {
+          "default": "",
+          "type": "string"
+        },
+        "shipped": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tag": {
+          "default": "",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "type": "string"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vm": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "Validity matrix sources",
+  "type": "object",
+  "required": [
+    "defaults",
+    "shell"
+  ],
+  "properties": {
+    "defaults": {
+      "$ref": "#/$defs/Defaults"
+    },
+    "shell": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Source"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3037
 claim = "sh's echo takes no flags: a flag is printed"
 shell = "sh"

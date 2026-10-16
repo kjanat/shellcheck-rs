@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3031
 claim = "sh does not glob a redirect target: the file name is taken literally"
 shell = "sh"

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3045
 claim = "sh's printf has no -v: the command fails and x stays unset"
 shell = "sh"

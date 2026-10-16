@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3005
 claim = "sh rejects arithmetic for loops as syntax"
 shell = "sh"

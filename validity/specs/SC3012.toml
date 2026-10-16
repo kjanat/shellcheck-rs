@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3012
 claim = "sh's test has no lexicographic <: the test errors and the else branch runs"
 shell = "sh"

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3059
 claim = "sh has no ${x^^}: the expansion is a fatal bad substitution"
 shell = "sh"

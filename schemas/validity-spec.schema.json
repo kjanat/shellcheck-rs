@@ -1,0 +1,84 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/validity-spec.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "status",
+        "stderr-contains",
+        "parse"
+      ]
+    },
+    "Observe": {
+      "type": "object",
+      "required": [
+        "fixed",
+        "kind",
+        "snippet"
+      ],
+      "properties": {
+        "fixed": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "snippet": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Script": {
+      "type": "object",
+      "required": [
+        "script"
+      ],
+      "properties": {
+        "script": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "Validity spec",
+  "type": "object",
+  "required": [
+    "claim",
+    "code",
+    "fixed",
+    "observe",
+    "snippet"
+  ],
+  "properties": {
+    "claim": {
+      "type": "string"
+    },
+    "code": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "fixed": {
+      "$ref": "#/$defs/Script"
+    },
+    "observe": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Observe"
+      }
+    },
+    "shell": {
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    "snippet": {
+      "$ref": "#/$defs/Script"
+    }
+  },
+  "additionalProperties": false
+}

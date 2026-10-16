@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3001
 claim = "sh rejects process substitution as syntax"
 shell = "sh"

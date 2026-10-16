@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3025
 claim = "sh has no /dev/udp: the redirect opens a missing path and fails"
 shell = "sh"

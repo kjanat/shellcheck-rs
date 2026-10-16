@@ -12,6 +12,8 @@ Upstream: ShellCheck 0.11.0 at `c36c85a05ed3`.
 - An added dialect drops the codes `validity/outcomes.toml` records absent in
   every tested version, generated into the port by `cargo validity rules`:
   SC2086 for zsh
+- JSON Schemas in `schemas/` for json1 output, the WASM request, `tools/oracle.json`
+  and the validity files, generated from the Rust types by `cargo schemas`
 
 ### Fixed
 

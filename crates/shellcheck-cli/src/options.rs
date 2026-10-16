@@ -1144,18 +1144,16 @@ mod tests {
     #[test]
     fn version_banner_names_the_port_and_the_upstream_pin() -> Result<(), Box<dyn std::error::Error>>
     {
-        let pin: serde_json::Value =
+        let pin: crate::oracle::UpstreamPin =
             serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
-        let upstream = pin["version"].as_str().ok_or("pin lacks version")?;
-        let revision = pin["revision"].as_str().ok_or("pin lacks revision")?;
         let banner = version_banner();
         let lines: Vec<&str> = banner.lines().collect();
         assert_eq!(lines[1], concat!("version: ", env!("CARGO_PKG_VERSION")));
         assert_eq!(
             lines[2],
-            format!("upstream: {upstream} (git {})", &revision[..12])
+            format!("upstream: {} (git {})", pin.version, &pin.revision[..12])
         );
-        assert_ne!(upstream, env!("CARGO_PKG_VERSION"));
+        assert_ne!(pin.version, env!("CARGO_PKG_VERSION"));
         Ok(())
     }
 

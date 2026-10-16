@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3006
 claim = "sh has no ((..)): it runs nested subshells and the assignment is lost"
 shell = "sh"

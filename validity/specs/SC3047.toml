@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3047
 claim = "sh has no ERR trap: the trap is rejected and never runs"
 shell = "sh"

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3067
 claim = "sh's test has no -O: the test errors and the else branch runs"
 shell = "sh"

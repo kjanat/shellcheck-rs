@@ -9,26 +9,38 @@ use std::{collections::BTreeMap, rc::Rc};
 /// Maximum serialized request size, including virtual source files.
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
+/// The JSON request that `check_json` analyzes.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Request {
+pub struct Request {
+    /// The script to check.
     script: String,
+    /// The file name diagnostics report.
     #[serde(default = "default_filename")]
     filename: String,
+    /// The dialect to check as, by shell name. Unset, the shebang or file name decides.
     #[serde(default)]
     shell: Option<String>,
+    /// Virtual source files by the exact name `source` uses.
     #[serde(default)]
     files: BTreeMap<String, String>,
+    /// Report diagnostics in supplied source files.
     #[serde(default)]
     check_sourced: bool,
+    /// Diagnostic codes to omit.
     #[serde(default)]
     exclude: Vec<i64>,
+    /// Report only these diagnostic codes.
     #[serde(default)]
     include: Option<Vec<i64>>,
+    /// Optional check names to enable.
     #[serde(default)]
     optional_checks: Vec<String>,
+    /// Override the script's extended analysis directive.
     #[serde(default)]
     extended_analysis: Option<bool>,
+    /// The minimum severity: `error`, `warning`, `info` or `style`.
     #[serde(default)]
     severity: Option<String>,
 }

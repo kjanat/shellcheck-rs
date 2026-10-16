@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3034
 claim = "sh runs $(<file) as an empty command: the result is empty"
 shell = "sh"

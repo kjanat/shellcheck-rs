@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3041
 claim = "sh rejects set -B: the error is fatal"
 shell = "sh"

@@ -1,3 +1,5 @@
+#:schema ../../schemas/validity-spec.schema.json
+
 code  = 3021
 claim = "sh's >& takes a descriptor number: a file name is a fatal error"
 shell = "sh"
