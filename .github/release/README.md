@@ -203,8 +203,6 @@ and npm provenance; it does not need a permanent npm token. Existing versions
 are skipped only when their registry integrity matches the release archive.
 A partial npm publication can be resumed by rerunning its failed job.
 Prerelease versions use the `next` dist-tag; stable versions use `latest`.
-Also enable **Allow npm dist-tag** in each package's trusted publisher settings;
-upstream alias promotion needs this permission in addition to direct publishing.
 
 ## Follow an upstream version
 
