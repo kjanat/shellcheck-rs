@@ -1,6 +1,5 @@
-//! `verifyTreeFix`: applying every suggested fix to a script gives the
-//! expected result. Upstream keeps these properties next to the checks; the
-//! port's fixer lives in this crate, so they run here.
+//! `prop_checkRequireDoubleBracket5` and `6` from upstream `Analytics.hs`.
+//! They apply fixes with `formatter::fixer`, which only this crate has.
 #![allow(non_snake_case)]
 
 use shellcheck_cli::formatter::fixer::{apply_fix, fix_mconcat, lines};
