@@ -2,11 +2,11 @@
 
 # 3 Additional diagnostics
 
-The port adds diagnostics beyond upstream ShellCheck. `docs/diagnostics.md` on `master` is the reference; the TTY footer links SC9xxx codes to it.
+`rshellcheck` adds diagnostics beyond ShellCheck's own. `docs/diagnostics.md` on `master` describes each one. The TTY footer links SC9xxx codes to it.
 
 ## 3.1 Code namespaces
 
-- `SC9000` to `SC9999` belong to this project. They are ordinary diagnostics: integer codes in every output format, filtered by `--include`, `--exclude`, severity and `disable=` like upstream codes.
+- `SC9000` to `SC9999` belong to this project. They are ordinary diagnostics: integer codes in every output format, filtered by `--include`, `--exclude`, severity and `disable=` like any ShellCheck code.
 - `RSC` codes report on the run itself. They never appear in a comment or in a json, json1, gcc or diff document, and no filter removes them.
 - `clarify-parse-errors` is a presentation option selected through `--enable`, the library's `optional_checks` or the rc file. It changes wording only.
 
@@ -35,7 +35,7 @@ Functions, subshells and command substitutions are separate scopes. Helper names
 
 ## 3.4 RSC1001 dataflow internal error
 
-When an invariant of the control-flow graph or its dataflow analysis fails, upstream prints `ShellCheck internal error, please report` and no output. The port checks the file without the dataflow checks, prints its comments, then reports
+When an invariant of the control-flow graph or its dataflow analysis fails, the Haskell tool prints `ShellCheck internal error, please report` and nothing else. `rshellcheck` checks the file without the dataflow checks, prints its comments, then reports
 
 ```
 file: RSC1001: ShellCheck internal error, please report: <detail>. The checks that need dataflow analysis were skipped.
@@ -53,8 +53,8 @@ The json1 document carries `sources` after `comments`: every file the run read t
 
 ## 3.6 Parser messages
 
-- Unicode dashes used as an arithmetic minus are diagnosed as SC1100 by default, and the parser keeps the arithmetic structure. Upstream reports SC1102, SC2046 and SC2005 for a command substitution the user did not write.
-- An unterminated quote in a test's operator position names the missing closing quote. Upstream asks for a comparison operator one column past the end of the input (`PARITY-NOTES.md` item 6).
+- Unicode dashes used as an arithmetic minus are diagnosed as SC1100 by default, and the parser keeps the arithmetic structure. ShellCheck reports SC1102, SC2046 and SC2005 for a command substitution the user did not write.
+- An unterminated quote in a test's operator position names the missing closing quote. The Haskell parser asks for a comparison operator one column past the end of the input (`PARITY-NOTES.md` item 6).
 - Parse notes from complete, separated top-level statements survive a later fatal parse. `echo $10` followed by an incomplete `if` keeps SC1037. Notes inside unfinished compounds are still discarded.
 - `clarify-parse-errors` omits redundant enclosing-context notes at the same position as the failed construct, describes `${ ..; }` as a command expansion with its expected terminator, and fills empty SC1072 details. Codes and positions do not change.
 
@@ -70,7 +70,7 @@ SC2162 stays enabled for a bare `read` whose input is discarded: a trailing back
 
 ## 3.8 SC2164 in a function tail
 
-The port warns when a failed `cd` inside a final compound statement can be followed by another command or loop iteration. `f() { if true; then cd /missing; echo continued; fi; }` warns. A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt. The pinned upstream suppresses these by checking only whether the enclosing compound statement is last in the function. The class `upstream-function-tail-cd` sanctions the added findings at exact directory-command spans.
+`rshellcheck` warns when a failed `cd` inside a final compound statement can be followed by another command or loop iteration. `f() { if true; then cd /missing; echo continued; fi; }` warns. A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt. The reference revision suppresses these. It checks only whether the enclosing compound statement is last in the function. The class `upstream-function-tail-cd` sanctions the added findings at exact directory-command spans.
 
 **[⬆ Top](#idtop)**
 

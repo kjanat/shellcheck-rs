@@ -2,11 +2,11 @@
 
 # 7 Performance
 
-`rust/PERF.md` on `master` holds every measurement, its method and the work packages. Each section names its baseline and its machine; numbers compare within one section. This page keeps the tables a reader needs to place the port.
+`rust/PERF.md` on `master` holds every measurement, its method and the work packages. Each section names its baseline and its machine; numbers compare within one section. This page keeps the tables a reader needs to place `rshellcheck`.
 
 ## 7.1 Starting point
 
-Measured at port commit `5d3fe06` on the generated benchmark corpus (seed 20260928), against GHC ShellCheck 0.11.0:
+Measured at `rshellcheck` commit `5d3fe06` on the generated benchmark corpus (seed 20260928), against GHC ShellCheck 0.11.0:
 
 | Script | Lines |  Oracle |      Port | Port peak RSS | Oracle peak RSS |
 | ------ | ----: | ------: | --------: | ------------: | --------------: |
@@ -20,9 +20,9 @@ The cfg phase was 85 % of medium and 90 % of large and grew 7.3× for 2.66× mor
 
 ## 7.2 Rounds 1 and 2
 
-WP-R1 (`cdf4a1c`) stores the analysis state in `im_rc::OrdMap<Rc<str>, Rc<V>>`, resolves scope precedence at lookup, walks `OrdMap::diff` in merges, and shares the empty map. WP-R3 (`9e8fcb1`) adds the integer-key hasher `idhash.rs` for every node and id keyed map. WP-R4 (`8f5525e`) dispatches the 73 command checks through one `CommandTable` keyed by command name. WP-R2 (`32690b5`) layers a node's state over its invocation's dependency base and resolves at lookup, so nodes in exactly one invocation skip `patch_state`.
+WP-R1 (`cdf4a1c`) stores the analysis state in `im_rc::OrdMap<Rc<str>, Rc<V>>`, resolves scope precedence at lookup, walks `OrdMap::diff` in merges, and shares the empty map. WP-R3 (`9e8fcb1`) adds the integer-key hasher `idhash.rs` for every node and id keyed map. WP-R4 (`8f5525e`) dispatches the 73 command checks through one `CommandTable` keyed by command name. WP-R2 (`32690b5`) layers a node's state over its invocation's dependency base and resolves at lookup. Nodes in exactly one invocation skip `patch_state`.
 
-Combined head `32690b5`, hyperfine with 10 runs, same session as the oracle:
+Combined head `32690b5`, hyperfine with 10 runs, same session as the Haskell binary:
 
 | Scenario            | After WP-R1 (`02af506`) | After round 2 (`32690b5`) |  Oracle | Round 2 vs oracle |
 | ------------------- | ----------------------: | ------------------------: | ------: | ----------------: |
@@ -36,13 +36,13 @@ Combined head `32690b5`, hyperfine with 10 runs, same session as the oracle:
 | instructions medium |                 1.277 G |                     739 M |         |                   |
 | instructions large  |                 4.535 G |                   2.155 G |         |                   |
 
-Verification of that head: 1 524 tests, gate 2 048 agree and 0 diverge, fuzz seeds 0 and 156 clean, snapshot 4 026 entries unchanged, `-f gcc` and `-f json1` byte-identical to the oracle on every corpus script.
+Verification of that head: 1 524 tests, gate 2 048 agree and 0 diverge, fuzz seeds 0 and 156 clean, snapshot 4 026 entries unchanged, `-f gcc` and `-f json1` byte-identical to the reference binary on every corpus script.
 
 **[⬆ Top](#idtop)**
 
 ## 7.3 2026-10-11: lazy CFG associations and allocation-free traversal
 
-Compared with the release binary at `c0e72e70`. Five shuffled runs per workload, one warm-up, CPU 0, `--norc -s bash`, medians, no confidence intervals. Omarchy is pinned to `077ac1da939d`: 1,228 shell files, 119,468 lines.
+Compared with the optimised build at `c0e72e70`. Five shuffled runs per workload, one warm-up, CPU 0, `--norc -s bash`, medians, no confidence intervals. Omarchy is fixed at `077ac1da939d`: 1,228 shell files, 119,468 lines.
 
 | Workload                  |     Before |      After | Speedup | Peak RSS before → after |
 | ------------------------- | ---------: | ---------: | ------: | ----------------------: |
@@ -63,7 +63,7 @@ What changed: whole-subtree redirection searches are skipped when no relevant re
 
 ## 7.4 2026-10-11: bounded workers, shared snapshots and fewer parser allocations
 
-Compared with the release binary at `3ad86e18`, same method, `--norc`:
+Compared with the optimised build at `3ad86e18`, same method, `--norc`:
 
 | Workload                      |    Before |     After | Before / after | Peak RSS before → after |
 | ----------------------------- | --------: | --------: | -------------: | ----------------------: |
@@ -85,7 +85,7 @@ Worker throughput on the full Omarchy sweep, GCC output, eight-CPU affinity set:
 |    4 | 0.980 s | 0.892 s |  128.7 MiB | 119.7 MiB |
 |    8 | 0.591 s | 0.540 s |  208.6 MiB | 203.7 MiB |
 
-What changed: ordinary file reads bypass the stdin-cache mutex; a bounded queue holds at most two pending specs per worker while the producer resolves inputs in order; CFG snapshots share exit-code sets through `Rc`; token and parent maps use `IdMap`; the parser's write-only `reach_pos` field is gone. Validation: 2,145 workspace tests, 2,086 oracle comparisons and 2,000 seeded fuzz inputs with zero divergences, 4,062 snapshot entries unchanged.
+What changed: ordinary file reads bypass the stdin-cache mutex; a bounded queue holds at most two pending specs per worker while the producer resolves inputs in order; CFG snapshots share exit-code sets through `Rc`; token and parent maps use `IdMap`; the parser's write-only `reach_pos` field is gone. Validation: 2,145 workspace tests, 2,086 gate comparisons and 2,000 seeded fuzz inputs with zero divergences, 4,062 snapshot entries unchanged.
 
 **[⬆ Top](#idtop)**
 
@@ -95,7 +95,7 @@ What changed: ordinary file reads bypass the stdin-cache mutex; a bounded queue 
 - Peak RSS comes from a separate GNU `time` run per binary and workload. Python's `wait4` reading includes a launcher floor and is not used.
 - `callgrind_annotate --inclusive=yes` reports more than 100 % for recursive frames; read the non-recursive caller's row.
 - `conformance bench` reports `params-other` and `resolve` as differences of totals; they jump between runs. `parse`, `cfg` and `checks` are timed directly.
-- Invariants for any change: gate 0 divergences, fuzz 0 divergences, snapshot unchanged or regenerated with a reason, and the CFG analysis stays a port of `CFGAnalysis.hs` (versions, cache, invocation paths, merge and patch semantics, observable iteration order). Change representations and keep the algorithm.
+- Invariants for any change: gate 0 divergences, fuzz 0 divergences, snapshot unchanged or regenerated with a reason, and the CFG analysis stays a translation of `CFGAnalysis.hs` (versions, cache, invocation paths, merge and patch semantics, observable iteration order). Change representations and keep the algorithm.
 
 **[⬆ Top](#idtop)**
 

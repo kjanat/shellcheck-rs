@@ -2,7 +2,7 @@
 
 # 5 Validity matrix
 
-The oracle proves the port equals upstream. The validity matrix proves a diagnostic's claim by running its reproducer in real shells, one container per shell and version. `docs/validity.md` is the design document.
+The differential gate proves `rshellcheck` equals ShellCheck. The validity matrix proves a diagnostic's claim by running its reproducer in real shells, one container per shell and version. `docs/validity.md` is the design document.
 
 ## 5.1 Files
 
@@ -41,9 +41,9 @@ The oracle proves the port equals upstream. The validity matrix proves a diagnos
 | netbsd-sh   | 10.2, 11.0                                                     | VM image    |              |
 | tcsh        | 6.24.16                                                        | tarball     |              |
 
-The first four shells are `shipped = true`: the port has a `--shell` value for them. A cell with a `dialect` runs the port assertions with that dialect. The BSD shells run inside guest operating systems under QEMU; their source is a disk image URL with its SHA-256. tcsh has an unrelated grammar and normally records `unparsable`.
+The first four shells are `shipped = true`: `rshellcheck` has a `--shell` value for them. A cell with a `dialect` runs the `rshellcheck` assertions with that dialect. The BSD shells run inside guest operating systems under QEMU. Their source is a disk image URL with its SHA-256. tcsh has an unrelated grammar and normally records `unparsable`.
 
-A tarball pin is the URL and its SHA-256. A git pin is the repository, the tag and the resolved commit. A crate pin is the crates.io version. `cargo validity pin` resolves every version, keeps pins already in `matrix.toml`, resolves the base image to a digest and asks the registry for each image's digest; `pin --refresh` re-resolves git tags and base digests.
+A tarball is fixed by its URL and SHA-256, a git source by repository, tag and resolved commit, a crate by its crates.io version. `cargo validity pin` resolves every version, keeps entries already in `matrix.toml`, resolves the base image to a digest and asks the registry for each image's digest. `pin --refresh` re-resolves git tags and base digests.
 
 **[⬆ Top](#idtop)**
 
@@ -56,8 +56,8 @@ Per spec per cell the runner asserts:
 1. The shell parses both scripts.
 2. The snippet produces `observe.snippet`.
 3. The fixed script produces `observe.fixed`.
-4. On a cell with `dialect`: the port reports `code` on the snippet.
-5. On a cell with `dialect`: the port reports nothing with `code` on the fix.
+4. On a cell with `dialect`: `rshellcheck` reports `code` on the snippet.
+5. On the same cells: no `code` finding appears on the fix.
 
 | Outcome      | Meaning                                                             |
 | ------------ | ------------------------------------------------------------------- |
@@ -84,7 +84,7 @@ cargo validity pin [--refresh]
 cargo validity cells
 ```
 
-The runner reuses one isolated container per cell: scripts on stdin, a five-second limit, no mounts, no network, no Linux capabilities, read-only filesystem apart from the temporary directory, `LC_ALL=C`, `TZ=UTC`, `HOME=/tmp`, an environment holding only `PATH`. It pulls by the digest in `matrix.toml`, falls back to a local build of the cell's tag when the digest is unreachable, and records `missing` otherwise. Parsing uses the shell's `-n` where it has one. Spec execution order is sorted by code then cell, so output is deterministic byte for byte. A host without Docker fails with one message. Fuzz scripts are never executed; only curated specs run.
+The runner reuses one isolated container per cell: scripts on stdin, a five-second limit, no mounts, no network, no Linux capabilities, read-only filesystem apart from the temporary directory, `LC_ALL=C`, `TZ=UTC`, `HOME=/tmp`, an environment holding only `PATH`. It pulls by the digest in `matrix.toml`, falls back to a local build of the cell's tag when the digest is unreachable, and records `missing` otherwise. Parsing uses the shell's `-n` where it has one. Spec execution order is sorted by code then cell. Output is deterministic byte for byte. A host without Docker fails with one message. Fuzz scripts are never executed; only curated specs run.
 
 **[⬆ Top](#idtop)**
 
@@ -110,7 +110,7 @@ gh attestation verify oci://ghcr.io/kjanat/shellcheck-rs/shell-bash:5.3 --owner 
 
 ## 5.6 Relation to upstream and to dialects
 
-Upstream's five shells (sh, bash, dash, ksh, busybox) are the floor. For floor cells the oracle's verdict on the snippet is recorded as `oracle = "reports" | "silent"`; where the port reports and the oracle does not, the spec is the evidence a sanctioned deviation needs. A rule about any other dialect is proven by executing it in that shell at each version. Added dialects and their codes belong to the port and are documented in `docs/diagnostics.md`.
+ShellCheck's five shells (sh, bash, dash, ksh, busybox) are the floor. For floor cells the reference binary's verdict on the snippet is recorded as `oracle = "reports" | "silent"`. Where `rshellcheck` reports and the Haskell binary stays silent, the spec is the evidence a sanctioned deviation needs. A rule about any other dialect is proven by executing it in that shell at each version. Added dialects and their codes belong to this project and are documented in `docs/diagnostics.md`.
 
 **[⬆ Top](#idtop)**
 

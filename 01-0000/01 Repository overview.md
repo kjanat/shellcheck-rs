@@ -2,7 +2,7 @@
 
 # 1 Repository overview
 
-`kjanat/shellcheck-rs` holds `rshellcheck`, a Rust port of [ShellCheck](https://github.com/koalaman/shellcheck). The port lives on `master`. The Haskell source is never checked in; `tools/oracle.py` fetches the pinned upstream revision into the ignored `.cache/` directory and builds it as the conformance oracle.
+`kjanat/shellcheck-rs` holds `rshellcheck`, a Rust port of [ShellCheck](https://github.com/koalaman/shellcheck), on `master`. The Haskell source is never checked in. `tools/oracle.py` fetches the reference revision into the ignored `.cache/` directory and builds it as the judge for conformance runs.
 
 ## 1.1 Layout of `master`
 
@@ -42,7 +42,7 @@ Root manifests: `Cargo.toml` (workspace, edition 2024, `rust-version = "1.99"`, 
 | `h2r-compiler` | The Haskell-to-Rust compiler experiment, finished. See [H2R compiler](09-H2R-compiler).                          |
 | `wiki`         | These pages. `.github/workflows/wiki.yml` mirrors every push into the wiki repository.                           |
 
-The Rust port was developed on a `rust-port` branch and merged into `master` through [pull request #1](https://github.com/kjanat/shellcheck-rs/pull/1). That branch is gone from the remote.
+Development happened on a `rust-port` branch, merged into `master` through [pull request #1](https://github.com/kjanat/shellcheck-rs/pull/1). That branch is gone from the remote.
 
 **[⬆ Top](#idtop)**
 
@@ -76,7 +76,7 @@ The `bench` branch carries `.github/workflows/bench.yml` (jobs `resolve`, `prepa
 
 ## 1.5 Toolchain
 
-`mise.toml` pins the tools. `mise install` provides rust (with `rustfmt`, `clippy`, `rust-src`), dprint from `github:kjanat/dprint`, go 1.27, node 26, python, tombi 1.8, uv 0.13, cargo-binstall, cargo-mutants, droast and `shellcheck` itself from the `github:kjanat/shellcheck-rs` backend. No Haskell tool is installed by mise; the oracle needs GHC, Cabal and an authenticated `gh` separately.
+`mise.toml` fixes the tool versions. `mise install` provides rust (with `rustfmt`, `clippy`, `rust-src`), dprint from `github:kjanat/dprint`, go 1.27, node 26, python, tombi 1.8, uv 0.13, cargo-binstall, cargo-mutants, droast and `shellcheck` itself from the `github:kjanat/shellcheck-rs` backend. mise installs no Haskell tool. Building the reference binary needs GHC, Cabal and an authenticated `gh` separately.
 
 mise tasks: `format` (`dprint fmt`), `snapshot` (`cargo conformance-snapshot`), `coverage` (`cargo llvm-cov` over the snapshot run), `mutants` (`cargo mutants`), `check-py` (`ruff check`, `ty check`, `basedpyright`), `oracle` (`python tools/oracle.py`).
 
@@ -94,11 +94,11 @@ Cargo aliases in `.cargo/config.toml`:
 | `cargo install-bin`          | `install --path=crates/shellcheck-cli --bin=rshellcheck --force`                                           |
 | `cargo rshellcheck`          | `run --release --bin rshellcheck --`                                                                       |
 
-An alias is the argument list after `cargo`, so none of them starts with the word `cargo`.
+An alias is the argument list after `cargo`. None of them starts with the word `cargo`.
 
 Formatting: `dprint fmt` formats Markdown, TOML (through `tombi`) and Rust (through `rustfmt`). `dprint.toml` excludes `shellcheck.1.md`, the issue templates and the generated validity files. Python tooling runs through `uv run` from the root `.venv`; the uv workspace members are `bindings/wasm/python`, `bindings/native/python` and `.github/release`. The npm workspaces are `bindings/wasm/js` and `bindings/native/npm`.
 
-Workspace lints: clippy `all`, `pedantic` and `nursery` at warn with a long deny list (`unwrap_used`, `expect_used`, `redundant_clone`, `uninlined_format_args` and others), `unsafe_code = "forbid"` (the WASM crate lowers it to `deny` for its export attributes), `missing_docs = "warn"`, and `non_camel_case_types = "allow"` so the port keeps ShellCheck's constructor names such as `T_Literal` and `TC_Binary`.
+Workspace lints: clippy `all`, `pedantic` and `nursery` at warn with a long deny list (`unwrap_used`, `expect_used`, `redundant_clone`, `uninlined_format_args` and others), `unsafe_code = "forbid"` (the WASM crate lowers it to `deny` for its export attributes), `missing_docs = "warn"`, and `non_camel_case_types = "allow"`, which lets the Rust code keep ShellCheck's constructor names such as `T_Literal` and `TC_Binary`.
 
 **[⬆ Top](#idtop)**
 

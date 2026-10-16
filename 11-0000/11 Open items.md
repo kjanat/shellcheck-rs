@@ -6,7 +6,7 @@ As of 2026-10-15, from `DIVERGENCES.md`, the GitHub issues, `rust/PERF.md` and t
 
 ## 11.1 Port defects
 
-`DIVERGENCES.md` has no open entry. The last recorded wide fuzz runs (seeds 0, 1013, 148, 156) found zero distinct divergences. The oracle crashes on one input of seed 0; that is an upstream defect, counted separately.
+`DIVERGENCES.md` has no open entry. The last recorded wide fuzz runs (seeds 0, 1013, 148, 156) found zero distinct divergences. The Haskell binary crashes on one input of seed 0. That is a ShellCheck defect, counted separately.
 
 **[⬆ Top](#idtop)**
 
@@ -14,16 +14,16 @@ As of 2026-10-15, from `DIVERGENCES.md`, the GitHub issues, `rust/PERF.md` and t
 
 [Issue #3](https://github.com/kjanat/shellcheck-rs/issues/3) has these boxes still open:
 
-- Report the `coproc` and `$'\U110000'` crashes to upstream Haskell. The October 13 comment adds a reproducer: with `-x` and `lib.sh` present, `` echo `. ./lib.sh` `` and a here-document body holding `$(. ./lib.sh)` crash the oracle on the same `checkCmd` equation, since the last pipeline element is a `T_SourceCommand`.
-- Report upstream's rejection of valid Bash `! # comment`.
+- Report the `coproc` and `$'\U110000'` crashes to koalaman/shellcheck. The October 13 comment adds a reproducer: with `-x` and `lib.sh` present, `` echo `. ./lib.sh` `` and a here-document body holding `$(. ./lib.sh)` crash the reference binary on the same `checkCmd` equation. The last pipeline element there is a `T_SourceCommand`.
+- Report ShellCheck's rejection of valid Bash `! # comment`.
 
-`.claude/CLAUDE.md` names the same three upstream reports as unfiled. Once filed, each report's link goes into the issue and the matching `PARITY-NOTES.md` entry. The issue's investigation table records that upstream `master` was still `98deabe126a2` on October 11.
+`.claude/CLAUDE.md` names the same three reports as unfiled. Once filed, each report's link goes into the issue and the matching `PARITY-NOTES.md` entry. The issue's investigation table records that koalaman's `master` was still `98deabe126a2` on October 11.
 
 **[⬆ Top](#idtop)**
 
 ## 11.3 Issue #4: zed-editor comparison
 
-[Issue #4](https://github.com/kjanat/shellcheck-rs/issues/4) keeps one box open: "Implement a carefully bounded SC2064 refinement, preserving warnings when values can change or leave scope before the trap runs." `docs/diagnostics.md` and the October 11 section of `PARITY-NOTES.md` describe an SC2064 exemption for plain variables assigned before the trap as shipped, and `crates/conformance/src/deviations.rs` holds no class for it. `.claude/CLAUDE.md` says the refinement is a divergence that follows the deviation procedure, or lands upstream first.
+[Issue #4](https://github.com/kjanat/shellcheck-rs/issues/4) keeps one box open: "Implement a carefully bounded SC2064 refinement, preserving warnings when values can change or leave scope before the trap runs." `docs/diagnostics.md` and the October 11 section of `PARITY-NOTES.md` describe an SC2064 exemption for plain variables assigned before the trap as shipped, and `crates/conformance/src/deviations.rs` holds no class for it. `.claude/CLAUDE.md` says the refinement is a divergence that follows the deviation procedure, or lands in ShellCheck first.
 
 **[⬆ Top](#idtop)**
 
@@ -42,7 +42,7 @@ As of 2026-10-15, from `DIVERGENCES.md`, the GitHub issues, `rust/PERF.md` and t
 
 ## 11.6 Other branches
 
-- `bench`: the Cabal build of the `upstream` candidate has run only in the unit test fixture; the first CI run after the baseline change proves the GHC install and build on the runner.
+- `bench`: the Cabal build of the `upstream` candidate has run only in the unit test fixture. The first CI run after the baseline change proves the GHC install and build on the runner.
 - `h2r-compiler`: `todo.md` lists the open compiler items in [[H2R Compiler|09 H2R compiler]]. No further work is planned there.
 
 **[⬆ Top](#idtop)**
