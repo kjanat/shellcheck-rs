@@ -5,6 +5,7 @@ use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
 use crate::dialect::Dialect;
+use crate::dialect_policy;
 use crate::interface::{
     CheckResult, CheckSpec, Code, Comment, NoExternalSources, Position, PositionedComment,
     RcParseProblem, Severity, Shell, System, TokenComment,
@@ -80,7 +81,10 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         );
         let analysis = analytics::analyze_with(&params, &optional);
         for tc in analysis {
-            if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced) {
+            if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced)
+                || (params.dialect.is_added()
+                    && !dialect_policy::applies(tc.comment.code, params.dialect))
+            {
                 continue;
             }
             positioned.push(token_to_position(&tc, &params.token_positions));
@@ -1122,8 +1126,9 @@ mod source_tests {
 
     #[test]
     fn an_added_dialect_shebang_is_checked_as_its_floor() {
-        assert_eq!(check("#!/bin/zsh\necho $x\n"), vec![2086, 2154]);
-        assert_eq!(check("#!/bin/yash\n[[ -n $1 ]]\n"), vec![3010]);
+        assert_eq!(check("#!/bin/zsh\necho $x\n"), vec![2154]);
+        assert_eq!(check("#!/bin/posh\n[[ -n $1 ]]\n"), vec![3010]);
+        assert_eq!(check("#!/bin/yash\n[[ -n $1 ]]\n"), Vec::<i64>::new());
         assert_eq!(check("#!/bin/mksh\n[[ -n $1 ]]\n"), Vec::<i64>::new());
         assert_eq!(check("#!/bin/tcsh\necho $x\n"), vec![1071]);
         assert_eq!(
@@ -1136,6 +1141,35 @@ mod source_tests {
                 }
             ),
             vec![3010]
+        );
+    }
+
+    #[test]
+    fn a_code_the_matrix_records_absent_for_a_dialect_is_dropped() {
+        let script = "#!/bin/zsh\nx=\"a b\"; echo $x\n";
+        assert_eq!(check(script), Vec::<i64>::new());
+        assert_eq!(check("#!/bin/bash\nx=\"a b\"; echo $x\n"), vec![2086]);
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: script.to_string(),
+                    shell_type_override: Some(Dialect::Zsh),
+                    ..CheckSpec::default()
+                }
+            ),
+            Vec::<i64>::new()
+        );
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: script.to_string(),
+                    shell_type_override: Some(Dialect::Bash),
+                    ..CheckSpec::default()
+                }
+            ),
+            vec![2086]
         );
     }
 

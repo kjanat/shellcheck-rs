@@ -225,3 +225,60 @@ pub fn run(args: &Args) -> Result<bool, String> {
     }
     Ok(changed.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use shellcheck_rs::Dialect;
+
+    use crate::port_keys;
+
+    fn frozen_corpus() -> Vec<String> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/ShellCheck");
+        let seeds: Vec<String> = crate::corpus::coverage(&src)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.script)
+            .collect();
+        let mut scripts = seeds.clone();
+        scripts.extend(crate::fuzz::sample_scripts(&seeds, 0, 2000));
+        scripts
+    }
+
+    #[test]
+    fn corpus_scripts_naming_an_added_dialect_lose_only_the_codes_the_table_drops() {
+        let mut lost_codes = BTreeSet::new();
+        let mut scripts_losing = 0;
+        for script in frozen_corpus() {
+            let Some(root) =
+                shellcheck_rs::parser::parse_script_with("-", &script, false, None).root
+            else {
+                continue;
+            };
+            let Some(dialect) =
+                shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())
+            else {
+                continue;
+            };
+            let checked = port_keys(&script, "-", None).unwrap();
+            let floor =
+                port_keys(&script, "-", Some(Dialect::from(dialect.floor()).name())).unwrap();
+            let kept: Vec<_> = floor
+                .iter()
+                .filter(|k| shellcheck_rs::dialect_policy::applies(k.code, dialect))
+                .cloned()
+                .collect();
+            assert_eq!(checked, kept, "{script:?}");
+            let lost: Vec<_> = floor.iter().filter(|k| !kept.contains(k)).collect();
+            if !lost.is_empty() {
+                scripts_losing += 1;
+                lost_codes.extend(lost.iter().map(|k| k.code));
+            }
+        }
+        assert_eq!(lost_codes, BTreeSet::from([2086]));
+        assert_eq!(scripts_losing, 27);
+    }
+}

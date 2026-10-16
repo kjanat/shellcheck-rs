@@ -9,6 +9,9 @@ Upstream: ShellCheck 0.11.0 at `c36c85a05ed3`.
 - `--shell`, rc `shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell`
   and the shebang accept zsh, mksh, oksh, loksh, yash, posh, bosh, osh, brush,
   freebsd-sh and netbsd-sh, each checked with the rules of its upstream floor
+- An added dialect drops the codes `validity/outcomes.toml` records absent in
+  every tested version, generated into the port by `cargo validity rules`:
+  SC2086 for zsh
 
 ### Fixed
 

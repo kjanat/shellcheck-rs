@@ -171,8 +171,8 @@ mod tests {
     fn an_added_dialect_is_checked_as_its_floor() {
         let zsh = check(json!({"script": "[[ -n $1 ]]\n", "shell": "zsh"}));
         assert_eq!(zsh["comments"], json!([]));
-        let yash = check(json!({"script": "[[ -n $1 ]]\n", "shell": "yash"}));
-        let codes: Vec<_> = yash["comments"]
+        let posh = check(json!({"script": "[[ -n $1 ]]\n", "shell": "posh"}));
+        let codes: Vec<_> = posh["comments"]
             .as_array()
             .unwrap()
             .iter()

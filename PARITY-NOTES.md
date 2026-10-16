@@ -650,10 +650,12 @@ above give
 
 ```
 -:2:6: warning: x is referenced but not assigned. [SC2154]
--:2:6: note: Double quote to prevent globbing and word splitting. [SC2086]
 ```
 
-for zsh, nothing for mksh, and nothing for the mksh directive. `tcsh` stays
+for zsh, nothing for mksh, and nothing for the mksh directive. Bash would add
+SC2086 on the same line; `crates/shellcheck-rs/src/dialect_rules.rs`, generated
+from `validity/outcomes.toml` by `cargo validity rules`, records SC2086 absent
+in every tested zsh version, so the checker drops it for zsh. `tcsh` stays
 refused with SC1071: its grammar is unrelated.
 
 The harness sanctions the difference only when the harness passed no `--shell`,
@@ -663,13 +665,14 @@ of them and that one matches upstream's own verdict on the interpreter (SC1071
 at 1:1 for a shell on `isValidShell`'s refusal list, and then nothing else at
 all, since the body was never parsed; SC1008 at 1:1 for an interpreter it does
 not know; SC1103 for a directive), and the port's findings equal the oracle's
-own output for the same script under `--shell=<floor>` (minus the SC1103 the
-directive still draws there). A suppressed SC1071 leaves the oracle silent and
+own output for the same script under `--shell=<floor>`, minus the SC1103 the
+directive still draws there and minus the codes `dialect_rules.rs` drops for the
+dialect. A suppressed SC1071 leaves the oracle silent and
 the sanction standing: upstream's `prop_readScript7` disables it on
 `#!/bin/zsh` and expects no diagnostics, where the port parses
 `for f (a b); echo $f` as bash and reports SC1073. No oracle to re-run means no
 sanction.
 
-A floor is a floor: SC2086 above describes bash, and zsh 5.9.2 runs
-`x="a b"; printf "<%s>" $x` as `<a b>`. Per-dialect rules come from the validity
-matrix (`docs/validity.md`), never from this file.
+zsh 5.9.2 runs `x="a b"; printf "<%s>" $x` as `<a b>`. The validity matrix
+records this run and drops SC2086 for zsh. Per-dialect rules come from the
+validity matrix (`docs/validity.md`).

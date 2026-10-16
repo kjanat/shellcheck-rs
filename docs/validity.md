@@ -151,14 +151,25 @@ the directory is discarded after the run.
 cargo validity rules
 ```
 
-`rules` reads `outcomes.toml` and writes `crates/shellcheck-rs/src/dialect_rules.rs`:
-one entry per `(code, dialect, version, outcome)` for every cell whose shell is
-a dialect beyond upstream's five. The checker consults the table only for
-those dialects, after analysis: a code applies when the dialect has no entry
-for it or any version records `reproduces`, and is dropped when every version
-records `absent`. `differs`, `unparsable`, `timeout` and `port-miss` rows carry
-no weight. Upstream dialects never consult the table, so the snapshot and the
-oracle gate do not move.
+`rules` reads `outcomes.toml` and `matrix.toml` and writes
+`crates/shellcheck-rs/src/dialect_rules.rs`: one `Rule` per
+`(code, dialect, version, outcome)` for every row whose cell shell names a
+dialect beyond upstream's five. Cells that name no dialect, such as `zsh-sh`
+and `tcsh`, and cells of upstream shells are left out. A row whose cell is
+missing from `matrix.toml` fails the command. Rows sort by code, dialect name
+and version, so a second run writes the same bytes, and a test compares the
+committed table with what the committed outcomes render.
+
+`crates/shellcheck-rs/src/dialect_policy.rs` reads the table. `applies(code,
+dialect)` is true when the dialect has no row for the code or any version
+records `reproduces`, and false when every weighted row records `absent`.
+`differs`, `unparsable`, `timeout` and `port-miss` rows carry no weight. The
+checker drops the analysis findings whose code does not apply, after analysis
+and alongside the `disable` directives, only when the script is checked as an
+added dialect. Upstream dialects never consult the table, so the snapshot and
+the oracle gate do not move for them. The `added-dialect` deviation class
+expects the port's findings to equal the oracle's run as the floor shell minus
+the codes `applies` drops.
 
 A dialect ships when its cells show no `port-miss`: flip `shipped = true` in
 `sources.toml` and the gate treats changes to its cells as fatal.

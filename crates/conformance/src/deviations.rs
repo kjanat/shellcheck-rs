@@ -152,7 +152,7 @@ fn added_dialect(
     };
     let floor: Vec<_> = crate::oracle_keys(&comments)
         .into_iter()
-        .filter(|k| k.code != 1103)
+        .filter(|k| k.code != 1103 && shellcheck_rs::dialect_policy::applies(k.code, dialect))
         .collect();
     port == floor.as_slice()
 }
@@ -643,7 +643,7 @@ mod tests {
     fn a_zsh_shebang_the_oracle_refuses_is_checked_as_bash() {
         let script = "#!/bin/zsh\necho $x\n";
         let port = crate::port_keys(script, "-", None).expect("port");
-        assert!(port.iter().any(|k| k.code == 2086), "{port:?}");
+        assert!(port.iter().any(|k| k.code == 2154), "{port:?}");
         let oracle = [unsupported(1071, SC1071)];
         let Some(runner) = crate::oracle::test_oracle() else {
             return;
@@ -654,6 +654,44 @@ mod tests {
         );
         assert!(sanctioned(script, None, &port, &oracle, None).is_none());
         assert!(sanctioned(script, Some("bash"), &port, &oracle, Some(&runner)).is_none());
+    }
+
+    #[test]
+    fn a_code_the_matrix_drops_for_zsh_is_sanctioned_against_the_bash_floor() {
+        let script = "#!/bin/zsh\nx=\"a b\"; echo $x\n";
+        let port = crate::port_keys(script, "-", None).expect("port");
+        assert_eq!(port, Vec::<CommentKey>::new());
+        let bash = "#!/bin/bash\nx=\"a b\"; echo $x\n";
+        let bash_port = crate::port_keys(bash, "-", None).expect("port");
+        assert!(bash_port.iter().any(|k| k.code == 2086), "{bash_port:?}");
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(script, None).expect("oracle runs");
+        let oracle = crate::oracle_keys(&comments);
+        assert!(
+            oracle.iter().any(|k| k.code == 1071 && k.message == SC1071),
+            "{oracle:?}"
+        );
+        assert_eq!(
+            sanctioned(script, None, &port, &oracle, Some(&runner)).map(|d| d.id),
+            Some("added-dialect")
+        );
+        let (comments, _) = runner.check_one(script, Some("bash")).expect("oracle runs");
+        let floor = crate::oracle_keys(&comments);
+        assert!(floor.iter().any(|k| k.code == 2086), "{floor:?}");
+        let mut extra = port;
+        extra.push(key(9999));
+        assert!(sanctioned(script, None, &extra, &oracle, Some(&runner)).is_none());
+        let (comments, _) = runner.check_one(bash, None).expect("oracle runs");
+        let bash_oracle = crate::oracle_keys(&comments);
+        assert_eq!(bash_oracle, bash_port);
+        let without: Vec<_> = bash_port
+            .iter()
+            .filter(|k| k.code != 2086)
+            .cloned()
+            .collect();
+        assert!(sanctioned(bash, None, &without, &bash_oracle, Some(&runner)).is_none());
     }
 
     #[test]
