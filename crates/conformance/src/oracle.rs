@@ -363,9 +363,6 @@ impl Drop for Oracle {
     }
 }
 
-/// The oracle binary, if this checkout has one. A test that needs a real
-/// ShellCheck has nothing to assert without it, and says so rather than
-/// passing silently.
 #[cfg(test)]
 pub fn test_oracle() -> Option<Oracle> {
     let spec = std::env::var("CONFORMANCE_ORACLE").unwrap_or_else(|_| {

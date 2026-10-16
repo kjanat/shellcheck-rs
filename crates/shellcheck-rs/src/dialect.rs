@@ -99,7 +99,7 @@ impl Dialect {
         }
     }
 
-    /// Whether upstream has no such shell, so the port checks it as its floor.
+    /// Whether the port adds this dialect to upstream's five shells.
     #[must_use]
     pub const fn is_added(self) -> bool {
         !matches!(

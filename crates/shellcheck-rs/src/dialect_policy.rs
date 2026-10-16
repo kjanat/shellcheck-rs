@@ -34,9 +34,8 @@ pub struct Rule {
     pub outcome: Outcome,
 }
 
-/// Whether `code` applies to `dialect`: yes with no rows or any `Reproduces`
-/// row, no when every weighted row is `Absent`. `Differs`, `Unparsable`,
-/// `Timeout` and `PortMiss` rows carry no weight.
+/// Whether `code` applies to `dialect`. A `Reproduces` row keeps the code, an
+/// `Absent` row drops it, and `Reproduces` wins.
 #[must_use]
 pub fn applies(code: i64, dialect: Dialect) -> bool {
     applies_by(RULES, code, dialect)

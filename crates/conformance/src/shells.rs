@@ -27,9 +27,8 @@
 //! run in the same isolated container the validity runner uses. The port
 //! checks a cell as its shell, or as the cell's `dialect` for an emulation
 //! cell such as `zsh --emulate sh`. The oracle checks a cell only when it has
-//! a `dialect`; upstream has no `--shell` for the others. A VM cell is
-//! skipped. Host binaries, where installed, give the four-dialect summary at
-//! the end.
+//! a `dialect`. A VM cell is skipped. Host binaries, where installed, give the
+//! four-dialect summary at the end.
 //!
 //! ## What this does not prove
 //!

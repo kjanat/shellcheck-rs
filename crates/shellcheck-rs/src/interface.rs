@@ -467,7 +467,7 @@ pub struct CheckSpec {
     pub excluded_warnings: Vec<Code>,
     /// `csIncludedWarnings`.
     pub included_warnings: Option<Vec<Code>>,
-    /// `csShellTypeOverride`, widened to every [`Dialect`].
+    /// `csShellTypeOverride`.
     pub shell_type_override: Option<Dialect>,
     /// `csMinSeverity`.
     pub min_severity: Severity,

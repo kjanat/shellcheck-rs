@@ -76,13 +76,11 @@ const STABLE_TRAP_VARIABLES: Deviation = Deviation {
            written after it",
 };
 
-/// The codes upstream emits for an interpreter it does not know: SC1071 for a
-/// shell on its refusal list (the body is then not parsed), SC1008 for any
-/// other shebang, SC1103 for a `shell=` directive.
+/// The codes upstream emits for an unknown interpreter: SC1071 for a shell on
+/// its refusal list, SC1008 for any other shebang, SC1103 for a `shell=`
+/// directive.
 const UNKNOWN_INTERPRETER_CODES: [i64; 3] = [1071, 1008, 1103];
 
-/// The port's parse of the script, else of its first line alone, so a body
-/// that does not parse still yields its shebang.
 fn parsed_root(script: &str) -> Option<shellcheck_rs::ast::Token> {
     shellcheck_rs::parser::parse_script_with("-", script, false, None)
         .root
@@ -92,8 +90,6 @@ fn parsed_root(script: &str) -> Option<shellcheck_rs::ast::Token> {
         })
 }
 
-/// Whether upstream refuses the body outright (SC1071): a shebang on its
-/// refusal list and no `shell=` directive to override it.
 fn upstream_refuses_body(root: &shellcheck_rs::ast::Token) -> bool {
     use shellcheck_rs::ast::{Annotation, InnerToken};
     let InnerToken::T_Annotation { annotations, token } = &*root.inner else {
@@ -139,13 +135,11 @@ fn added_dialect(
         return None;
     }
     let refused = upstream_refuses_body(&root);
-    // Upstream's verdict fixes which code it can have reported, and where.
     let consistent = flagged.first().is_none_or(|flag| match flag.code {
         1071 => refused && (flag.line, flag.column) == (1, 1),
         1008 => !refused && (flag.line, flag.column) == (1, 1),
         _ => !refused,
     });
-    // A refused body leaves upstream nothing else to say.
     if !consistent || (refused && oracle.len() != flagged.len()) {
         return None;
     }
@@ -505,8 +499,8 @@ const CLASSES: [&Deviation; 8] = [
 
 /// Is this difference one the port is entitled to?
 ///
-/// Returns every class that took part, outermost first, and nothing when no
-/// combination of classes accounts for the whole difference.
+/// Returns every class that took part, outermost first. An empty list means
+/// the difference stands.
 ///
 /// The parse-error class: the oracle rejects the file outright, the port does
 /// not, and the shell being checked agrees with the port that the script parses.

@@ -646,7 +646,7 @@ fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<i64>> {
     ControlFlow::Continue(codes)
 }
 
-/// `shellForExecutable` (ShellCheck.Data) widened to every [`Dialect`]: maps
+/// `shellForExecutable` (ShellCheck.Data) over every [`Dialect`]: maps
 /// interpreter names, including the established aliases, to a dialect. Used
 /// for `--shell`, rc `shell=`, and `# shellcheck shell=` directives.
 #[must_use]
