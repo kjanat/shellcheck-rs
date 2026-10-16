@@ -14,7 +14,7 @@ const SCRIPT: &str = "#!/bin/sh\necho $x\n";
 const FILES: &[(&str, &str)] = &[
     (
         "z/.editorconfig",
-        "root = true\n[foo]\nshellcheck.shell=zsh\n",
+        "root = true\n[foo]\nshellcheck.shell=fish\n",
     ),
     ("z/foo", "#!/bin/sh\necho \"hi\"\n"),
     (
@@ -224,7 +224,7 @@ fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() -> io::Result
             concat!(
                 "\n",
                 "In {T}/z/.editorconfig line 3:\n",
-                "shellcheck.shell=zsh\n",
+                "shellcheck.shell=fish\n",
                 "       ^-- SC1134 (error): Failed to process {T}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
                 "\n",
                 "For more information:\n",
@@ -421,7 +421,7 @@ fn a_missing_rcfile_is_not_read_for_an_input_that_is_not_read() -> io::Result<()
 #[test]
 fn the_global_editorconfig_applies_without_exit_4() -> io::Result<()> {
     let f = Fixture::new("global")?;
-    f.write("xdg/editorconfig.ini", "[*.sh]\nshellcheck.shell=zsh\n")?;
+    f.write("xdg/editorconfig.ini", "[*.sh]\nshellcheck.shell=fish\n")?;
     let ini = sc1134("{T}/xdg/editorconfig.ini", 2, 8);
     let run = f.run(&["-f", "json1", "g/x.sh"])?;
     f.assert(&run, &json1(&[on(X_2154_2086, "g/x.sh"), ini]), "", 1);

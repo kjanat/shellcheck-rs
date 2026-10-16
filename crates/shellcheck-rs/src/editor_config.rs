@@ -5,7 +5,7 @@
 //! Only the `shellcheck.*` keys of sections whose glob matches the file being checked are extracted,
 //! and turned into the same "key=value" directive syntax that is used in .shellcheckrc files.
 
-use crate::data::shell_for_executable;
+use crate::dialect::Dialect;
 use crate::tdfa::make_regex;
 use regex::Regex;
 use std::fmt::Write;
@@ -47,7 +47,7 @@ pub fn parse(contents: &str, name: &str) -> String {
 /// `invalidDirectiveLines`: returns the 1-based line numbers of invalid
 /// `shellcheck.*` directives, i.e.:
 ///   * `shellcheck.shell=<x>` where `<x>` is a non-empty, unknown shell
-///     (e.g. `zsh`), which would otherwise silently suppress the SC2148
+///     (e.g. `fish`), which would otherwise silently suppress the SC2148
 ///     "unknown shell" warning;
 ///   * any `shellcheck.<key>=<value>` whose (trimmed) value contains `#` or
 ///     `;` anywhere, since EditorConfig does not allow inline comments and
@@ -63,7 +63,7 @@ pub fn invalid_directive_lines(contents: &str, name: &str) -> Vec<usize> {
         .into_iter()
         .filter(|(_, key, value)| {
             if key == "shell" {
-                !value.is_empty() && shell_for_executable(value).is_none()
+                !value.is_empty() && Dialect::from_name(value).is_none()
             } else {
                 has_comment_marker(value)
             }
@@ -401,7 +401,7 @@ fn directive(line: usize, l: &str) -> Option<Directive> {
 }
 
 /// `isUsableDirective`: only emit directives that the .shellcheckrc parser can
-/// handle unambiguously. Unknown shells (e.g. `shellcheck.shell=zsh`) would
+/// handle unambiguously. Unknown shells (e.g. `shellcheck.shell=fish`) would
 /// otherwise silently suppress the SC2148 "unknown shell" warning, so they are
 /// dropped here and reported via `invalidDirectiveLines`. Values containing
 /// `#` or `;` anywhere (not just at the start) are also dropped and reported:
@@ -412,7 +412,7 @@ fn directive(line: usize, l: &str) -> Option<Directive> {
 /// the rc parser would silently accept them anyway.
 fn is_usable_directive(key: &str, value: &str) -> bool {
     if key == "shell" {
-        value.is_empty() || shell_for_executable(value).is_some()
+        value.is_empty() || Dialect::from_name(value).is_some()
     } else {
         !value.is_empty() && !has_comment_marker(value)
     }
@@ -723,7 +723,7 @@ mod tests {
     // line is reported via invalidDirectiveLines so the caller can reject it.
     #[test]
     fn prop_parseEditorConfigUnknownShell() {
-        assert_eq!(parse("[*]\nshellcheck.shell=zsh\n", "foo"), "");
+        assert_eq!(parse("[*]\nshellcheck.shell=fish\n", "foo"), "");
     }
 
     #[test]
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn prop_invalidDirectiveLinesUnknownShell() {
         assert_eq!(
-            invalid_directive_lines("[*]\nshellcheck.shell=zsh\n", "foo"),
+            invalid_directive_lines("[*]\nshellcheck.shell=fish\n", "foo"),
             vec![2]
         );
     }
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn prop_invalidDirectiveLinesNoMatch() {
         assert_eq!(
-            invalid_directive_lines("[*.txt]\nshellcheck.shell=zsh\n", "foo"),
+            invalid_directive_lines("[*.txt]\nshellcheck.shell=fish\n", "foo"),
             Vec::<usize>::new()
         );
     }
@@ -922,7 +922,7 @@ mod tests {
     fn prop_invalidDirectiveLinesMatchingSection() {
         assert_eq!(
             invalid_directive_lines(
-                "[*.txt]\nshellcheck.shell=zsh\n[foo]\nshellcheck.shell=bash\n",
+                "[*.txt]\nshellcheck.shell=fish\n[foo]\nshellcheck.shell=bash\n",
                 "foo"
             ),
             Vec::<usize>::new()
@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn editor_config_directives_rejects_each_invalid_line_at_its_position() {
         assert_eq!(
-            directives("[foo]\nshellcheck.shell=zsh\n", "foo").as_deref(),
+            directives("[foo]\nshellcheck.shell=fish\n", "foo").as_deref(),
             Some("\ninvalid editorconfig value\n")
         );
         assert!(is_rejection("\ninvalid editorconfig value\n"));

@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shellcheck_rs::interface::{InsertionPoint, System};
-use shellcheck_rs::{CheckSpec, Severity, Shell};
+use shellcheck_rs::{CheckSpec, Dialect, Severity};
 use std::{collections::BTreeMap, rc::Rc};
 
 /// Maximum serialized request size, including virtual source files.
@@ -62,12 +62,7 @@ fn analyze(input: &[u8]) -> Result<Value, String> {
     let req: Request = serde_json::from_slice(input).map_err(|e| e.to_string())?;
     let shell = match req.shell.as_deref() {
         None => None,
-        Some("bash") => Some(Shell::Bash),
-        Some("sh") => Some(Shell::Sh),
-        Some("dash") => Some(Shell::Dash),
-        Some("ksh") => Some(Shell::Ksh),
-        Some("busybox") => Some(Shell::BusyboxSh),
-        Some(s) => return Err(format!("unsupported shell: {s}")),
+        Some(s) => Some(Dialect::from_name(s).ok_or_else(|| format!("unsupported shell: {s}"))?),
     };
     let severity = match req.severity.as_deref() {
         None | Some("style") => Severity::StyleC,
@@ -170,6 +165,20 @@ mod tests {
             assert!(value.get("comments").is_none());
         }
         assert!(check(json!({"script": "true", "shell": "fish"}))["error"].is_string());
+    }
+
+    #[test]
+    fn an_added_dialect_is_checked_as_its_floor() {
+        let zsh = check(json!({"script": "[[ -n $1 ]]\n", "shell": "zsh"}));
+        assert_eq!(zsh["comments"], json!([]));
+        let yash = check(json!({"script": "[[ -n $1 ]]\n", "shell": "yash"}));
+        let codes: Vec<_> = yash["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["code"].clone())
+            .collect();
+        assert_eq!(codes, vec![json!(3010)]);
     }
 }
 

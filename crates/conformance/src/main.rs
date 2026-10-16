@@ -327,7 +327,7 @@ fn gate(args: &Args) -> Result<bool, String> {
             continue;
         }
         // A difference the port is entitled to is not a divergence.
-        match deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok) {
+        match deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle)) {
             Some(d) => deviations.push((entry.id.clone(), d)),
             None => divergent.push((entry.id.clone(), pk, ok)),
         }

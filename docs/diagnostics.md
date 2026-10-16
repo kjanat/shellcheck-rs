@@ -90,6 +90,40 @@ present. The inputs themselves are not listed. `json` stays a bare array of
 comments. The library returns the same list in `CheckResult::sources`, and the
 WASM response carries it as `sources`.
 
+## Dialects
+
+`--shell`, rc `shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell`
+and the shebang accept these dialects beyond upstream's sh, bash, dash, ksh and
+busybox. Each is checked with the rules of its floor, the upstream shell its
+grammar extends. No SC1071 or SC1008 is reported for them.
+
+| Dialect      | Floor |
+| ------------ | ----- |
+| `zsh`        | bash  |
+| `osh`        | bash  |
+| `brush`      | bash  |
+| `mksh`       | ksh   |
+| `oksh`       | ksh   |
+| `loksh`      | ksh   |
+| `yash`       | sh    |
+| `posh`       | sh    |
+| `bosh`       | sh    |
+| `freebsd-sh` | sh    |
+| `netbsd-sh`  | sh    |
+
+```sh
+rshellcheck --shell zsh script.zsh
+```
+
+A dialect's own rules come from `validity/outcomes.toml`, where each diagnostic
+is run in the real shell at each pinned version. `cargo validity rules` writes
+them to `crates/shellcheck-rs/src/dialect_rules.rs`, one entry per code,
+dialect, version and outcome. A code applies to a dialect when the table has no
+entry for it, or when any version records `reproduces`; it is dropped when every
+version records `absent`. Other outcomes carry no weight. Upstream dialects
+never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
+its shebang still draws SC1071.
+
 ## Clearer parser errors
 
 `clarify-parse-errors` omits redundant enclosing-context notes at the same position

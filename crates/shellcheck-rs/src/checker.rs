@@ -4,6 +4,7 @@
 use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
+use crate::dialect::Dialect;
 use crate::interface::{
     CheckResult, CheckSpec, Code, Comment, NoExternalSources, Position, PositionedComment,
     RcParseProblem, Severity, Shell, System, TokenComment,
@@ -31,6 +32,7 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         shell_flag_specified: spec.shell_type_override.is_some(),
         shell_hint: spec
             .shell_type_override
+            .map(Dialect::floor)
             .or_else(|| shell_from_filename(&spec.filename)),
         rc_annotations: spec
             .rc
@@ -1034,7 +1036,7 @@ mod source_tests {
             Rc::new(MockSystem::new(&[])),
             &CheckSpec {
                 script: "source /dev/null".to_string(),
-                shell_type_override: Some(Shell::Sh),
+                shell_type_override: Some(Dialect::Sh),
                 ..CheckSpec::default()
             },
         );
@@ -1119,13 +1121,32 @@ mod source_tests {
     }
 
     #[test]
+    fn an_added_dialect_shebang_is_checked_as_its_floor() {
+        assert_eq!(check("#!/bin/zsh\necho $x\n"), vec![2086, 2154]);
+        assert_eq!(check("#!/bin/yash\n[[ -n $1 ]]\n"), vec![3010]);
+        assert_eq!(check("#!/bin/mksh\n[[ -n $1 ]]\n"), Vec::<i64>::new());
+        assert_eq!(check("#!/bin/tcsh\necho $x\n"), vec![1071]);
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: "#!/bin/zsh\n[[ -n $1 ]]\n".to_string(),
+                    shell_type_override: Some(Dialect::Posh),
+                    ..CheckSpec::default()
+                }
+            ),
+            vec![3010]
+        );
+    }
+
+    #[test]
     fn prop_optionDisablesBadShebang() {
         assert_eq!(
             check_with_spec(
                 &[],
                 &CheckSpec {
                     script: "#!/usr/bin/python\ntrue\n".to_string(),
-                    shell_type_override: Some(Shell::Sh),
+                    shell_type_override: Some(Dialect::Sh),
                     ..CheckSpec::default()
                 }
             ),

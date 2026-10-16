@@ -32,7 +32,8 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
+use shellcheck_rs::Dialect;
+use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity};
 
 /// Formats the port implements. `getOpt`'s format validation lists exactly
 /// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
@@ -645,19 +646,12 @@ fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<i64>> {
     ControlFlow::Continue(codes)
 }
 
-/// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
-/// the established aliases, to a dialect. Used for `--shell`, rc `shell=`, and
-/// `# shellcheck shell=` directives.
+/// `shellForExecutable` (ShellCheck.Data) widened to every [`Dialect`]: maps
+/// interpreter names, including the established aliases, to a dialect. Used
+/// for `--shell`, rc `shell=`, and `# shellcheck shell=` directives.
 #[must_use]
-pub fn parse_shell(s: &str) -> Option<Shell> {
-    Some(match s {
-        "sh" => Shell::Sh,
-        "bash" | "bats" => Shell::Bash,
-        "busybox" | "busybox sh" | "busybox ash" => Shell::BusyboxSh,
-        "dash" | "ash" => Shell::Dash,
-        "ksh" | "ksh88" | "ksh93" | "oksh" => Shell::Ksh,
-        _ => return None,
-    })
+pub fn parse_shell(s: &str) -> Option<Dialect> {
+    Dialect::from_name(s)
 }
 
 fn parse_severity(s: &str) -> Option<Severity> {
@@ -1212,39 +1206,50 @@ mod tests {
     #[test]
     fn unknown_shell_is_support_error() {
         for a in [
-            vec!["--shell=zsh"],
-            vec!["-s", "zsh"],
-            vec!["--shell", "zsh"],
+            vec!["--shell=tcsh"],
+            vec!["-s", "tcsh"],
+            vec!["--shell", "tcsh"],
         ] {
             match parse(&args(&a)) {
-                Outcome::Error { code, .. } => assert_eq!(code, 4, "for {a:?}"),
+                Outcome::Error { code, message } => {
+                    assert_eq!(code, 4, "for {a:?}");
+                    assert_eq!(message, "Unknown shell: tcsh", "for {a:?}");
+                }
                 other => panic!("expected Error(4) for {a:?}, got {other:?}"),
             }
         }
     }
 
     #[test]
+    fn added_dialects_are_shells() {
+        let c = run(&["--shell", "yash", "-"]);
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Yash));
+        let c = run(&["-s", "zsh", "-"]);
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Zsh));
+    }
+
+    #[test]
     fn valid_shell_both_forms() {
         // Separate-arg form must set the shell, not be treated as a filename.
         let c = run(&["-s", "bash", "-"]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Bash));
         assert_eq!(c.inputs, vec![PathBuf::from("-")]);
 
         let c = run(&["--shell=ksh", "-"]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Ksh));
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Ksh));
 
         let c = run(&["-sdash", "-"]); // glued short
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Dash));
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Dash));
 
         assert_eq!(
             run(&["-s", "busybox", "-"])
                 .spec_template
                 .shell_type_override,
-            Some(Shell::BusyboxSh)
+            Some(Dialect::BusyboxSh)
         );
         assert_eq!(
             run(&["-s", "sh", "-"]).spec_template.shell_type_override,
-            Some(Shell::Sh)
+            Some(Dialect::Sh)
         );
     }
 
@@ -1385,7 +1390,7 @@ mod tests {
     fn files_and_options_interleave() {
         let c = run(&["a.sh", "-s", "bash", "b.sh"]);
         assert_eq!(c.inputs, vec![PathBuf::from("a.sh"), PathBuf::from("b.sh")]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+        assert_eq!(c.spec_template.shell_type_override, Some(Dialect::Bash));
     }
 
     #[test]

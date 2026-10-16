@@ -7,10 +7,10 @@ Most items here are reproduced by the port **on purpose**; an entry's **Port**
 line says when it is not. A fix that makes the port better than the oracle needs
 a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
-are five classes: `upstream-false-parse-error` (the oracle rejects the file, the
+are six classes: `upstream-false-parse-error` (the oracle rejects the file, the
 port does not, and `<shell> -n` agrees with the port), `interpreter-path-typo`,
-`upstream-function-tail-cd`, `completed-statement-notes` and
-`unclosed-test-quote`. See `crates/conformance/src/deviations.rs`; missing
+`upstream-function-tail-cd`, `completed-statement-notes`, `unclosed-test-quote`
+and `added-dialect`. See `crates/conformance/src/deviations.rs`; missing
 evidence means the difference counts as a divergence, so each class fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
@@ -603,3 +603,73 @@ Seven snapshot inputs change: six retain earlier source-resolution notes and one
 identifies the actual unterminated quote at EOF. Zero-width insertion-point spans
 remain unchanged. Haskell crashes and valid-Bash negation handling still require
 upstream follow-up; no upstream source is patched here.
+
+## Dialects beyond upstream
+
+Upstream knows five shells. A shebang or `shell=` directive naming any other
+interpreter is refused or ignored:
+
+```sh
+printf '#!/bin/zsh\necho $x\n' | shellcheck -
+printf '#!/bin/mksh\n[[ -n $1 ]]\n' | shellcheck -
+printf '# shellcheck shell=mksh\n[[ -n $1 ]]\n' | shellcheck -
+```
+
+```
+-:1:1: error: ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry! [SC1071]
+```
+
+```
+-:1:1: error: This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify. [SC1008]
+```
+
+```
+-:1:20: error: This shell type is unknown. Use e.g. sh or bash. [SC1103]
+```
+
+After SC1071 the body is not parsed at all. After SC1008 and SC1103 the body is
+checked as bash, whatever the interpreter was.
+
+**What the shell does**
+
+```
+$ zsh --version
+zsh 5.9.2 (x86_64-pc-linux-gnu)
+$ printf '#!/bin/zsh\necho $x\n' > z.sh; zsh z.sh; echo "exit $?"
+
+exit 0
+```
+
+**Port: diverges.** Deviation `added-dialect`. `zsh`, `mksh`, `oksh`, `loksh`,
+`yash`, `posh`, `bosh`, `osh`, `brush`, `freebsd-sh` and `netbsd-sh` are
+dialects (`crates/shellcheck-rs/src/dialect.rs`), accepted by `--shell`, rc
+`shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell` and the
+shebang. Each is checked with the rules of its upstream floor: bash for zsh,
+osh and brush; ksh for mksh, oksh and loksh; sh for the rest. The three inputs
+above give
+
+```
+-:2:6: warning: x is referenced but not assigned. [SC2154]
+-:2:6: note: Double quote to prevent globbing and word splitting. [SC2086]
+```
+
+for zsh, nothing for mksh, and nothing for the mksh directive. `tcsh` stays
+refused with SC1071: its grammar is unrelated.
+
+The harness sanctions the difference only when the harness passed no `--shell`,
+the first `shell=` directive or else the shebang names an added dialect, the
+port reported none of SC1071, SC1008 and SC1103, the oracle reported at most one
+of them and that one matches upstream's own verdict on the interpreter (SC1071
+at 1:1 for a shell on `isValidShell`'s refusal list, and then nothing else at
+all, since the body was never parsed; SC1008 at 1:1 for an interpreter it does
+not know; SC1103 for a directive), and the port's findings equal the oracle's
+own output for the same script under `--shell=<floor>` (minus the SC1103 the
+directive still draws there). A suppressed SC1071 leaves the oracle silent and
+the sanction standing: upstream's `prop_readScript7` disables it on
+`#!/bin/zsh` and expects no diagnostics, where the port parses
+`for f (a b); echo $f` as bash and reports SC1073. No oracle to re-run means no
+sanction.
+
+A floor is a floor: SC2086 above describes bash, and zsh 5.9.2 runs
+`x="a b"; printf "<%s>" $x` as `<a b>`. Per-dialect rules come from the validity
+matrix (`docs/validity.md`), never from this file.

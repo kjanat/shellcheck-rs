@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::dialect::Dialect;
+
 /// `ErrorMessage`.
 pub type ErrorMessage = String;
 /// `Code`: the number of a diagnostic, such as 2086 for SC2086.
@@ -465,8 +467,8 @@ pub struct CheckSpec {
     pub excluded_warnings: Vec<Code>,
     /// `csIncludedWarnings`.
     pub included_warnings: Option<Vec<Code>>,
-    /// `csShellTypeOverride`.
-    pub shell_type_override: Option<Shell>,
+    /// `csShellTypeOverride`, widened to every [`Dialect`].
+    pub shell_type_override: Option<Dialect>,
     /// `csMinSeverity`.
     pub min_severity: Severity,
     /// `csExtendedAnalysis`.

@@ -455,7 +455,7 @@ parity! {
     );
     shellcheckrc_disables_an_unsupported_shell = files(
         &["-f", "json1", "x.sh"],
-        &[(".shellcheckrc", b"disable=1071\n"), ("x.sh", b"#!/bin/zsh\necho $1\n")],
+        &[(".shellcheckrc", b"disable=1071\n"), ("x.sh", b"#!/usr/bin/python\necho $1\n")],
     );
     shellcheckrc_disables_a_malformed_shebang = files(
         &["-f", "json1", "x.sh"],

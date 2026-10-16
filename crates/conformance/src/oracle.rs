@@ -87,9 +87,13 @@ impl Oracle {
     /// on `PATH`, so `--oracle shellcheck` uses the installed ShellCheck
     /// without a build of its own.
     pub fn new(spec: &str) -> Result<Self, String> {
+        static INSTANCES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let binary = resolve(spec)?;
-        let dir =
-            std::env::temp_dir().join(format!("shellcheck-conformance-{}", std::process::id()));
+        let instance = INSTANCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "shellcheck-conformance-{}-{instance}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Self {
             binary,
@@ -362,25 +366,30 @@ impl Drop for Oracle {
     }
 }
 
+/// The oracle binary, if this checkout has one. A test that needs a real
+/// ShellCheck has nothing to assert without it, and says so rather than
+/// passing silently.
+#[cfg(test)]
+pub fn test_oracle() -> Option<Oracle> {
+    let spec = std::env::var("CONFORMANCE_ORACLE").unwrap_or_else(|_| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.cache/shellcheck-oracle")
+            .to_string_lossy()
+            .into_owned()
+    });
+    Oracle::new(&spec)
+        .inspect_err(|e| {
+            println!("skipped: no oracle at {spec}: {e} (build one: python tools/oracle.py)");
+        })
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The oracle binary, if this checkout has one. Every test below needs a
-    /// real ShellCheck to run, so without it there is nothing to assert; the
-    /// test says so rather than passing silently.
     fn oracle() -> Option<Oracle> {
-        let spec = std::env::var("CONFORMANCE_ORACLE").unwrap_or_else(|_| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.cache/shellcheck-oracle")
-                .to_string_lossy()
-                .into_owned()
-        });
-        Oracle::new(&spec)
-            .inspect_err(|e| {
-                println!("skipped: no oracle at {spec}: {e} (build one: python tools/oracle.py)");
-            })
-            .ok()
+        test_oracle()
     }
 
     /// An input that kills the oracle must not take the rest of the batch with

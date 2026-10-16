@@ -2860,7 +2860,9 @@ impl Parser {
         // decision consults it -- see `empty_negation_ok`.
         if self.shell_hint.is_none() {
             self.shell_hint = annotations.iter().find_map(|a| match a {
-                Annotation::ShellOverride(s) => crate::data::shell_for_executable(s),
+                Annotation::ShellOverride(s) => {
+                    crate::dialect::Dialect::from_name(s).map(crate::dialect::Dialect::floor)
+                }
                 _ => None,
             });
         }
@@ -2868,12 +2870,20 @@ impl Parser {
             && let InnerToken::T_Literal(sb) = &*shebang.inner
         {
             self.shell_hint =
-                crate::data::shell_for_executable(&ast_lib::executable_from_shebang(sb));
+                crate::dialect::Dialect::from_name(&ast_lib::executable_from_shebang(sb))
+                    .map(crate::dialect::Dialect::floor);
         }
         let mut unsupported_shell = false;
         if !ignore_shebang && let InnerToken::T_Literal(sb) = &*shebang.inner {
             let exe = ast_lib::executable_from_shebang(sb);
-            match Self::is_valid_shell(&exe) {
+            let verdict = if crate::dialect::Dialect::from_name(&exe)
+                .is_some_and(crate::dialect::Dialect::is_added)
+            {
+                Some(true)
+            } else {
+                Self::is_valid_shell(&exe)
+            };
+            match verdict {
                 Some(true) => {}
                 Some(false) => {
                     self.problem_at(

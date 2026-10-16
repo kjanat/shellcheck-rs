@@ -821,7 +821,7 @@ fn default_paths() -> Vec<String> {
 mod tests {
     use super::*;
     use crate::options::parse_shell;
-    use shellcheck_rs::interface::Shell;
+    use shellcheck_rs::Dialect;
 
     impl Config {
         fn disabled(&self) -> Vec<(i64, i64)> {
@@ -845,7 +845,7 @@ mod tests {
         }
 
         /// `determineShell`: the first override, valid or not.
-        fn shell(&self) -> Option<Shell> {
+        fn shell(&self) -> Option<Dialect> {
             self.annotations
                 .iter()
                 .find_map(|a| match a {
@@ -954,7 +954,7 @@ mod tests {
         let c = parse("disable=SC2086 shell=sh\n");
         assert_eq!(c.disabled().len(), 1);
         assert_eq!(c.disabled()[0].0, 2086);
-        assert_eq!(c.shell(), Some(Shell::Sh));
+        assert_eq!(c.shell(), Some(Dialect::Sh));
         assert!(c.parse_problem.is_none());
 
         let c =
@@ -984,20 +984,33 @@ mod tests {
 
     #[test]
     fn shell_valid_and_invalid() {
-        assert_eq!(parse("shell=bash").shell(), Some(Shell::Bash));
-        assert_eq!(parse("shell=sh").shell(), Some(Shell::Sh));
+        assert_eq!(parse("shell=bash").shell(), Some(Dialect::Bash));
+        assert_eq!(parse("shell=sh").shell(), Some(Dialect::Sh));
         // Unknown dialect: SC1103 is discarded and there is no usable override.
-        assert_eq!(parse("shell=zsh").shell(), None);
+        assert_eq!(parse("shell=fish").shell(), None);
         // Aliases route through parse_shell (shellForExecutable).
-        assert_eq!(parse("shell=ksh93").shell(), Some(Shell::Ksh));
+        assert_eq!(parse("shell=ksh93").shell(), Some(Dialect::Ksh));
+    }
+
+    #[test]
+    fn shell_accepts_an_added_dialect() {
+        assert_eq!(parse("shell=posh").shell(), Some(Dialect::Posh));
+        assert_eq!(
+            check_with_rc(|| "shell=posh", script("[[ -n $1 ]]")),
+            vec![3010]
+        );
+        assert_eq!(
+            check_with_rc(|| "shell=bash", script("[[ -n $1 ]]")),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn shell_keeps_first_override_even_if_unknown() {
         // determineShell takes the first ShellOverride and resolves that one, so
         // a valid override after an invalid one never applies.
-        assert_eq!(parse("shell=sh\nshell=bash\n").shell(), Some(Shell::Sh));
-        assert_eq!(parse("shell=zsh\nshell=sh\n").shell(), None);
+        assert_eq!(parse("shell=sh\nshell=bash\n").shell(), Some(Dialect::Sh));
+        assert_eq!(parse("shell=fish\nshell=sh\n").shell(), None);
     }
 
     #[test]
@@ -1006,7 +1019,7 @@ mod tests {
             ranges("disable='SC2086,SC2181'"),
             vec![(2086, 2087), (2181, 2182)]
         );
-        assert_eq!(parse("shell=\"bash\"").shell(), Some(Shell::Bash));
+        assert_eq!(parse("shell=\"bash\"").shell(), Some(Dialect::Bash));
         // An unterminated quote is a configuration parse failure.
         assert_eq!(
             problem("shell='bash\""),
@@ -1150,7 +1163,7 @@ mod tests {
     fn merge_into_hands_over_the_annotations_in_order() {
         let rc = parse("disable=SC2086 enable=foo shell=sh extended-analysis=false");
         let mut spec = CheckSpec {
-            shell_type_override: Some(Shell::Bash),
+            shell_type_override: Some(Dialect::Bash),
             extended_analysis: Some(true),
             ..CheckSpec::default()
         };
@@ -1166,7 +1179,7 @@ mod tests {
             ]
         );
         assert!(directives.parse_problem.is_none());
-        assert_eq!(spec.shell_type_override, Some(Shell::Bash));
+        assert_eq!(spec.shell_type_override, Some(Dialect::Bash));
         assert_eq!(spec.extended_analysis, Some(true));
         assert_eq!(spec.optional_checks, [] as [String; 0]);
     }
@@ -1219,7 +1232,7 @@ mod tests {
     #[test]
     fn prop_editorConfigAppliesKnownShell() {
         let c = with_editor_config("[foo]\nshellcheck.shell=bash\n", "foo");
-        assert_eq!(c.shell(), Some(Shell::Bash));
+        assert_eq!(c.shell(), Some(Dialect::Bash));
         assert!(c.parse_problem.is_none());
     }
 
@@ -1234,7 +1247,7 @@ mod tests {
     // parse error (SC1134) rather than being dropped.
     #[test]
     fn prop_editorConfigUnknownShellIsReported() {
-        let problem = with_editor_config("[foo]\nshellcheck.shell=zsh\n", "foo")
+        let problem = with_editor_config("[foo]\nshellcheck.shell=fish\n", "foo")
             .parse_problem
             .expect("SC1134");
         assert_eq!((problem.line, problem.column), (2, 8));
@@ -1332,7 +1345,7 @@ mod tests {
         assert_eq!(name, tree.path("inner/.editorconfig"));
         let c = parse_contents(&name, &blob);
         assert!(c.parse_problem.is_none());
-        assert_eq!(c.shell(), Some(Shell::Bash));
+        assert_eq!(c.shell(), Some(Dialect::Bash));
         assert_eq!(c.disabled(), vec![(2154, 2155)]);
         assert_eq!(c.extended_analysis(), Some(false));
     }
@@ -1361,7 +1374,7 @@ mod tests {
         let (name, blob) = editor_config_with(&tree.path("a/x.sh"), None).expect("root");
         assert_eq!(name, tree.path("a/.editorconfig"));
         let c = parse_contents(&name, &blob);
-        assert_eq!(c.shell(), Some(Shell::Sh));
+        assert_eq!(c.shell(), Some(Dialect::Sh));
         assert_eq!(c.disabled(), [] as [(i64, i64); 0]);
 
         let (name, blob) = editor_config_with(&tree.path("b/x.sh"), None).expect("rejected");
@@ -1616,7 +1629,7 @@ mod tests {
     #[test]
     fn prop_rcCanSuppressEarlyProblems1() {
         assert_eq!(
-            check_with_rc(|| "disable=1071", script("#!/bin/zsh\necho $1")),
+            check_with_rc(|| "disable=1071", script("#!/usr/bin/python\necho $1")),
             Vec::<i64>::new()
         );
     }
