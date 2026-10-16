@@ -1,0 +1,14 @@
+code  = 3037
+claim = "sh's echo takes no flags: a flag is printed"
+shell = "sh"
+
+[snippet]
+script = "echo -e a"
+
+[fixed]
+script = "printf '%s\\n' a"
+
+[[observe]]
+kind    = "stdout"
+snippet = "-e a\n"
+fixed   = "a\n"

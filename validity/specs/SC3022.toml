@@ -1,0 +1,14 @@
+code  = 3022
+claim = "sh has no named descriptors: {fd} is a command name and exec fails"
+shell = "sh"
+
+[snippet]
+script = 'exec {fd}>"$TMPDIR/o" 2>/dev/null; echo ok'
+
+[fixed]
+script = 'exec 3>"$TMPDIR/o"; echo ok'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "ok\n"

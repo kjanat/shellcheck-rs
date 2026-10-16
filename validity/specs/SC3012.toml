@@ -1,0 +1,14 @@
+code  = 3012
+claim = "sh's test has no lexicographic <: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = "if [ a \\< b ] 2>/dev/null; then echo y; else echo n; fi"
+
+[fixed]
+script = "if [ \"$(expr a \\< b)\" = 1 ]; then echo y; else echo n; fi"
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

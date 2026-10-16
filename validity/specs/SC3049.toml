@@ -1,0 +1,14 @@
+code  = 3049
+claim = "sh's trap rejects a lowercase signal name: the signal keeps its default action and kills the shell"
+shell = "sh"
+
+[snippet]
+script = "trap 'echo caught' usr1 2>/dev/null; kill -s USR1 $$; echo done"
+
+[fixed]
+script = "trap 'echo caught' USR1; kill -s USR1 $$; echo done"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "caught\ndone\n"

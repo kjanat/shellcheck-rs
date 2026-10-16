@@ -1,0 +1,14 @@
+code  = 3029
+claim = "sh rejects |& as syntax"
+shell = "sh"
+
+[snippet]
+script = "echo a |& cat"
+
+[fixed]
+script = "echo a 2>&1 | cat"
+
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"

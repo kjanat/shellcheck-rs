@@ -1,0 +1,14 @@
+code  = 3006
+claim = "sh has no ((..)): it runs nested subshells and the assignment is lost"
+shell = "sh"
+
+[snippet]
+script = '((x=1+1)) 2>/dev/null; echo "[$x]"'
+
+[fixed]
+script = 'x=$((1+1)); echo "[$x]"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[2]\n"

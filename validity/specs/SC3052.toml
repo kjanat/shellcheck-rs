@@ -1,0 +1,14 @@
+code  = 3052
+claim = "sh arithmetic has no base#digits: the expansion is a fatal error"
+shell = "sh"
+
+[snippet]
+script = "echo $((16#ff)) 2>/dev/null"
+
+[fixed]
+script = "printf '%d\\n' 0xff"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "255\n"

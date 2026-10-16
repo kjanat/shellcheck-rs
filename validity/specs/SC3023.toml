@@ -1,0 +1,14 @@
+code  = 3023
+claim = "sh descriptors are one digit: 10> is an argument and a redirect of stdout"
+shell = "sh"
+
+[snippet]
+script = 'echo hi 10>"$TMPDIR/o"'
+
+[fixed]
+script = 'echo hi 9>"$TMPDIR/o"'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "hi\n"

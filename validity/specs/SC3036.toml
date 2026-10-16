@@ -1,0 +1,14 @@
+code  = 3036
+claim = "dash's echo takes only -n: another flag is printed"
+shell = "dash"
+
+[snippet]
+script = "echo -e a"
+
+[fixed]
+script = "printf '%s\\n' a"
+
+[[observe]]
+kind    = "stdout"
+snippet = "-e a\n"
+fixed   = "a\n"

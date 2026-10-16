@@ -1,0 +1,14 @@
+code  = 3008
+claim = "sh rejects select loops as syntax"
+shell = "sh"
+
+[snippet]
+script = 'select x in a b; do echo "$x"; break; done'
+
+[fixed]
+script = 'for x in a b; do echo "$x"; break; done'
+
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"

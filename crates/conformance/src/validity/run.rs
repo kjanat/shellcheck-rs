@@ -144,40 +144,80 @@ fn observe(
     let fixed = format!("{}\n", spec.fixed.script);
     let mut parse_argv = cell.argv.clone();
     parse_argv.extend(cell.parse.iter().cloned());
-    for script in [&snippet, &fixed] {
-        let r = container.exec(&dirs[0], &parse_argv, script)?;
-        if r.timed_out {
-            return Ok((Outcome::Timeout, "parse".to_string()));
-        }
-        if r.status != 0 {
-            return Ok((Outcome::Unparsable, first_line(&r.stderr)));
-        }
+    let parsed = [
+        container.exec(&dirs[0], &parse_argv, &snippet)?,
+        container.exec(&dirs[0], &parse_argv, &fixed)?,
+    ];
+    if let Some(outcome) = parse_verdict(spec, &parsed) {
+        return Ok(outcome);
     }
-    let a = container.exec(&dirs[0], &cell.argv, &snippet)?;
-    let b = container.exec(&dirs[1], &cell.argv, &fixed)?;
-    if a.timed_out || b.timed_out {
-        return Ok((Outcome::Timeout, String::new()));
+    let ran = [
+        container.exec(&dirs[0], &cell.argv, &snippet)?,
+        container.exec(&dirs[1], &cell.argv, &fixed)?,
+    ];
+    match verdict(spec, &parsed, &ran) {
+        Verdict::Snippet => port_check(cell, spec, &snippet, &fixed),
+        Verdict::Outcome(outcome, observed) => Ok((outcome, observed)),
     }
-    let a_snippet = spec.observe.iter().all(|o| matches(&a, o.kind, &o.snippet));
-    let a_fixed = spec.observe.iter().all(|o| matches(&a, o.kind, &o.fixed));
-    let b_fixed = spec.observe.iter().all(|o| matches(&b, o.kind, &o.fixed));
-    if a_snippet && b_fixed {
-        return port_check(cell, spec, &snippet, &fixed);
-    }
-    if a_fixed && b_fixed {
-        return Ok((Outcome::Absent, String::new()));
-    }
-    Ok((
-        Outcome::Differs,
-        format!("snippet {} fixed {}", render(&a), render(&b)),
-    ))
 }
 
-fn matches(run: &Run, kind: Kind, expected: &str) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Snippet,
+    Outcome(Outcome, String),
+}
+
+fn parse_verdict(spec: &Spec, parsed: &[Run; 2]) -> Option<(Outcome, String)> {
+    if parsed.iter().any(|r| r.timed_out) {
+        return Some((Outcome::Timeout, "parse".to_string()));
+    }
+    if parsed[0].status != 0 && !spec.observes_parse() {
+        return Some((Outcome::Unparsable, first_line(&parsed[0].stderr)));
+    }
+    if parsed[1].status != 0 {
+        return Some((Outcome::Unparsable, first_line(&parsed[1].stderr)));
+    }
+    None
+}
+
+fn verdict(spec: &Spec, parsed: &[Run; 2], ran: &[Run; 2]) -> Verdict {
+    if ran.iter().any(|r| r.timed_out) {
+        return Verdict::Outcome(Outcome::Timeout, String::new());
+    }
+    let holds = |i: usize, expected: fn(&spec::Observe) -> &str| {
+        spec.observe
+            .iter()
+            .all(|o| matches(&ran[i], &parsed[i], o.kind, expected(o)))
+    };
+    let a_snippet = holds(0, |o| &o.snippet);
+    let a_fixed = holds(0, |o| &o.fixed);
+    let b_fixed = holds(1, |o| &o.fixed);
+    if a_snippet && b_fixed {
+        return Verdict::Snippet;
+    }
+    if a_fixed && b_fixed {
+        return Verdict::Outcome(Outcome::Absent, String::new());
+    }
+    Verdict::Outcome(
+        Outcome::Differs,
+        format!("snippet {} fixed {}", render(&ran[0]), render(&ran[1])),
+    )
+}
+
+fn matches(run: &Run, parsed: &Run, kind: Kind, expected: &str) -> bool {
     match kind {
         Kind::Stdout => run.stdout == expected,
         Kind::Status => run.status.to_string() == expected,
         Kind::StderrContains => run.stderr.contains(expected),
+        Kind::Parse => parse_label(parsed) == expected,
+    }
+}
+
+const fn parse_label(parsed: &Run) -> &'static str {
+    if parsed.status == 0 {
+        spec::PARSE_ACCEPTED
+    } else {
+        spec::PARSE_REJECTED
     }
 }
 
@@ -239,11 +279,104 @@ mod tests {
     #[test]
     fn observables_compare_by_kind() {
         let r = run_with(3, "a\n", "oops: bad\nmore");
-        assert!(matches(&r, Kind::Stdout, "a\n"));
-        assert!(!matches(&r, Kind::Stdout, "a"));
-        assert!(matches(&r, Kind::Status, "3"));
-        assert!(matches(&r, Kind::StderrContains, "bad"));
+        let parsed = run_with(0, "", "");
+        assert!(matches(&r, &parsed, Kind::Stdout, "a\n"));
+        assert!(!matches(&r, &parsed, Kind::Stdout, "a"));
+        assert!(matches(&r, &parsed, Kind::Status, "3"));
+        assert!(matches(&r, &parsed, Kind::StderrContains, "bad"));
+        assert!(matches(&r, &parsed, Kind::Parse, "accepted"));
+        assert!(matches(
+            &r,
+            &run_with(2, "", "Syntax error"),
+            Kind::Parse,
+            "rejected"
+        ));
         assert_eq!(first_line(&r.stderr), "oops: bad");
+    }
+
+    fn spec_with(kind: Kind, snippet: &str, fixed: &str) -> Spec {
+        Spec {
+            code: 3001,
+            claim: String::new(),
+            shell: Some("sh".to_string()),
+            snippet: spec::Script {
+                script: "cat <(echo hi)".to_string(),
+            },
+            fixed: spec::Script {
+                script: "echo hi | cat".to_string(),
+            },
+            observe: vec![spec::Observe {
+                kind,
+                snippet: snippet.to_string(),
+                fixed: fixed.to_string(),
+            }],
+        }
+    }
+
+    fn parse_spec() -> Spec {
+        spec_with(Kind::Parse, "rejected", "accepted")
+    }
+
+    #[test]
+    fn a_parse_observe_reproduces_when_only_the_snippet_is_rejected() {
+        let spec = parse_spec();
+        let parsed = [run_with(2, "", "sh: 1: Syntax error"), run_with(0, "", "")];
+        assert_eq!(parse_verdict(&spec, &parsed), None);
+        let ran = [
+            run_with(2, "", "sh: 1: Syntax error"),
+            run_with(0, "hi\n", ""),
+        ];
+        assert_eq!(verdict(&spec, &parsed, &ran), Verdict::Snippet);
+    }
+
+    #[test]
+    fn a_parse_observe_is_absent_when_both_scripts_parse() {
+        let spec = parse_spec();
+        let parsed = [run_with(0, "", ""), run_with(0, "", "")];
+        assert_eq!(parse_verdict(&spec, &parsed), None);
+        let ran = [run_with(0, "hi\n", ""), run_with(0, "hi\n", "")];
+        assert_eq!(
+            verdict(&spec, &parsed, &ran),
+            Verdict::Outcome(Outcome::Absent, String::new())
+        );
+    }
+
+    #[test]
+    fn a_parse_observe_is_unparsable_when_the_fix_is_rejected() {
+        let spec = parse_spec();
+        let parsed = [
+            run_with(2, "", "sh: 1: Syntax error: \"(\" unexpected"),
+            run_with(2, "", "sh: 1: Syntax error: \"|\" unexpected"),
+        ];
+        assert_eq!(
+            parse_verdict(&spec, &parsed),
+            Some((
+                Outcome::Unparsable,
+                "sh: 1: Syntax error: \"|\" unexpected".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn without_a_parse_observe_a_rejected_snippet_is_unparsable() {
+        let spec = spec_with(Kind::Stdout, "", "hi\n");
+        let parsed = [
+            run_with(2, "", "sh: 1: Syntax error\nmore"),
+            run_with(0, "", ""),
+        ];
+        assert_eq!(
+            parse_verdict(&spec, &parsed),
+            Some((Outcome::Unparsable, "sh: 1: Syntax error".to_string()))
+        );
+        let parsed = [run_with(0, "", ""), run_with(0, "", "")];
+        assert_eq!(parse_verdict(&spec, &parsed), None);
+        let ran = [run_with(0, "", ""), run_with(0, "hi\n", "")];
+        assert_eq!(verdict(&spec, &parsed, &ran), Verdict::Snippet);
+        let ran = [run_with(0, "x\n", ""), run_with(0, "hi\n", "")];
+        assert!(matches!(
+            verdict(&spec, &parsed, &ran),
+            Verdict::Outcome(Outcome::Differs, _)
+        ));
     }
 
     #[test]

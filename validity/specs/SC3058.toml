@@ -1,0 +1,14 @@
+code  = 3058
+claim = "sh applies ${*%pat} to the joined string instead of each parameter"
+shell = "sh"
+
+[snippet]
+script = 'set -- ab cb; echo "${*%b}"'
+
+[fixed]
+script = 'set -- ab cb; out=; for p in "$@"; do out="$out${out:+ }${p%b}"; done; echo "$out"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "ab c\n"
+fixed   = "a c\n"

@@ -1,0 +1,14 @@
+code  = 3021
+claim = "sh's >& takes a descriptor number: a file name is a fatal error"
+shell = "sh"
+
+[snippet]
+script = 'echo hi >&"$TMPDIR/o" 2>/dev/null; echo after'
+
+[fixed]
+script = 'echo hi >"$TMPDIR/o"; echo after'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "after\n"

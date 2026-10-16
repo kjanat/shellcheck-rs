@@ -1,0 +1,14 @@
+code  = 3026
+claim = "sh takes ^ in a bracket expression literally: it does not negate"
+shell = "sh"
+
+[snippet]
+script = "case b in [^a]) echo y ;; *) echo n ;; esac"
+
+[fixed]
+script = "case b in [!a]) echo y ;; *) echo n ;; esac"
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

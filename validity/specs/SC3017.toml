@@ -1,0 +1,14 @@
+code  = 3017
+claim = "sh's test has no unary -a: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = 'if [ -a "$TMPDIR" ] 2>/dev/null; then echo y; else echo n; fi'
+
+[fixed]
+script = 'if [ -e "$TMPDIR" ]; then echo y; else echo n; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

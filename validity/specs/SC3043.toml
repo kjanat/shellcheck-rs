@@ -1,0 +1,14 @@
+code  = 3043
+claim = "sh has no local: the assignment in the function leaks to the caller"
+shell = "sh"
+
+[snippet]
+script = 'x=g; f() { local x; x=l; }; f 2>/dev/null; echo "$x"'
+
+[fixed]
+script = 'x=g; f() ( x=l ); f; echo "$x"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "l\n"
+fixed   = "g\n"

@@ -1,0 +1,14 @@
+code  = 3063
+claim = "sh has no namerefs and no test -R: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = "declare -n r=x 2>/dev/null; x=1; if [ -R r ] 2>/dev/null; then echo y; else echo n; fi"
+
+[fixed]
+script = "x=1; r=x; if eval \"[ -n \\\"\\${$r+x}\\\" ]\"; then echo y; else echo n; fi"
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

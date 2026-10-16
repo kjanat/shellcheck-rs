@@ -1,0 +1,13 @@
+code  = 2145
+claim = "an array in a string splits into separate arguments after the string"
+
+[snippet]
+script = 'a=(x y); printf "<%s>" "v=${a[@]}"; echo'
+
+[fixed]
+script = 'a=(x y); printf "<%s>" "v=${a[*]}"; echo'
+
+[[observe]]
+kind    = "stdout"
+snippet = "<v=x><y>\n"
+fixed   = "<v=x y>\n"

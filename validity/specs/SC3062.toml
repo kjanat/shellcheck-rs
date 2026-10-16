@@ -1,0 +1,14 @@
+code  = 3062
+claim = "sh's test has no -o: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = "set -e; if [ -o errexit ] 2>/dev/null; then echo on; else echo off; fi"
+
+[fixed]
+script = "set -e; case $- in *e*) echo on ;; *) echo off ;; esac"
+
+[[observe]]
+kind    = "stdout"
+snippet = "off\n"
+fixed   = "on\n"

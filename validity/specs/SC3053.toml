@@ -1,0 +1,14 @@
+code  = 3053
+claim = "sh has no ${!x}: the expansion is a fatal bad substitution"
+shell = "sh"
+
+[snippet]
+script = 'x=a; y=x; echo "${!y}" 2>/dev/null'
+
+[fixed]
+script = "x=a; y=x; eval \"echo \\\"\\$$y\\\"\""
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "a\n"

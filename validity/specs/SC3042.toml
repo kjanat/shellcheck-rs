@@ -1,0 +1,14 @@
+code  = 3042
+claim = "sh rejects set --option: the error is fatal"
+shell = "sh"
+
+[snippet]
+script = 'set --noglob 2>/dev/null; echo "$?"'
+
+[fixed]
+script = 'set -f; echo "$?"'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "0\n"

@@ -1,0 +1,14 @@
+code  = 3041
+claim = "sh rejects set -B: the error is fatal"
+shell = "sh"
+
+[snippet]
+script = "set -B 2>/dev/null; echo ok"
+
+[fixed]
+script = "set -f; echo ok"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "ok\n"

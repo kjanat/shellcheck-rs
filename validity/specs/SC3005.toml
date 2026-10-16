@@ -1,0 +1,14 @@
+code  = 3005
+claim = "sh rejects arithmetic for loops as syntax"
+shell = "sh"
+
+[snippet]
+script = 'for ((i=0; i<1; i++)); do echo "$i"; done'
+
+[fixed]
+script = 'i=0; while [ "$i" -lt 1 ]; do echo "$i"; i=$((i+1)); done'
+
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"

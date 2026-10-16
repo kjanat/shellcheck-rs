@@ -1,0 +1,14 @@
+code  = 3025
+claim = "sh has no /dev/udp: the redirect opens a missing path and fails"
+shell = "sh"
+
+[snippet]
+script = "true </dev/udp/127.0.0.1/9 2>/dev/null && echo opened"
+
+[fixed]
+script = "true </dev/null && echo opened"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "opened\n"

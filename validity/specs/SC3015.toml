@@ -1,0 +1,14 @@
+code  = 3015
+claim = "sh has no =~: the [[ test is a missing command and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = "if [[ abc =~ ^a ]] 2>/dev/null; then echo y; else echo n; fi"
+
+[fixed]
+script = "case abc in a*) echo y ;; *) echo n ;; esac"
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

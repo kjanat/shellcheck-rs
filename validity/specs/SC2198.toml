@@ -1,0 +1,13 @@
+code  = 2198
+claim = "an array in [ ] becomes several operands and the test errors"
+
+[snippet]
+script = 'a=(x y); if [ "${a[@]}" = "x y" ] 2>/dev/null; then echo eq; else echo ne; fi'
+
+[fixed]
+script = 'a=(x y); if [ "${a[*]}" = "x y" ]; then echo eq; else echo ne; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "ne\n"
+fixed   = "eq\n"

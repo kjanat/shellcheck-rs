@@ -1,0 +1,13 @@
+code  = 2206
+claim = "an unquoted expansion in an array assignment word-splits"
+
+[snippet]
+script = 'x="a b"; a=($x); echo "${#a[@]}"'
+
+[fixed]
+script = 'x="a b"; a=("$x"); echo "${#a[@]}"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "2\n"
+fixed   = "1\n"

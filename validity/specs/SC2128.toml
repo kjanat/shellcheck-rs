@@ -1,0 +1,13 @@
+code  = 2128
+claim = "expanding an array without an index gives only the first element"
+
+[snippet]
+script = 'a=(x y); echo "$a"'
+
+[fixed]
+script = 'a=(x y); echo "${a[*]}"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "x\n"
+fixed   = "x y\n"

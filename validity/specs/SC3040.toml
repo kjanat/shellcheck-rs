@@ -1,0 +1,14 @@
+code  = 3040
+claim = "sh rejects set -o errtrace: the error is fatal"
+shell = "sh"
+
+[snippet]
+script = "set -o errtrace 2>/dev/null; echo ok"
+
+[fixed]
+script = "set -o errexit; echo ok"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "ok\n"

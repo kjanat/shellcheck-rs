@@ -103,9 +103,20 @@ snippet = "<a><b>\n"
 fixed   = "<a b>\n"
 ```
 
-`observe.kind` is one of `stdout`, `status`, `stderr-contains`. A spec may
-carry several `[[observe]]` blocks. Scripts read stdin and finish in under a
-second.
+`observe.kind` is one of `stdout`, `status`, `stderr-contains`, `parse`. A
+spec may carry several `[[observe]]` blocks. Scripts read stdin and finish in
+under a second.
+
+A `parse` observe runs only the cell's parse step. Its values are `accepted`
+or `rejected`. For process substitution, which sh rejects as syntax, the spec
+writes `snippet = "rejected"` and `fixed = "accepted"`:
+
+```toml
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"
+```
 
 Filesystem: the root is read-only and `/tmp` is a 16 MiB tmpfs. Each run gets
 a fresh directory in `TMPDIR` and starts there. A spec that needs a missing
@@ -116,7 +127,8 @@ the directory is discarded after the run.
 
 ## Assertions per spec per cell
 
-1. The shell parses both scripts.
+1. The shell parses the fixed script, and the snippet unless a `parse`
+   observe expects its rejection.
 2. The snippet produces `observe.snippet`.
 3. The fixed script produces `observe.fixed`.
 4. On a cell with `dialect`: the port reports `code` on the snippet.
@@ -129,7 +141,7 @@ the directory is discarded after the run.
 | `reproduces` | Assertions 1 to 3 hold. The claim is true on this shell and version. |
 | `absent`     | Both scripts produce the fixed observable. The shell lacks the bug.  |
 | `differs`    | Some other output. Recorded verbatim.                                |
-| `unparsable` | The shell rejects the snippet or the fix.                            |
+| `unparsable` | The shell rejects the fix, or the snippet without a `parse` observe. |
 | `timeout`    | Exceeded the per-run limit.                                          |
 | `port-miss`  | Assertion 4 or 5 failed.                                             |
 

@@ -1,0 +1,14 @@
+code  = 3033
+claim = "sh rejects a function name with a hyphen as syntax"
+shell = "sh"
+
+[snippet]
+script = "foo-bar() { echo hi; }; foo-bar"
+
+[fixed]
+script = "foo_bar() { echo hi; }; foo_bar"
+
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"

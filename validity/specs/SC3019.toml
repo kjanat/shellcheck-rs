@@ -1,0 +1,14 @@
+code  = 3019
+claim = "sh arithmetic has no **: the expansion is a fatal error"
+shell = "sh"
+
+[snippet]
+script = "echo $((2**3)) 2>/dev/null"
+
+[fixed]
+script = "echo $((2*2*2))"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "8\n"

@@ -1,0 +1,14 @@
+code  = 3004
+claim = 'sh has no $"..": the dollar sign is printed'
+shell = "sh"
+
+[snippet]
+script = 'echo $"hi"'
+
+[fixed]
+script = 'echo "hi"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "$hi\n"
+fixed   = "hi\n"

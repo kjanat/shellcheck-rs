@@ -1,0 +1,14 @@
+code  = 3061
+claim = "sh's read needs a variable: it fails and REPLY stays unset"
+shell = "sh"
+
+[snippet]
+script = "printf 'hi\\n' | { read 2>/dev/null; echo \"[$REPLY]\"; }"
+
+[fixed]
+script = "printf 'hi\\n' | { read -r REPLY; echo \"[$REPLY]\"; }"
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[hi]\n"

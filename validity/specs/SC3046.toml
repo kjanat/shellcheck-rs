@@ -1,0 +1,14 @@
+code  = 3046
+claim = "sh has no source: it is a missing command and the file is not read"
+shell = "sh"
+
+[snippet]
+script = 'echo x=1 >"$TMPDIR/lib.sh"; source "$TMPDIR/lib.sh" 2>/dev/null; echo "[$x]"'
+
+[fixed]
+script = 'echo x=1 >"$TMPDIR/lib.sh"; . "$TMPDIR/lib.sh"; echo "[$x]"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[1]\n"

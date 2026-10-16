@@ -1,0 +1,14 @@
+code  = 3060
+claim = "sh has no ${x/a/c}: the expansion is a fatal bad substitution"
+shell = "sh"
+
+[snippet]
+script = 'x=ab; echo "${x/a/c}" 2>/dev/null'
+
+[fixed]
+script = "x=ab; echo \"$x\" | sed 's/a/c/'"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "cb\n"

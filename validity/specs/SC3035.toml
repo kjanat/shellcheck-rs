@@ -1,0 +1,14 @@
+code  = 3035
+claim = "sh runs `<file` as an empty command: the result is empty"
+shell = "sh"
+
+[snippet]
+script = 'echo hi >"$TMPDIR/f"; x=`<"$TMPDIR/f"`; echo "[$x]"'
+
+[fixed]
+script = 'echo hi >"$TMPDIR/f"; x=$(cat "$TMPDIR/f"); echo "[$x]"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[hi]\n"

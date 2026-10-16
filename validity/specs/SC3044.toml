@@ -1,0 +1,14 @@
+code  = 3044
+claim = "sh has no declare: it is a missing command and x stays unset"
+shell = "sh"
+
+[snippet]
+script = 'declare x=1 2>/dev/null; echo "[$x]"'
+
+[fixed]
+script = 'x=1; echo "[$x]"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[1]\n"

@@ -1,0 +1,14 @@
+code  = 3054
+claim = "sh has no ${a[0]}: the expansion is a fatal bad substitution"
+shell = "sh"
+
+[snippet]
+script = 'a=x; echo "${a[0]}" 2>/dev/null'
+
+[fixed]
+script = 'a=x; echo "$a"'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "x\n"

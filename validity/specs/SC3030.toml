@@ -1,0 +1,14 @@
+code  = 3030
+claim = "sh rejects array assignment as syntax"
+shell = "sh"
+
+[snippet]
+script = 'a=(1 2); echo "${#a[@]}"'
+
+[fixed]
+script = 'set -- 1 2; echo "$#"'
+
+[[observe]]
+kind    = "parse"
+snippet = "rejected"
+fixed   = "accepted"

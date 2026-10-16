@@ -1,0 +1,14 @@
+code  = 3064
+claim = "sh's test has no -N: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = 'echo x >"$TMPDIR/f"; if [ -N "$TMPDIR/f" ] 2>/dev/null; then echo new; else echo old; fi'
+
+[fixed]
+script = 'echo x >"$TMPDIR/f"; if [ -f "$TMPDIR/f" ]; then echo new; else echo old; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "old\n"
+fixed   = "new\n"
