@@ -242,8 +242,15 @@ Every input is pinned in the tree and every step is one command.
 ## Fuzz
 
 Fuzz scripts are never executed. The matrix runs curated specs only. The
-syntax-only `conformance shells` pass gains the same cell list and reports
-rejects-valid per cell.
+syntax-only pass is `cargo conformance-shells [--cell <shell>[:<version>]]
+[--iterations <n>]`. It feeds the property corpus plus generated shell to each
+cell's `argv` plus `parse` in the same container setup as the runner, and
+compares the shell's verdict with the port's (checked as the cell's shell, or
+as its `dialect` for an emulation cell) and with the oracle's (only for cells
+with a `dialect`). It prints one line per cell, sorted by shell then version,
+with `rejects-valid` and `accepts-invalid` counts for the port and the oracle.
+A VM cell is skipped and says so; a cell without `dialect` says
+`no upstream dialect`. The numbers are a report, never a gate.
 
 ## Relation to upstream
 

@@ -531,7 +531,8 @@ pub enum Command {
     long_about = "Runs the Haskell ShellCheck (the oracle) and the Rust port over the same \
                   input and reports every disagreement.\n\n\
                   Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.",
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    args_override_self = true
 )]
 /// The command line.
 pub struct Args {
@@ -814,6 +815,12 @@ mod tests {
         let a = parse(&["fuzz", "--seed", "7"]);
         assert!(a.cmd == Command::Fuzz);
         assert_eq!(a.fuzzing.seed, 7);
+    }
+
+    #[test]
+    fn a_later_flag_overrides_an_alias_default() {
+        let a = parse(&["shells", "--iterations", "300", "--iterations", "50"]);
+        assert_eq!(a.fuzzing.iterations, 50);
     }
 
     #[test]

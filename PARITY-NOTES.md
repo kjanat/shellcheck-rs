@@ -503,10 +503,32 @@ unrelated lines.
 The entries above were found one at a time. `conformance shells` measures the
 same question in bulk: for every script in the corpus plus generated shell, it
 compares each tool's idea of "this parses" (no SC1073/SC1009/SC1072) against the
-real interpreter's (`<shell> -n`), per dialect — bash, dash for `sh`, **AT&T
-ksh93** for `ksh` (not mksh, which is a different shell), and `busybox sh`.
+real interpreter's (`<shell> -n`).
 
-2326 scripts per dialect, port vs oracle:
+The interpreters are the validity matrix cells in `validity/matrix.toml`, each
+run in the same isolated container as `cargo validity` (no network, read-only
+root, five-second limit). `--cell <shell>[:<version>]` selects cells the way it
+does for `cargo validity`. Per cell the shell's verdict is the cell's `argv`
+plus `parse`; the port checks the script as the cell's shell, or as the cell's
+`dialect` for an emulation cell such as `zsh --emulate sh`. The oracle's
+verdict exists only for cells with a `dialect`; the line for any other cell
+says `no upstream dialect`. A `vm = true` cell
+prints `vm cell, skipped`; a cell with no image prints `no image`; tcsh prints
+`no port dialect`. One line per cell, sorted by shell then version. With
+`--cell dash:0.5.12 --cell zsh:5.9 --cell mksh:R59c --iterations 50`:
+
+```
+cell                  scripts       rejects-valid     accepts-invalid
+dash:0.5.12              2117        28 / o:28         213 / o:213
+mksh:R59c                2117        30 / -            112 / -        no upstream dialect
+zsh:5.9                  2117        31 / -            141 / -        no upstream dialect
+```
+
+After the cells, the same numbers for the host's own interpreters where they
+are installed, per upstream dialect: bash, dash for `sh`, **AT&T ksh93** for
+`ksh` (not mksh, which is a different shell), and `busybox sh`.
+
+2326 scripts per dialect on the host, port vs oracle:
 
 | dialect | rejects-valid (port / oracle) | accepts-invalid (port / oracle) |
 | ------- | ----------------------------- | ------------------------------- |

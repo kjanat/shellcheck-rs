@@ -1,8 +1,8 @@
 //! The validity matrix: each diagnostic's reproducer and its fix run in real
 //! shells, one container per shell and version. See `docs/validity.md`.
 
-mod docker;
-mod matrix;
+pub mod docker;
+pub mod matrix;
 mod outcomes;
 mod pin;
 mod rules;
