@@ -48,7 +48,7 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
             missing.len()
         ));
     }
-    let (failures, drift) = compare(&matrix, &recorded, &rows, &specs);
+    let (failures, drift) = compare(&matrix, &recorded, &rows, &specs, Coverage::of(&args.cell));
     for line in &drift {
         println!("DRIFT {line}");
     }
@@ -79,6 +79,7 @@ fn compare(
     recorded: &Outcomes,
     rows: &[Row],
     specs: &[Spec],
+    coverage: Coverage,
 ) -> (Vec<String>, Vec<String>) {
     let mut failures = Vec::new();
     let mut drift = Vec::new();
@@ -110,11 +111,30 @@ fn compare(
     }
     for s in specs {
         let mine: Vec<&Row> = rows.iter().filter(|r| r.code == s.code).collect();
-        if !mine.is_empty() && mine.iter().all(|r| r.outcome != Outcome::Reproduces) {
+        if coverage == Coverage::Matrix
+            && !mine.is_empty()
+            && mine.iter().all(|r| r.outcome != Outcome::Reproduces)
+        {
             failures.push(format!("SC{} reproduces in no cell", s.code));
         }
     }
     (failures, drift)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coverage {
+    Matrix,
+    Cells,
+}
+
+impl Coverage {
+    const fn of(cells: &[String]) -> Self {
+        if cells.is_empty() {
+            Self::Matrix
+        } else {
+            Self::Cells
+        }
+    }
 }
 
 fn evaluate(
@@ -413,13 +433,37 @@ mod tests {
             row("zsh", Outcome::Reproduces),
         ]);
         let rows = [row("bash", Outcome::Absent), row("zsh", Outcome::Absent)];
-        let (failures, drift) = compare(&m, &recorded, &rows, &[]);
+        let (failures, drift) = compare(&m, &recorded, &rows, &[], Coverage::Matrix);
         assert_eq!(failures.len(), 1);
         assert!(failures[0].starts_with("SC2086 bash:1 absent"));
         assert_eq!(drift.len(), 1);
         assert!(drift[0].starts_with("SC2086 zsh:1 absent"));
-        let (failures, drift) = compare(&m, &Outcomes::default(), &rows, &[]);
+        let (failures, drift) = compare(&m, &Outcomes::default(), &rows, &[], Coverage::Matrix);
         assert_eq!(failures, Vec::<String>::new());
         assert_eq!(drift.len(), 2);
+    }
+
+    #[test]
+    fn a_spec_must_reproduce_somewhere_only_when_the_run_covers_the_matrix() {
+        let row = |outcome: Outcome| Row {
+            code: 3001,
+            shell: "dash".to_string(),
+            version: "1".to_string(),
+            outcome,
+            observed: String::new(),
+        };
+        let specs = [parse_spec()];
+        let m = matrix::Matrix::default();
+        let none = Outcomes::default();
+        let absent = [row(Outcome::Absent)];
+        let reproduces = [row(Outcome::Reproduces)];
+        assert_eq!(Coverage::of(&[]), Coverage::Matrix);
+        assert_eq!(Coverage::of(&["dash:1".to_string()]), Coverage::Cells);
+        let (failures, _) = compare(&m, &none, &absent, &specs, Coverage::Cells);
+        assert_eq!(failures, Vec::<String>::new());
+        let (failures, _) = compare(&m, &none, &absent, &specs, Coverage::Matrix);
+        assert_eq!(failures, vec!["SC3001 reproduces in no cell".to_string()]);
+        let (failures, _) = compare(&m, &none, &reproduces, &specs, Coverage::Matrix);
+        assert_eq!(failures, Vec::<String>::new());
     }
 }
