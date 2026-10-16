@@ -206,39 +206,46 @@ fn trap_execution_is_visible(
     !opaque
 }
 
-pub(super) fn check_trap_quotes() -> CommandCheck {
-    CommandCheck::new(Exactly("trap"), |params, t, out| {
-        let Some(words) = simple_command_words(t) else {
-            return;
-        };
-        let Some(arg) = words.get(1) else {
-            return;
-        };
-        // checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs])
-        let InnerToken::T_NormalWord(parts) = &*arg.inner else {
-            return;
-        };
-        if parts.len() != 1 {
-            return;
-        }
-        let InnerToken::T_DoubleQuoted(rs) = &*parts[0].inner else {
-            return;
-        };
-        let stable = stable_trap_variables(params, t, arg);
-        for r in rs {
-            if let InnerToken::T_DollarBraced { op, .. } = r.inner()
-                && get_literal_string(op).is_some_and(|name| stable.contains(&name))
-            {
-                continue;
-            }
-            let hit = matches!(
+fn trap_quote_expansions<'a>(params: &Parameters, t: &'a Token) -> Vec<(&'a Token, bool)> {
+    let Some(words) = simple_command_words(t) else {
+        return Vec::new();
+    };
+    let Some(arg) = words.get(1) else {
+        return Vec::new();
+    };
+    // checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs])
+    let InnerToken::T_NormalWord(parts) = &*arg.inner else {
+        return Vec::new();
+    };
+    if parts.len() != 1 {
+        return Vec::new();
+    }
+    let InnerToken::T_DoubleQuoted(rs) = &*parts[0].inner else {
+        return Vec::new();
+    };
+    let stable = stable_trap_variables(params, t, arg);
+    rs.iter()
+        .filter(|r| {
+            matches!(
                 &*r.inner,
                 InnerToken::T_DollarExpansion(_)
                     | InnerToken::T_Backticked(_)
                     | InnerToken::T_DollarBraced { .. }
                     | InnerToken::T_DollarArithmetic(_)
-            );
-            if hit {
+            )
+        })
+        .map(|r| {
+            let withheld = matches!(r.inner(), InnerToken::T_DollarBraced { op, .. }
+                if get_literal_string(op).is_some_and(|name| stable.contains(&name)));
+            (r, withheld)
+        })
+        .collect()
+}
+
+fn trap_quotes(withheld: bool) -> CommandCheck {
+    CommandCheck::new(Exactly("trap"), move |params, t, out| {
+        for (r, stable) in trap_quote_expansions(params, t) {
+            if stable == withheld {
                 warn(
                     out,
                     r.id(),
@@ -248,6 +255,14 @@ pub(super) fn check_trap_quotes() -> CommandCheck {
             }
         }
     })
+}
+
+pub(super) fn check_trap_quotes() -> CommandCheck {
+    trap_quotes(false)
+}
+
+pub(super) fn withheld_trap_quotes() -> CommandCheck {
+    trap_quotes(true)
 }
 
 pub(super) fn check_return() -> CommandCheck {

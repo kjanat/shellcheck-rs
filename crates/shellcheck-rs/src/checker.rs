@@ -218,7 +218,7 @@ fn note_to_positioned(n: &ParseNote) -> PositionedComment {
     }
 }
 
-fn token_to_position(
+pub(crate) fn token_to_position(
     tc: &TokenComment,
     positions: &std::collections::BTreeMap<Id, (Position, Position)>,
 ) -> PositionedComment {

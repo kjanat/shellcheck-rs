@@ -40,7 +40,7 @@ use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
 use shellcheck_cli::options::parse_shell;
-use shellcheck_rs::interface::CheckSpec;
+use shellcheck_rs::interface::{CheckSpec, PositionedComment};
 
 // ---------------------------------------------------------------------------
 // Comparison keys
@@ -200,9 +200,19 @@ pub fn port_keys_with(
         optional_checks: optional.to_vec(),
         ..CheckSpec::default()
     };
-    let result = shellcheck_rs::check_script(&spec);
-    let untabbed = fixer::make_non_virtual(&result.comments, script);
-    untabbed
+    json1_keys(
+        &shellcheck_rs::check_script(&spec).comments,
+        script,
+        filename,
+    )
+}
+
+fn json1_keys(
+    comments: &[PositionedComment],
+    script: &str,
+    filename: &str,
+) -> Result<Vec<CommentKey>, String> {
+    fixer::make_non_virtual(comments, script)
         .iter()
         .map(|pc| {
             serde_json::to_value(json1::to_comment(pc))
@@ -314,7 +324,7 @@ fn gate(args: &Args) -> Result<bool, String> {
     let by_name = oracle.check(&named, args.shell.as_deref())?;
 
     let mut divergent: Vec<(String, Vec<CommentKey>, Vec<CommentKey>)> = Vec::new();
-    let mut deviations: Vec<(String, &'static deviations::Deviation)> = Vec::new();
+    let mut deviations: Vec<(String, Vec<&'static deviations::Deviation>)> = Vec::new();
     let mut compared = 0usize;
     for (entry, (name, script)) in entries.iter().zip(&named) {
         let Some(ocomments) = by_name.get(name) else {
@@ -328,9 +338,12 @@ fn gate(args: &Args) -> Result<bool, String> {
             continue;
         }
         // A difference the port is entitled to is not a divergence.
-        match deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle)) {
-            Some(d) => deviations.push((entry.id.clone(), d)),
-            None => divergent.push((entry.id.clone(), pk, ok)),
+        let sanction =
+            deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle));
+        if sanction.is_empty() {
+            divergent.push((entry.id.clone(), pk, ok));
+        } else {
+            deviations.push((entry.id.clone(), sanction));
         }
     }
 
@@ -398,7 +411,7 @@ fn gate(args: &Args) -> Result<bool, String> {
 /// with an annotation on the defining Haskell line of each in CI.
 fn print_divergences(
     divergent: &[(String, Vec<CommentKey>, Vec<CommentKey>)],
-    deviations: &[(String, &'static deviations::Deviation)],
+    deviations: &[(String, Vec<&'static deviations::Deviation>)],
     where_of: &std::collections::HashMap<String, (String, usize)>,
     max: usize,
 ) {
@@ -423,10 +436,13 @@ fn print_divergences(
         if divergent.len() > max {
             println!("... and {} more", divergent.len() - max);
         }
-        for (id, d) in deviations.iter().take(max) {
-            println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+        for (id, sanction) in deviations.iter().take(max) {
+            let ids: Vec<_> = sanction.iter().map(|d| d.id).collect();
+            let whats: Vec<_> = sanction.iter().map(|d| d.what).collect();
+            let (ids, whats) = (ids.join(", "), whats.join("; "));
+            println!("DEVIATION {id} [{ids}]: {whats}");
             if ci {
-                log::notice(format!("Sanctioned deviation {id} [{}]: {}", d.id, d.what));
+                log::notice(format!("Sanctioned deviation {id} [{ids}]: {whats}"));
             }
         }
     };

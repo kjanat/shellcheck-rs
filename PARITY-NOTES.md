@@ -7,11 +7,12 @@ Most items here are reproduced by the port **on purpose**; an entry's **Port**
 line says when it is not. A fix that makes the port better than the oracle needs
 a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
-are six classes: `upstream-false-parse-error` (the oracle rejects the file, the
+are eight classes: `upstream-false-parse-error` (the oracle rejects the file, the
 port does not, and `<shell> -n` agrees with the port), `interpreter-path-typo`,
-`upstream-function-tail-cd`, `completed-statement-notes`, `unclosed-test-quote`
-and `added-dialect`. See `crates/conformance/src/deviations.rs`; missing
-evidence means the difference counts as a divergence, so each class fails closed.
+`upstream-function-tail-cd`, `completed-statement-notes`, `unclosed-test-quote`,
+`added-dialect`, `stable-trap-variables` and `signal-only-cleanup-trap`. See
+`crates/conformance/src/deviations.rs`; missing evidence means the difference
+counts as a divergence, so each class fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
 the port's output and files it as a port bug would be wrong — and "fixing" it
@@ -626,6 +627,110 @@ identifies the actual unterminated quote at EOF. Zero-width insertion-point span
 remain unchanged. Haskell crashes and valid-Bash negation handling still require
 upstream follow-up; no upstream source is patched here.
 
+## SC2064: stable trap variables
+
+Upstream warns on every expansion inside a double-quoted `trap` action:
+
+```sh
+printf '%s\n' 'ENGINE=podman; trap "$ENGINE rm -f x" EXIT' | shellcheck -f json1 -
+printf '%s\n' 'trap "$x" INT; x=1' | shellcheck -f json1 -
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":22,"endColumn":29,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":7,"endColumn":9,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+**What the shell does**
+
+Early and late expansion print the same action when the variable keeps its
+value, and differ once it is reassigned after the trap:
+
+```
+$ bash --version
+GNU bash, version 5.3.15(1)-release (x86_64-pc-linux-gnu)
+$ bash -c 'ENGINE=podman; trap "echo $ENGINE rm -f x" EXIT'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap '\''echo $ENGINE rm -f x'\'' EXIT'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap "echo $ENGINE rm -f x" EXIT; ENGINE=docker'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap '\''echo $ENGINE rm -f x'\'' EXIT; ENGINE=docker'
+docker rm -f x
+```
+
+INT traps fired with `kill -INT $$` give the same four lines.
+
+**Port: diverges.** Deviation `stable-trap-variables`. The port withholds SC2064
+for a plain `$name` or `${name}` whose every write precedes the trap
+([Trap expansion timing](docs/diagnostics.md)). The first script gives only
+SC2148. The second keeps SC2064 at 1:7-1:9.
+
+The harness removes an SC2064 from the oracle's findings when the port lacks it
+and `withheld_trap_warnings` in `crates/shellcheck-rs/src/checks/commands/mod.rs`
+reports a warning with the same span and message for the script. That
+function runs the port's own stability analysis. The rest must equal the port's
+findings, or satisfy another class. An unparsable script counts as a
+divergence.
+
+## SC9002: signal-only cleanup traps
+
+SC9002 is an additive diagnostic ([SC9002](docs/diagnostics.md)). Upstream has
+no counterpart:
+
+```sh
+printf '%s\n' "trap 'cleanup' INT" | shellcheck -f json1 -
+printf '%s\n' 'ENGINE=podman; trap "$ENGINE rm -f x" INT' | shellcheck -f json1 -
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null}]}
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":22,"endColumn":29,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+**What the shell does**
+
+An INT-only handler runs on the signal and stays silent on normal exit and on
+`set -e` failure. Adding EXIT runs it on every path:
+
+```
+$ bash -c "trap 'echo cleanup' INT; exit 0"; echo "exit $?"
+exit 0
+$ bash -c "set -e; trap 'echo cleanup' INT; false"; echo "exit $?"
+exit 1
+$ bash -c "trap 'echo cleanup' INT; kill -INT \$\$"; echo "exit $?"
+cleanup
+exit 0
+$ bash -c "trap 'echo cleanup' EXIT INT; exit 0"; echo "exit $?"
+cleanup
+exit 0
+$ bash -c "set -e; trap 'echo cleanup' EXIT INT; false"; echo "exit $?"
+cleanup
+exit 1
+```
+
+**Port: diverges.** Deviation `signal-only-cleanup-trap`. The first script adds
+
+```
+-:1:1: warning: This cleanup trap only handles signals. Consider EXIT to also clean up after errors, end of input, and normal exit. [SC9002]
+```
+
+The second adds the same warning at 1:16-1:42 and withholds SC2064, so it needs
+this class and `stable-trap-variables` together.
+
+The harness removes an SC9002 from the port's findings when the oracle lacks it
+and `cleanup_trap_warnings` in `crates/shellcheck-rs/src/analytics/mod.rs`
+reports a warning with the same span and message for the script. That
+function runs the port's own SC9002 check over the AST. The rest must equal the
+oracle's findings, or satisfy another class. An unparsable script counts as a
+divergence.
+
 ## Dialects beyond upstream
 
 Upstream knows five shells. A shebang or `shell=` directive naming any other
@@ -694,6 +799,13 @@ the sanction standing: upstream's `prop_readScript7` disables it on
 `#!/bin/zsh` and expects no diagnostics, where the port parses
 `for f (a b); echo $f` as bash and reports SC1073. No oracle to re-run means no
 sanction.
+
+The other classes then apply to that floor comparison. For
+`#!/bin/zsh\nENGINE=podman; trap "$ENGINE rm -f x" INT` the oracle reports only
+SC1071, its bash run reports SC2064 at 2:22-2:29, and the port reports SC9002.
+The gate prints every class that took part:
+`signal-only-cleanup-trap, added-dialect, stable-trap-variables`. Any two of
+them leave a difference.
 
 zsh 5.9.2 runs `x="a b"; printf "<%s>" $x` as `<a b>`. The validity matrix
 records this run and drops SC2086 for zsh. Per-dialect rules come from the

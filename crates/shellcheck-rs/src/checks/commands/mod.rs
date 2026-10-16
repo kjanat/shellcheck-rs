@@ -6,6 +6,7 @@ use crate::analyzer_lib::{Check, Checker, Out, Parameters};
 use crate::ast::{InnerToken, Token};
 use crate::ast_lib::{basename, get_literal_string, only_literal_string};
 use crate::data::{DECLARING_COMMANDS, PRIVILEGE_ELEVATION_COMMANDS};
+use crate::interface::PositionedComment;
 
 pub(crate) mod builtins;
 pub(crate) mod common;
@@ -224,6 +225,20 @@ fn all_checks() -> Vec<CommandCheck> {
         checks.push(sudo::check_sudo_redirect(cmd));
     }
     checks
+}
+
+/// The SC2064 warnings the port withholds for trap actions whose plain
+/// variables its analysis judges stable.
+#[must_use]
+pub fn withheld_trap_warnings(params: &Parameters) -> Vec<PositionedComment> {
+    let check = builtins::withheld_trap_quotes();
+    let mut out = Out::new();
+    params
+        .root
+        .visit_preorder(&mut |t| check.run(params, t, &mut out));
+    out.iter()
+        .map(|tc| crate::checker::token_to_position(tc, &params.token_positions))
+        .collect()
 }
 
 /// `getChecker commandChecks`: adds every command check to `c` as one node check.

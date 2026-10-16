@@ -65,6 +65,17 @@ const ADDED_DIALECT: Deviation = Deviation {
            checks the script as that dialect's upstream floor",
 };
 
+const SIGNAL_ONLY_CLEANUP_TRAP: Deviation = Deviation {
+    id: "signal-only-cleanup-trap",
+    what: "the port warns that a cleanup trap handles signals without EXIT",
+};
+
+const STABLE_TRAP_VARIABLES: Deviation = Deviation {
+    id: "stable-trap-variables",
+    what: "the port withholds SC2064 for trap variables assigned before the trap and never \
+           written after it",
+};
+
 /// The codes upstream emits for an interpreter it does not know: SC1071 for a
 /// shell on its refusal list (the body is then not parsed), SC1008 for any
 /// other shebang, SC1103 for a `shell=` directive.
@@ -110,17 +121,12 @@ fn added_dialect(
     port: &[CommentKey],
     oracle: &[CommentKey],
     runner: Option<&Oracle>,
-) -> bool {
+) -> Option<Vec<CommentKey>> {
     if shell.is_some() {
-        return false;
+        return None;
     }
-    let Some(root) = parsed_root(script) else {
-        return false;
-    };
-    let Some(dialect) = shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())
-    else {
-        return false;
-    };
+    let root = parsed_root(script)?;
+    let dialect = shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())?;
     let flagged: Vec<_> = oracle
         .iter()
         .filter(|k| UNKNOWN_INTERPRETER_CODES.contains(&k.code))
@@ -130,7 +136,7 @@ fn added_dialect(
             .iter()
             .any(|k| UNKNOWN_INTERPRETER_CODES.contains(&k.code))
     {
-        return false;
+        return None;
     }
     let refused = upstream_refuses_body(&root);
     // Upstream's verdict fixes which code it can have reported, and where.
@@ -141,20 +147,16 @@ fn added_dialect(
     });
     // A refused body leaves upstream nothing else to say.
     if !consistent || (refused && oracle.len() != flagged.len()) {
-        return false;
+        return None;
     }
-    let Some(runner) = runner else {
-        return false;
-    };
     let floor_name = Dialect::from(dialect.floor()).name();
-    let Ok((comments, _)) = runner.check_one(script, Some(floor_name)) else {
-        return false;
-    };
-    let floor: Vec<_> = crate::oracle_keys(&comments)
-        .into_iter()
-        .filter(|k| k.code != 1103 && shellcheck_rs::dialect_policy::applies(k.code, dialect))
-        .collect();
-    port == floor.as_slice()
+    let (comments, _) = runner?.check_one(script, Some(floor_name)).ok()?;
+    Some(
+        crate::oracle_keys(&comments)
+            .into_iter()
+            .filter(|k| k.code != 1103 && shellcheck_rs::dialect_policy::applies(k.code, dialect))
+            .collect(),
+    )
 }
 
 fn completed_statement_notes(
@@ -376,6 +378,73 @@ fn function_tail_cd(
     })
 }
 
+fn port_parameters(
+    script: &str,
+    shell: Option<&str>,
+) -> Option<shellcheck_rs::analyzer_lib::Parameters> {
+    let dialect = shell.and_then(crate::parse_shell);
+    let parsed = shellcheck_rs::parser::parse_script_with(
+        "-",
+        script,
+        shell.is_some(),
+        dialect.map(Dialect::floor),
+    );
+    Some(shellcheck_rs::analyzer_lib::make_parameters(
+        parsed.root?,
+        parsed.positions,
+        dialect,
+        None,
+    ))
+}
+
+fn without_withheld_traps(
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+) -> Option<Vec<CommentKey>> {
+    if !oracle.iter().any(|k| k.code == 2064 && !port.contains(k)) {
+        return None;
+    }
+    let params = port_parameters(script, shell)?;
+    let withheld = crate::json1_keys(
+        &shellcheck_rs::checks::commands::withheld_trap_warnings(&params),
+        script,
+        "-",
+    )
+    .ok()?;
+    let rest: Vec<_> = oracle
+        .iter()
+        .filter(|k| k.code != 2064 || port.contains(k) || !withheld.contains(k))
+        .cloned()
+        .collect();
+    (rest.len() < oracle.len()).then_some(rest)
+}
+
+fn without_cleanup_traps(
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+) -> Option<Vec<CommentKey>> {
+    if !port.iter().any(|k| k.code == 9002 && !oracle.contains(k)) {
+        return None;
+    }
+    let params = port_parameters(script, shell)?;
+    let reported = crate::json1_keys(
+        &shellcheck_rs::analytics::cleanup_trap_warnings(&params),
+        script,
+        "-",
+    )
+    .ok()?;
+    let rest: Vec<_> = port
+        .iter()
+        .filter(|k| k.code != 9002 || oracle.contains(k) || !reported.contains(k))
+        .cloned()
+        .collect();
+    (rest.len() < port.len()).then_some(rest)
+}
+
 /// The interpreter to check a script against: what `--shell` said, else what the
 /// shebang says, else bash — the dialect ShellCheck itself assumes.
 fn interpreter(script: &str, shell: Option<&str>) -> &'static str {
@@ -423,7 +492,21 @@ fn codes(keys: &[CommentKey]) -> Vec<i64> {
     keys.iter().map(|k| k.code).collect()
 }
 
+const CLASSES: [&Deviation; 8] = [
+    &INTERPRETER_PATH_TYPO,
+    &SIGNAL_ONLY_CLEANUP_TRAP,
+    &STABLE_TRAP_VARIABLES,
+    &ADDED_DIALECT,
+    &COMPLETED_PARSE_NOTES,
+    &UNCLOSED_TEST_QUOTE,
+    &FUNCTION_TAIL_CD,
+    &FALSE_PARSE_ERROR,
+];
+
 /// Is this difference one the port is entitled to?
+///
+/// Returns every class that took part, outermost first, and nothing when no
+/// combination of classes accounts for the whole difference.
 ///
 /// The parse-error class: the oracle rejects the file outright, the port does
 /// not, and the shell being checked agrees with the port that the script parses.
@@ -436,7 +519,37 @@ pub fn sanctioned(
     port: &[CommentKey],
     oracle: &[CommentKey],
     runner: Option<&Oracle>,
-) -> Option<&'static Deviation> {
+) -> Vec<&'static Deviation> {
+    explain(&CLASSES, script, shell, port, oracle, runner).unwrap_or_default()
+}
+
+fn agree_or_explain(
+    classes: &[&'static Deviation],
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+    runner: Option<&Oracle>,
+) -> Option<Vec<&'static Deviation>> {
+    if port == oracle {
+        Some(Vec::new())
+    } else {
+        explain(classes, script, shell, port, oracle, runner)
+    }
+}
+
+fn explain(
+    classes: &[&'static Deviation],
+    script: &str,
+    shell: Option<&str>,
+    port: &[CommentKey],
+    oracle: &[CommentKey],
+    runner: Option<&Oracle>,
+) -> Option<Vec<&'static Deviation>> {
+    let enabled = |d: &Deviation| classes.iter().any(|c| c.id == d.id);
+    let with = |d: &'static Deviation, rest: Option<Vec<&'static Deviation>>| {
+        rest.map(|ids| std::iter::once(d).chain(ids).collect())
+    };
     // SC9001 is a documented extension. Require the exact finding to be
     // reproducible from the shebang alone; unrelated body diagnostics must
     // still agree, or independently satisfy an existing structural sanction.
@@ -444,7 +557,7 @@ pub fn sanctioned(
         .iter()
         .filter(|k| k.code == 9001 && !oracle.contains(k))
         .collect();
-    if !added_paths.is_empty() {
+    if enabled(&INTERPRETER_PATH_TYPO) && !added_paths.is_empty() {
         let header_lines = usize::try_from(added_paths.iter().map(|k| k.end_line).max()?).ok()?;
         let header = format!(
             "{}\n",
@@ -463,22 +576,51 @@ pub fn sanctioned(
             .filter(|k| !added_paths.contains(k))
             .cloned()
             .collect();
-        if remaining == oracle || sanctioned(script, shell, &remaining, oracle, runner).is_some() {
-            return Some(&INTERPRETER_PATH_TYPO);
-        }
+        return with(
+            &INTERPRETER_PATH_TYPO,
+            agree_or_explain(classes, script, shell, &remaining, oracle, runner),
+        );
+    }
+    if enabled(&SIGNAL_ONLY_CLEANUP_TRAP)
+        && let Some(rest) = without_cleanup_traps(script, shell, port, oracle)
+    {
+        return with(
+            &SIGNAL_ONLY_CLEANUP_TRAP,
+            agree_or_explain(classes, script, shell, &rest, oracle, runner),
+        );
+    }
+    if enabled(&STABLE_TRAP_VARIABLES)
+        && let Some(rest) = without_withheld_traps(script, shell, port, oracle)
+    {
+        return with(
+            &STABLE_TRAP_VARIABLES,
+            agree_or_explain(classes, script, shell, port, &rest, runner),
+        );
+    }
+    if enabled(&ADDED_DIALECT)
+        && let Some(floor) = added_dialect(script, shell, port, oracle, runner)
+    {
+        let others: Vec<_> = classes
+            .iter()
+            .copied()
+            .filter(|c| c.id != ADDED_DIALECT.id)
+            .collect();
+        return with(
+            &ADDED_DIALECT,
+            agree_or_explain(&others, script, shell, port, &floor, runner),
+        );
+    }
+    if enabled(&COMPLETED_PARSE_NOTES) && completed_statement_notes(script, shell, port, oracle) {
+        return Some(vec![&COMPLETED_PARSE_NOTES]);
+    }
+    if enabled(&UNCLOSED_TEST_QUOTE) && unclosed_test_quote(script, port, oracle) {
+        return Some(vec![&UNCLOSED_TEST_QUOTE]);
+    }
+    if enabled(&FUNCTION_TAIL_CD) && function_tail_cd(script, shell, port, oracle) {
+        return Some(vec![&FUNCTION_TAIL_CD]);
+    }
+    if !enabled(&FALSE_PARSE_ERROR) {
         return None;
-    }
-    if added_dialect(script, shell, port, oracle, runner) {
-        return Some(&ADDED_DIALECT);
-    }
-    if completed_statement_notes(script, shell, port, oracle) {
-        return Some(&COMPLETED_PARSE_NOTES);
-    }
-    if unclosed_test_quote(script, port, oracle) {
-        return Some(&UNCLOSED_TEST_QUOTE);
-    }
-    if function_tail_cd(script, shell, port, oracle) {
-        return Some(&FUNCTION_TAIL_CD);
     }
     let port_codes = codes(port);
     let oracle_rejected = codes(oracle).contains(&1072)
@@ -490,7 +632,7 @@ pub fn sanctioned(
         return None;
     }
     match shell_accepts(script, interpreter(script, shell)) {
-        Some(true) => Some(&FALSE_PARSE_ERROR),
+        Some(true) => Some(vec![&FALSE_PARSE_ERROR]),
         // Either the shell rejects it too (so the oracle was right), or there is
         // no shell to ask (so nothing is established).
         _ => None,
@@ -500,6 +642,10 @@ pub fn sanctioned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ids(deviations: &[&Deviation]) -> Vec<&'static str> {
+        deviations.iter().map(|d| d.id).collect()
+    }
 
     fn key(code: i64) -> CommentKey {
         CommentKey {
@@ -566,19 +712,19 @@ mod tests {
         let port = crate::port_keys(script, "-", Some("bash")).expect("port");
         let oracle: Vec<_> = port.iter().filter(|k| k.code != 9001).cloned().collect();
         assert_eq!(
-            sanctioned(script, Some("bash"), &port, &oracle, None).map(|d| d.id),
-            Some("interpreter-path-typo")
+            ids(&sanctioned(script, Some("bash"), &port, &oracle, None)),
+            ["interpreter-path-typo"]
         );
         let mut unrelated = port.clone();
         unrelated.push(key(9999));
-        assert!(sanctioned(script, Some("bash"), &unrelated, &oracle, None).is_none());
+        assert!(sanctioned(script, Some("bash"), &unrelated, &oracle, None).is_empty());
         let mut shifted = port;
         for k in &mut shifted {
             if k.code == 9001 {
                 k.line += 1;
             }
         }
-        assert!(sanctioned(script, Some("bash"), &shifted, &oracle, None).is_none());
+        assert!(sanctioned(script, Some("bash"), &shifted, &oracle, None).is_empty());
     }
 
     #[test]
@@ -649,11 +795,11 @@ mod tests {
             return;
         };
         assert_eq!(
-            sanctioned(script, None, &port, &oracle, Some(&runner)).map(|d| d.id),
-            Some("added-dialect")
+            ids(&sanctioned(script, None, &port, &oracle, Some(&runner))),
+            ["added-dialect"]
         );
-        assert!(sanctioned(script, None, &port, &oracle, None).is_none());
-        assert!(sanctioned(script, Some("bash"), &port, &oracle, Some(&runner)).is_none());
+        assert!(sanctioned(script, None, &port, &oracle, None).is_empty());
+        assert!(sanctioned(script, Some("bash"), &port, &oracle, Some(&runner)).is_empty());
     }
 
     #[test]
@@ -674,15 +820,15 @@ mod tests {
             "{oracle:?}"
         );
         assert_eq!(
-            sanctioned(script, None, &port, &oracle, Some(&runner)).map(|d| d.id),
-            Some("added-dialect")
+            ids(&sanctioned(script, None, &port, &oracle, Some(&runner))),
+            ["added-dialect"]
         );
         let (comments, _) = runner.check_one(script, Some("bash")).expect("oracle runs");
         let floor = crate::oracle_keys(&comments);
         assert!(floor.iter().any(|k| k.code == 2086), "{floor:?}");
         let mut extra = port;
         extra.push(key(9999));
-        assert!(sanctioned(script, None, &extra, &oracle, Some(&runner)).is_none());
+        assert!(sanctioned(script, None, &extra, &oracle, Some(&runner)).is_empty());
         let (comments, _) = runner.check_one(bash, None).expect("oracle runs");
         let bash_oracle = crate::oracle_keys(&comments);
         assert_eq!(bash_oracle, bash_port);
@@ -691,7 +837,7 @@ mod tests {
             .filter(|k| k.code != 2086)
             .cloned()
             .collect();
-        assert!(sanctioned(bash, None, &without, &bash_oracle, Some(&runner)).is_none());
+        assert!(sanctioned(bash, None, &without, &bash_oracle, Some(&runner)).is_empty());
     }
 
     #[test]
@@ -706,8 +852,8 @@ mod tests {
         let oracle = crate::oracle_keys(&comments);
         assert!(oracle.iter().any(|k| k.code == 1103), "{oracle:?}");
         assert_eq!(
-            sanctioned(script, None, &port, &oracle, Some(&runner)).map(|d| d.id),
-            Some("added-dialect")
+            ids(&sanctioned(script, None, &port, &oracle, Some(&runner))),
+            ["added-dialect"]
         );
     }
 
@@ -718,16 +864,16 @@ mod tests {
         let runner = crate::oracle::test_oracle();
         let mut extra = vec![unsupported(1071, SC1071)];
         extra.push(key(9999));
-        assert!(sanctioned(script, None, &port, &extra, runner.as_ref()).is_none());
+        assert!(sanctioned(script, None, &port, &extra, runner.as_ref()).is_empty());
         let shifted = [CommentKey {
             column: 2,
             ..unsupported(1071, SC1071)
         }];
-        assert!(sanctioned(script, None, &port, &shifted, runner.as_ref()).is_none());
+        assert!(sanctioned(script, None, &port, &shifted, runner.as_ref()).is_empty());
         let mut unrelated = port;
         unrelated.push(key(9999));
         let oracle = [unsupported(1071, SC1071)];
-        assert!(sanctioned(script, None, &unrelated, &oracle, runner.as_ref()).is_none());
+        assert!(sanctioned(script, None, &unrelated, &oracle, runner.as_ref()).is_empty());
     }
 
     #[test]
@@ -739,8 +885,8 @@ mod tests {
             return;
         };
         assert_eq!(
-            sanctioned(script, None, &port, &[], Some(&runner)).map(|d| d.id),
-            Some("added-dialect")
+            ids(&sanctioned(script, None, &port, &[], Some(&runner))),
+            ["added-dialect"]
         );
     }
 
@@ -749,11 +895,11 @@ mod tests {
         let runner = crate::oracle::test_oracle();
         let zsh = "#!/bin/zsh\necho $x\n";
         let port = crate::port_keys(zsh, "-", None).expect("port");
-        assert!(sanctioned(zsh, None, &port, &[key(1008)], runner.as_ref()).is_none());
-        assert!(sanctioned(zsh, None, &port, &[key(1103)], runner.as_ref()).is_none());
+        assert!(sanctioned(zsh, None, &port, &[key(1008)], runner.as_ref()).is_empty());
+        assert!(sanctioned(zsh, None, &port, &[key(1103)], runner.as_ref()).is_empty());
         let mksh = "#!/bin/mksh\necho $x\n";
         let port = crate::port_keys(mksh, "-", None).expect("port");
-        assert!(sanctioned(mksh, None, &port, &[key(1071)], runner.as_ref()).is_none());
+        assert!(sanctioned(mksh, None, &port, &[key(1071)], runner.as_ref()).is_empty());
     }
 
     #[test]
@@ -767,8 +913,220 @@ mod tests {
         ] {
             let port = crate::port_keys(script, "-", None).expect("port");
             assert!(
-                sanctioned(script, None, &port, &oracle, runner.as_ref()).is_none(),
+                sanctioned(script, None, &port, &oracle, runner.as_ref()).is_empty(),
                 "{script}"
+            );
+        }
+    }
+
+    const SC2064: &str =
+        "Use single quotes, otherwise this expands now rather than when signalled.";
+
+    const STABLE_TRAP: &str = "ENGINE=podman; trap \"$ENGINE rm -f x\" EXIT\n";
+
+    fn sc2064(column: i64, end_column: i64) -> CommentKey {
+        CommentKey {
+            column,
+            end_column,
+            level: "warning".to_string(),
+            message: SC2064.to_string(),
+            ..key(2064)
+        }
+    }
+
+    #[test]
+    fn a_stable_trap_variable_the_oracle_flags_is_sanctioned() {
+        let port = crate::port_keys(STABLE_TRAP, "-", None).expect("port");
+        assert!(port.iter().all(|k| k.code != 2064), "{port:?}");
+        let mut oracle = port.clone();
+        oracle.push(sc2064(22, 29));
+        assert_eq!(
+            ids(&sanctioned(STABLE_TRAP, None, &port, &oracle, None)),
+            ["stable-trap-variables"]
+        );
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(STABLE_TRAP, None).expect("oracle runs");
+        assert_eq!(crate::oracle_keys(&comments), oracle);
+    }
+
+    #[test]
+    fn stable_trap_variables_require_the_withheld_span_and_nothing_else() {
+        let port = crate::port_keys(STABLE_TRAP, "-", None).expect("port");
+        let mut shifted = port.clone();
+        shifted.push(sc2064(23, 30));
+        assert!(sanctioned(STABLE_TRAP, None, &port, &shifted, None).is_empty());
+        let mut oracle = port.clone();
+        oracle.push(sc2064(22, 29));
+        let mut unrelated = oracle.clone();
+        unrelated.push(key(9999));
+        assert!(sanctioned(STABLE_TRAP, None, &port, &unrelated, None).is_empty());
+        let mut extra = port;
+        extra.push(key(9999));
+        assert!(sanctioned(STABLE_TRAP, None, &extra, &oracle, None).is_empty());
+    }
+
+    #[test]
+    fn a_trap_variable_written_afterwards_is_not_sanctioned() {
+        let script = "trap \"$x\" INT; x=1\n";
+        let port = crate::port_keys(script, "-", None).expect("port");
+        assert!(port.contains(&sc2064(7, 9)), "{port:?}");
+        let without: Vec<_> = port.iter().filter(|k| k.code != 2064).cloned().collect();
+        assert!(sanctioned(script, None, &without, &port, None).is_empty());
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(script, None).expect("oracle runs");
+        assert_eq!(crate::oracle_keys(&comments), port);
+    }
+
+    #[test]
+    fn stable_trap_variables_fail_closed_when_the_script_does_not_parse() {
+        let script = "ENGINE=podman; trap \"$ENGINE rm -f x\" EXIT\nif\n";
+        assert!(
+            shellcheck_rs::parser::parse_script_with("-", script, false, None)
+                .root
+                .is_none()
+        );
+        let port = crate::port_keys(script, "-", None).expect("port");
+        let mut oracle = port.clone();
+        oracle.push(sc2064(22, 29));
+        assert!(without_withheld_traps(script, None, &port, &oracle).is_none());
+        assert!(sanctioned(script, None, &port, &oracle, None).is_empty());
+    }
+
+    const SC9002: &str = "This cleanup trap only handles signals. Consider EXIT to also clean up after errors, end of input, and normal exit.";
+
+    const CLEANUP_TRAP: &str = "trap 'cleanup' INT\n";
+
+    fn sc9002(column: i64, end_column: i64) -> CommentKey {
+        CommentKey {
+            column,
+            end_column,
+            level: "warning".to_string(),
+            message: SC9002.to_string(),
+            ..key(9002)
+        }
+    }
+
+    #[test]
+    fn a_signal_only_cleanup_trap_the_oracle_ignores_is_sanctioned() {
+        let port = crate::port_keys(CLEANUP_TRAP, "-", None).expect("port");
+        assert!(port.contains(&sc9002(1, 19)), "{port:?}");
+        let oracle: Vec<_> = port.iter().filter(|k| k.code != 9002).cloned().collect();
+        assert_eq!(
+            ids(&sanctioned(CLEANUP_TRAP, None, &port, &oracle, None)),
+            ["signal-only-cleanup-trap"]
+        );
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(CLEANUP_TRAP, None).expect("oracle runs");
+        assert_eq!(crate::oracle_keys(&comments), oracle);
+    }
+
+    #[test]
+    fn signal_only_cleanup_traps_require_the_reported_span_and_nothing_else() {
+        let port = crate::port_keys(CLEANUP_TRAP, "-", None).expect("port");
+        let oracle: Vec<_> = port.iter().filter(|k| k.code != 9002).cloned().collect();
+        let mut shifted = port.clone();
+        shifted
+            .iter_mut()
+            .filter(|k| k.code == 9002)
+            .for_each(|k| k.column += 1);
+        assert!(sanctioned(CLEANUP_TRAP, None, &shifted, &oracle, None).is_empty());
+        let mut unrelated = port.clone();
+        unrelated.push(key(9999));
+        assert!(sanctioned(CLEANUP_TRAP, None, &unrelated, &oracle, None).is_empty());
+        let mut missing = oracle;
+        missing.push(key(9999));
+        assert!(sanctioned(CLEANUP_TRAP, None, &port, &missing, None).is_empty());
+    }
+
+    #[test]
+    fn a_signal_only_cleanup_trap_fails_closed_when_the_script_does_not_parse() {
+        let script = "trap 'cleanup' INT\nif\n";
+        let port = crate::port_keys(script, "-", None).expect("port");
+        let mut added = port.clone();
+        added.push(sc9002(1, 19));
+        assert!(without_cleanup_traps(script, None, &added, &port).is_none());
+        assert!(sanctioned(script, None, &added, &port, None).is_empty());
+    }
+
+    #[test]
+    fn a_stable_signal_cleanup_trap_needs_both_trap_classes() {
+        let script = "ENGINE=podman; trap \"$ENGINE rm -f x\" INT\n";
+        let port = crate::port_keys(script, "-", None).expect("port");
+        assert!(port.contains(&sc9002(16, 42)), "{port:?}");
+        assert!(port.iter().all(|k| k.code != 2064), "{port:?}");
+        let mut oracle: Vec<_> = port.iter().filter(|k| k.code != 9002).cloned().collect();
+        oracle.push(sc2064(22, 29));
+        assert_eq!(
+            ids(&sanctioned(script, None, &port, &oracle, None)),
+            ["signal-only-cleanup-trap", "stable-trap-variables"]
+        );
+        for excluded in [&SIGNAL_ONLY_CLEANUP_TRAP, &STABLE_TRAP_VARIABLES] {
+            let classes = without(&[excluded]);
+            assert!(
+                explain(&classes, script, None, &port, &oracle, None).is_none(),
+                "{}",
+                excluded.id
+            );
+        }
+        let mut shifted = oracle.clone();
+        shifted
+            .iter_mut()
+            .filter(|k| k.code == 2064)
+            .for_each(|k| k.column += 1);
+        assert!(sanctioned(script, None, &port, &shifted, None).is_empty());
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(script, None).expect("oracle runs");
+        assert_eq!(crate::oracle_keys(&comments), oracle);
+    }
+
+    fn without(excluded: &[&Deviation]) -> Vec<&'static Deviation> {
+        CLASSES
+            .iter()
+            .copied()
+            .filter(|c| excluded.iter().all(|e| e.id != c.id))
+            .collect()
+    }
+
+    #[test]
+    fn a_stable_signal_cleanup_trap_in_zsh_needs_all_three_classes() {
+        let script = "#!/bin/zsh\nENGINE=podman; trap \"$ENGINE rm -f x\" INT\n";
+        let port = crate::port_keys(script, "-", None).expect("port");
+        let Some(runner) = crate::oracle::test_oracle() else {
+            return;
+        };
+        let (comments, _) = runner.check_one(script, None).expect("oracle runs");
+        let oracle = crate::oracle_keys(&comments);
+        assert_eq!(
+            ids(&sanctioned(script, None, &port, &oracle, Some(&runner))),
+            [
+                "signal-only-cleanup-trap",
+                "added-dialect",
+                "stable-trap-variables"
+            ]
+        );
+        let three = [
+            &SIGNAL_ONLY_CLEANUP_TRAP,
+            &ADDED_DIALECT,
+            &STABLE_TRAP_VARIABLES,
+        ];
+        for mask in 1..8 {
+            let excluded: Vec<_> = (0..3)
+                .filter(|i| mask & (1 << i) != 0)
+                .map(|i| three[i])
+                .collect();
+            let classes = without(&excluded);
+            assert!(
+                explain(&classes, script, None, &port, &oracle, Some(&runner)).is_none(),
+                "{:?}",
+                ids(&excluded)
             );
         }
     }
@@ -784,29 +1142,41 @@ mod tests {
     #[test]
     fn a_script_bash_accepts_and_the_oracle_rejects_is_sanctioned() {
         let oracle = [key(1072)];
-        assert!(sanctioned("! # c", Some("bash"), &[], &oracle, None).is_some());
+        assert_eq!(
+            ids(&sanctioned("! # c", Some("bash"), &[], &oracle, None)),
+            ["upstream-false-parse-error"]
+        );
     }
 
     #[test]
     fn a_problem_both_tools_report_does_not_block_the_sanction() {
         let oracle = [key(1035), key(1072)];
-        assert!(sanctioned("!;true", Some("bash"), &[key(1035)], &oracle, None).is_some());
-        assert!(sanctioned("!;true", Some("bash"), &[], &oracle, None).is_none());
+        assert_eq!(
+            ids(&sanctioned(
+                "!;true",
+                Some("bash"),
+                &[key(1035)],
+                &oracle,
+                None
+            )),
+            ["upstream-false-parse-error"]
+        );
+        assert!(sanctioned("!;true", Some("bash"), &[], &oracle, None).is_empty());
     }
 
     #[test]
     fn a_script_the_shell_also_rejects_is_not_sanctioned() {
         let oracle = [key(1073), key(1072)];
-        assert!(sanctioned("if", Some("bash"), &[], &oracle, None).is_none());
+        assert!(sanctioned("if", Some("bash"), &[], &oracle, None).is_empty());
         // dash rejects `! # c`, so for a POSIX target the oracle is right.
-        assert!(sanctioned("! # c", Some("dash"), &[], &oracle, None).is_none());
+        assert!(sanctioned("! # c", Some("dash"), &[], &oracle, None).is_empty());
     }
 
     #[test]
     fn an_ordinary_difference_is_never_sanctioned() {
         // Same script, but the disagreement is about an analysis code rather
         // than about whether the file parses at all.
-        assert!(sanctioned("echo $1", Some("bash"), &[key(2086)], &[], None).is_none());
-        assert!(sanctioned("! # c", Some("bash"), &[key(1072)], &[key(1072)], None).is_none());
+        assert!(sanctioned("echo $1", Some("bash"), &[key(2086)], &[], None).is_empty());
+        assert!(sanctioned("! # c", Some("bash"), &[key(1072)], &[key(1072)], None).is_empty());
     }
 }
