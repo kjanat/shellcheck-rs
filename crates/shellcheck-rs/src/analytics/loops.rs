@@ -651,6 +651,113 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
+    fn prop_checkForInLs() {
+        assert!(emits(
+            check_for_in_ls,
+            "for f in $(ls *.mp3); do mplayer \"$f\"; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkForInLs2() {
+        assert!(emits(
+            check_for_in_ls,
+            "for f in `ls *.mp3`; do mplayer \"$f\"; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkForInLs3() {
+        assert!(emits(
+            check_for_in_ls,
+            "for f in `find / -name '*.mp3'`; do mplayer \"$f\"; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope1() {
+        assert!(emits(check_loop_keyword_scope, "continue 2"));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope2() {
+        assert!(emits(
+            check_loop_keyword_scope,
+            "for f; do ( break; ); done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope3() {
+        assert!(emits(
+            check_loop_keyword_scope,
+            "if true; then continue; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope4() {
+        assert!(!emits(
+            check_loop_keyword_scope,
+            "while true; do break; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope5() {
+        assert!(emits(check_loop_keyword_scope, "if true; then break; fi"));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope6() {
+        assert!(emits(
+            check_loop_keyword_scope,
+            "while true; do true | { break; }; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkLoopKeywordScope7() {
+        assert!(!emits(
+            check_loop_keyword_scope,
+            "#!/bin/ksh\nwhile true; do true | { break; }; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR1() {
+        assert!(emits(check_read_without_r, "read -a foo"));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR2() {
+        assert!(!emits(check_read_without_r, "read -ar foo"));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR3() {
+        assert!(!emits(check_read_without_r, "read -t 0"));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR4() {
+        assert!(!emits(
+            check_read_without_r,
+            "read -t 0 && read --d '' -r bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR5() {
+        assert!(!emits(check_read_without_r, "read -t 0 foo < file.txt"));
+    }
+
+    #[test]
+    fn prop_checkReadWithoutR6() {
+        assert!(!emits(check_read_without_r, "read -u 3 -t 0"));
+    }
+
+    #[test]
     fn prop_checkDefaultCase1() {
         assert!(emits(check_default_case, "case $1 in a) true ;; esac"));
     }
@@ -947,14 +1054,6 @@ mod tests {
             check_loop_keyword_scope,
             "foo() { break; }",
             2104
-        ));
-    }
-
-    #[test]
-    fn prop_lks_in_loop() {
-        assert!(!emits(
-            check_loop_keyword_scope,
-            "while true; do break; done"
         ));
     }
 

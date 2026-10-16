@@ -1585,3 +1585,381 @@ impl Parser {
         cmds
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::super::tests::{is_not_ok, is_ok, is_warning};
+    use super::*;
+
+    #[test]
+    fn prop_readNormalWord() {
+        assert!(is_ok(
+            "'foo'\"bar\"{1..3}baz$(lol)",
+            Parser::read_normal_word
+        ));
+    }
+    #[test]
+    fn prop_readNormalWord2() {
+        assert!(is_ok("foo**(foo)!!!(@@(bar))", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord3() {
+        assert!(is_ok("foo#", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord4() {
+        assert!(is_ok("$\"foo\"$'foo\nbar'", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord5() {
+        assert!(is_warning("${foo}}", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord6() {
+        assert!(is_ok("foo/{}", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord7() {
+        assert!(is_ok("foo\\\nbar", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readNormalWord10() {
+        assert!(is_warning(
+            "\u{201C}hello\u{201D}",
+            Parser::read_normal_word
+        ));
+    }
+    #[test]
+    fn prop_readNormalWord11() {
+        assert!(is_warning(
+            "\u{2018}hello\u{2019}",
+            Parser::read_normal_word
+        ));
+    }
+    #[test]
+    fn prop_readNormalWord12() {
+        assert!(is_warning("hello\u{2018}", Parser::read_normal_word));
+    }
+
+    #[test]
+    fn prop_readProcSub1() {
+        assert!(is_ok("<(echo test | wc -l)", Parser::read_proc_sub));
+    }
+    #[test]
+    fn prop_readProcSub2() {
+        assert!(is_ok("<(  if true; then true; fi )", Parser::read_proc_sub));
+    }
+    #[test]
+    fn prop_readProcSub3() {
+        assert!(is_ok("<( # nothing here \n)", Parser::read_proc_sub));
+    }
+
+    #[test]
+    fn prop_readSingleQuoted() {
+        assert!(is_ok("'foo bar'", Parser::read_single_quoted));
+    }
+    #[test]
+    fn prop_readSingleQuoted2() {
+        assert!(is_warning("'foo bar\\'", Parser::read_single_quoted));
+    }
+    #[test]
+    fn prop_readSingleQuoted4() {
+        assert!(is_warning("'it's", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readSingleQuoted7() {
+        assert!(is_ok("'foo\u{201C}bar'", Parser::read_single_quoted));
+    }
+    #[test]
+    fn prop_readSingleQuoted8() {
+        assert!(is_warning("'foo\u{2018}bar'", Parser::read_single_quoted));
+    }
+
+    #[test]
+    fn prop_readBackTicked() {
+        assert!(is_ok("`ls *.mp3`", |p| p.read_backticked(false)));
+    }
+    #[test]
+    fn prop_readBackTicked2() {
+        assert!(is_ok("`grep \"\\\"\"`", |p| p.read_backticked(false)));
+    }
+    #[test]
+    fn prop_readBackTicked3() {
+        assert!(is_warning("´grep \"\\\"\"´", |p| p.read_backticked(false)));
+    }
+
+    #[test]
+    fn prop_readDoubleQuoted() {
+        assert!(is_ok("\"Hello $FOO\"", Parser::read_double_quoted));
+    }
+    #[test]
+    fn prop_readDoubleQuoted2() {
+        assert!(is_ok("\"$'\"", Parser::read_double_quoted));
+    }
+    #[test]
+    fn prop_readDoubleQuoted3() {
+        assert!(is_ok(
+            "\"\u{2018}hello\u{2019}\"",
+            Parser::read_double_quoted
+        ));
+    }
+    #[test]
+    fn prop_readDoubleQuoted8() {
+        assert!(is_warning(
+            "\"\u{201C}hello\u{201D}\"",
+            Parser::read_double_quoted
+        ));
+    }
+    #[test]
+    fn prop_readDoubleQuoted10() {
+        assert!(is_ok("\"foo\\\\n\"", Parser::read_double_quoted));
+    }
+
+    #[test]
+    fn prop_readGlob1() {
+        assert!(is_ok("*", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob2() {
+        assert!(is_ok("[^0-9]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob3() {
+        assert!(is_ok("[a[:alpha:]]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob4() {
+        assert!(is_ok("[[:alnum:]]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob5() {
+        assert!(is_ok("[^[:alpha:]1-9]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob6() {
+        assert!(is_ok("[\\|]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob7() {
+        assert!(is_ok("[^[]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob8() {
+        assert!(is_ok("[*?]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob9() {
+        assert!(is_ok("[!]^]", Parser::read_glob));
+    }
+    #[test]
+    fn prop_readGlob10() {
+        assert!(is_ok("[]]", Parser::read_glob));
+    }
+
+    #[test]
+    fn prop_readExtglob1() {
+        assert!(is_ok("!(*.mp3)", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob2() {
+        assert!(is_ok("!(*.mp3|*.wmv)", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob4() {
+        assert!(is_ok("+(foo \\) bar)", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob5() {
+        assert!(is_ok("+(!(foo *(bar)))", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob6() {
+        assert!(is_ok("*(((||))|())", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob7() {
+        assert!(is_ok("*(<>)", Parser::read_extglob));
+    }
+    #[test]
+    fn prop_readExtglob8() {
+        assert!(is_ok("@(|*())", Parser::read_extglob));
+    }
+
+    #[test]
+    fn prop_readBraced() {
+        assert!(is_ok("{1..4}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced2() {
+        assert!(is_ok("{foo,bar,\"baz lol\"}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced3() {
+        assert!(is_ok("{1,\\},2}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced4() {
+        assert!(is_ok("{1,{2,3}}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced5() {
+        assert!(is_ok("{JP{,E}G,jp{,e}g}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced6() {
+        assert!(is_ok("{foo,bar,$((${var}))}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced7() {
+        assert!(is_not_ok("{}", Parser::read_braced));
+    }
+    #[test]
+    fn prop_readBraced8() {
+        assert!(is_not_ok("{foo}", Parser::read_braced));
+    }
+
+    #[test]
+    fn prop_readDollarExpression1() {
+        assert!(is_ok("$(((1) && 3))", Parser::read_dollar_exp));
+    }
+    #[test]
+    fn prop_readDollarExpression2() {
+        assert!(is_warning("$(((1)) && 3)", Parser::read_dollar_exp));
+    }
+    #[test]
+    fn prop_readDollarExpression3() {
+        assert!(is_warning("$((\"$@\" &); foo;)", Parser::read_dollar_exp));
+    }
+
+    #[test]
+    fn prop_readDollarSingleQuote() {
+        assert!(is_ok("$'foo\\'lol'", Parser::read_dollar_single_quote));
+    }
+
+    #[test]
+    fn prop_readDollarDoubleQuote() {
+        assert!(is_ok("$\"hello\"", Parser::read_dollar_double_quote));
+    }
+
+    #[test]
+    fn prop_readDollarArithmetic() {
+        assert!(is_ok("$(( 3 * 4 +5))", Parser::read_dollar_arithmetic));
+    }
+    #[test]
+    fn prop_readDollarArithmetic2() {
+        assert!(is_ok(
+            "$(((3*4)+(1*2+(3-1))))",
+            Parser::read_dollar_arithmetic
+        ));
+    }
+
+    #[test]
+    fn prop_readDollarBraceCommandExpansion1() {
+        assert!(is_ok(
+            "${ ls; }",
+            Parser::read_dollar_brace_command_expansion
+        ));
+    }
+    #[test]
+    fn prop_readDollarBraceCommandExpansion2() {
+        assert!(is_ok(
+            "${\nls\n}",
+            Parser::read_dollar_brace_command_expansion
+        ));
+    }
+    #[test]
+    fn prop_readDollarBraceCommandExpansion3() {
+        assert!(is_ok(
+            "${|  REPLY=42; }",
+            Parser::read_dollar_brace_command_expansion
+        ));
+    }
+
+    #[test]
+    fn prop_readDollarBraced1() {
+        assert!(is_ok("${foo//bar/baz}", Parser::read_dollar_braced));
+    }
+    #[test]
+    fn prop_readDollarBraced2() {
+        assert!(is_ok("${foo/'{cow}'}", Parser::read_dollar_braced));
+    }
+    #[test]
+    fn prop_readDollarBraced3() {
+        assert!(is_ok("${foo%%$(echo cow\\})}", Parser::read_dollar_braced));
+    }
+    #[test]
+    fn prop_readDollarBraced4() {
+        assert!(is_ok("${foo#\\}}", Parser::read_dollar_braced));
+    }
+
+    #[test]
+    fn prop_readDollarExpansion1() {
+        assert!(is_ok("$(echo foo; ls\n)", Parser::read_dollar_expansion));
+    }
+    #[test]
+    fn prop_readDollarExpansion2() {
+        assert!(is_ok("$(  )", Parser::read_dollar_expansion));
+    }
+    #[test]
+    fn prop_readDollarExpansion3() {
+        assert!(is_ok(
+            "$( command \n#comment \n)",
+            Parser::read_dollar_expansion
+        ));
+    }
+
+    #[test]
+    fn prop_readDollarVariable() {
+        assert!(is_ok("$@", Parser::read_dollar_variable));
+    }
+    #[test]
+    fn prop_readDollarVariable2() {
+        assert!(is_ok("$?!", |p| {
+            p.read_dollar_variable()?;
+            p.bump().ok_or(())
+        }));
+    }
+    #[test]
+    fn prop_readDollarVariable3() {
+        assert!(is_warning("$10", |p| {
+            p.read_dollar_variable()?;
+            p.bump().ok_or(())
+        }));
+    }
+    #[test]
+    fn prop_readDollarVariable4() {
+        assert!(is_warning("$arr[@]", |p| {
+            p.read_dollar_variable()?;
+            p.string("[@]")
+        }));
+    }
+    #[test]
+    fn prop_readDollarVariable5() {
+        assert!(is_warning("$arr[f", |p| {
+            p.read_dollar_variable()?;
+            p.string("[f")
+        }));
+    }
+
+    #[test]
+    fn prop_readDollarLonely1() {
+        assert!(is_warning("\"$\"var", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readDollarLonely2() {
+        assert!(is_warning("\"$\"\"var\"", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readDollarLonely3() {
+        assert!(is_ok("\"$\"$var", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readDollarLonely4() {
+        assert!(is_ok("\"$\"*", Parser::read_normal_word));
+    }
+    #[test]
+    fn prop_readDollarLonely5() {
+        assert!(is_ok("$\"str\"", Parser::read_normal_word));
+    }
+}

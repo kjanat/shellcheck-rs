@@ -1320,36 +1320,136 @@ mod tests {
     }
 
     #[test]
-    fn prop_checkGrepSendsPipefail1_7() {
-        for s in [
-            "set -o pipefail; cat file | grep -q pattern",
-            "set -o pipefail; cat file | grep --quiet pattern",
-            "set -o pipefail; cat file | grep -iq pattern",
-            "set -o pipefail; cmd1 | cmd2 | grep -q pattern",
-            "set -euo pipefail; cmd | grep -q foo",
-            "set -o pipefail; cmd | grep -m 2 foo | cmd2",
-            "set -o pipefail; cmd | grep -L foo | cmd2",
-        ] {
-            assert!(emits(check_grep_sends_pipefail(), s), "{s}");
-        }
+    fn prop_checkGrepSendsPipefail1() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cat file | grep -q pattern"
+        ));
     }
 
     #[test]
-    fn prop_checkGrepSendsPipefailN1_N10() {
-        for s in [
-            "cat file | grep -q pattern",
-            "set -o pipefail; grep -q pattern file",
-            "set -o pipefail; cat file | grep pattern",
-            "set -o pipefail; grep -q pattern | cat",
-            "grep -q pattern file",
-            "set -o pipefail; cmd1 | bash -c 'grep -q pattern file'",
-            "set -o pipefail; cmd1 | grep -e -q",
-            "set -o pipefail; cmd1 | grep -eq pattern",
-            "set -o pipefail; cmd1 | grep --regexp -q",
-            "set -o pipefail; cmd1 | grep -- -q",
-        ] {
-            assert!(!emits(check_grep_sends_pipefail(), s), "{s}");
-        }
+    fn prop_checkGrepSendsPipefail2() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cat file | grep --quiet pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail3() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cat file | grep -iq pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail4() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | cmd2 | grep -q pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail5() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -euo pipefail; cmd | grep -q foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail6() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd | grep -m 2 foo | cmd2"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefail7() {
+        assert!(emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd | grep -L foo | cmd2"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN1() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "cat file | grep -q pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN2() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; grep -q pattern file"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN3() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cat file | grep pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN4() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; grep -q pattern | cat"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN5() {
+        assert!(!emits(check_grep_sends_pipefail(), "grep -q pattern file"));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN6() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | bash -c 'grep -q pattern file'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN7() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | grep -e -q"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN8() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | grep -eq pattern"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN9() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | grep --regexp -q"
+        ));
+    }
+
+    #[test]
+    fn prop_checkGrepSendsPipefailN10() {
+        assert!(!emits(
+            check_grep_sends_pipefail(),
+            "set -o pipefail; cmd1 | grep -- -q"
+        ));
     }
 
     #[test]
@@ -1734,6 +1834,222 @@ mod tests {
     #[test]
     fn prop_checkMvArguments9() {
         assert!(!produces(check_mv_arguments(), "mv \"${!var}\""));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM0() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM1() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -pm 0755 $dir"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM2() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -vpm 0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM3() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -pm 0755 -v a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM4() {
+        assert!(emits(
+            check_mkdir_dash_pm(),
+            "mkdir --parents --mode=0755 a/b"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM5() {
+        assert!(emits(
+            check_mkdir_dash_pm(),
+            "mkdir --parents --mode 0755 a/b"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM6() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -p --mode=0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM7() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir --parents -m 0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM8() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM9() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -m 0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM10() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM11() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir --parents a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM12() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir --mode=0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM13() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir_func -pm 0755 a/b"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM14() {
+        assert!(!emits(
+            check_mkdir_dash_pm(),
+            "mkdir -p -m 0755 singlelevel"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM15() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 ../bin"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM16() {
+        assert!(emits(
+            check_mkdir_dash_pm(),
+            "mkdir -p -m 0755 ../bin/laden"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM17() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 ./bin"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM18() {
+        assert!(emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 ./bin/laden"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM19() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 ./../bin"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM20() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 .././bin"));
+    }
+
+    #[test]
+    fn prop_checkMkdirDashPM21() {
+        assert!(!emits(check_mkdir_dash_pm(), "mkdir -p -m 0755 ../../bin"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm1() {
+        assert!(emits(check_catastrophic_rm(), "rm -r $1/$2"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm2() {
+        assert!(emits(check_catastrophic_rm(), "rm -r /home/$foo"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm3() {
+        assert!(!emits(check_catastrophic_rm(), "rm -r /home/${USER:?}/*"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm4() {
+        assert!(emits(check_catastrophic_rm(), "rm -fr /home/$(whoami)/*"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm5() {
+        assert!(!emits(
+            check_catastrophic_rm(),
+            "rm -r /home/${USER:-thing}/*"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm6() {
+        assert!(emits(
+            check_catastrophic_rm(),
+            "rm --recursive /etc/*$config*"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm8() {
+        assert!(emits(check_catastrophic_rm(), "rm -rf /home"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm10() {
+        assert!(!emits(
+            check_catastrophic_rm(),
+            "rm -r \"${DIR}\"/{.gitignore,.gitattributes,ci}"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm11() {
+        assert!(emits(check_catastrophic_rm(), "rm -r /{bin,sbin}/$exec"));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm12() {
+        assert!(emits(
+            check_catastrophic_rm(),
+            "rm -r /{{usr,},{bin,sbin}}/$exec"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRm13() {
+        assert!(!emits(
+            check_catastrophic_rm(),
+            "rm -r /{{a,b},{c,d}}/$exec"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRmA() {
+        assert!(emits(
+            check_catastrophic_rm(),
+            "rm -rf /usr /lib/nvidia-current/xorg/xorg"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCatastrophicRmB() {
+        assert!(emits(check_catastrophic_rm(), "rm -rf \"$STEAMROOT/\"*"));
+    }
+
+    #[test]
+    fn prop_checkWhich() {
+        assert!(emits(check_which(), "which '.+'"));
+    }
+
+    #[test]
+    fn prop_verifyOptionalExamples() {
+        assert!(emits(check_which(), "which javac"));
+        assert!(!emits(check_which(), "command -v javac"));
     }
 
     // checkArgComparison

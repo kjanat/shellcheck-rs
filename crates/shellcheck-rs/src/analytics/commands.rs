@@ -1091,29 +1091,385 @@ mod tests {
         assert!(emits(check_assign_ate_command, "A=ls -l"));
     }
 
-    // `prop_checkUuoeVar1..9`, plus the two cases a literal backtick in the
-    // arguments used to suppress. `couldBeOptimized` turns nothing down for a
-    // backtick -- only globs, extglobs and brace expansions.
     #[test]
-    fn prop_checkUuoeVar() {
+    fn prop_checkUuoeVar1() {
         assert!(emits(
             check_uuoe_var,
             "for f in $(echo $tmp); do echo lol; done"
         ));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar2() {
         assert!(emits(check_uuoe_var, "date +`echo \"$format\"`"));
-        assert!(!emits(check_uuoe_var, "foo \"$(echo -e '\\r')\""));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar3() {
+        assert!(!emits(check_uuoe_var, "foo \"$(echo -e '\r')\""));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar4() {
         assert!(!emits(check_uuoe_var, "echo $tmp"));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar5() {
         assert!(emits(
             check_uuoe_var,
             "foo \"$(echo \"$(date) value:\" $value)\""
         ));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar6() {
         assert!(!emits(check_uuoe_var, "foo \"$(echo files: *.png)\""));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar7() {
         assert!(!emits(check_uuoe_var, "foo $(echo $(bar))"));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar8() {
         assert!(!emits(check_uuoe_var, "#!/bin/sh\nz=$(echo)"));
+    }
+
+    #[test]
+    fn prop_checkUuoeVar9() {
         assert!(emits(check_uuoe_var, "foo $(echo $(<file))"));
-        // A backtick as data, and one escaped inside the substitution.
+    }
+
+    // `couldBeOptimized` turns nothing down for a backtick -- only globs,
+    // extglobs and brace expansions. A backtick as data, and one escaped
+    // inside the substitution.
+    #[test]
+    fn uuoe_var_reports_backtick_arguments() {
         assert!(emits(check_uuoe_var, "foo \"$(echo '`')\""));
         assert!(emits(check_uuoe_var, "foo \"$(echo \\`bar\\`)\""));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions1() {
+        assert!(emits(check_globs_as_options, "rm *.txt"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions2() {
+        assert!(emits(check_globs_as_options, "ls ??.*"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions3() {
+        assert!(!emits(check_globs_as_options, "rm -- *.txt"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions4() {
+        assert!(!emits(check_globs_as_options, "*.txt"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions5() {
+        assert!(!emits(check_globs_as_options, "echo 'Files:' *.txt"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions6() {
+        assert!(!emits(check_globs_as_options, "printf '%s\\n' *"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions7() {
+        assert!(!emits(check_globs_as_options, "set -f; ls *"));
+    }
+
+    #[test]
+    fn prop_checkGlobsAsOptions8() {
+        assert!(!emits(check_globs_as_options, "set -o noglob\nrm *"));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack1() {
+        assert!(emits(
+            check_cd_and_back,
+            "for f in *; do cd $f; git pull; cd ..; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack2() {
+        assert!(!emits(
+            check_cd_and_back,
+            "for f in *; do cd $f || continue; git pull; cd ..; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack3() {
+        assert!(!emits(
+            check_cd_and_back,
+            "while [[ $PWD != / ]]; do cd ..; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack4() {
+        assert!(emits(check_cd_and_back, "cd $tmp; foo; cd -"));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack5() {
+        assert!(!emits(check_cd_and_back, "cd ..; foo; cd .."));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack6() {
+        assert!(emits(
+            check_cd_and_back,
+            "for dir in */; do cd \"$dir\"; some_cmd; cd ..; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack7() {
+        assert!(!emits(
+            check_cd_and_back,
+            "set -e; for dir in */; do cd \"$dir\"; some_cmd; cd ..; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkCdAndBack8() {
+        assert!(!emits(
+            check_cd_and_back,
+            "cd tmp\nfoo\n# shellcheck disable=SC2103\ncd ..\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd1() {
+        assert!(emits(check_unchecked_cd_pushd_popd, "cd ~/src; rm -r foo"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd2() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "cd ~/src || exit; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd3() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -e; cd ~/src; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd4() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "if cd foo; then rm foo; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd5() {
+        assert!(emits(
+            check_unchecked_cd_pushd_popd,
+            "if true; then cd foo; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd6() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "cd .."));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd7() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "#!/bin/bash -e\ncd foo\nrm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd8() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -o errexit; cd foo; rm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCd9() {
+        assert!(emits(
+            check_unchecked_cd_pushd_popd,
+            "builtin cd ~/src; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd1() {
+        assert!(emits(
+            check_unchecked_cd_pushd_popd,
+            "pushd ~/src; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd2() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "pushd ~/src || exit; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd3() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -e; pushd ~/src; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd4() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "if pushd foo; then rm foo; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd5() {
+        assert!(emits(
+            check_unchecked_cd_pushd_popd,
+            "if true; then pushd foo; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd6() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "pushd .."));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd7() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "#!/bin/bash -e\npushd foo\nrm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd8() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -o errexit; pushd foo; rm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPushd9() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "pushd -n foo"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd1() {
+        assert!(emits(check_unchecked_cd_pushd_popd, "popd; rm -r foo"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd2() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "popd || exit; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd3() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -e; popd; rm -r foo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd4() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "if popd; then rm foo; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd5() {
+        assert!(emits(
+            check_unchecked_cd_pushd_popd,
+            "if true; then popd; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd6() {
+        assert!(emits(check_unchecked_cd_pushd_popd, "popd"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd7() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "#!/bin/bash -e\npopd\nrm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd8() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "set -o errexit; popd; rm bar"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd9() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "popd -n foo"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd10() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "cd ../.."));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd11() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "cd ../.././.."));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd12() {
+        assert!(!emits(check_unchecked_cd_pushd_popd, "cd /"));
+    }
+
+    #[test]
+    fn prop_checkUncheckedPopd13() {
+        assert!(emits(check_unchecked_cd_pushd_popd, "cd ../../.../.."));
+    }
+
+    #[test]
+    fn prop_checkUncheckedCdInFunction1() {
+        assert!(!emits(
+            check_unchecked_cd_pushd_popd,
+            "#!/bin/bash\nfoo() {\n  cd /abc\n}"
+        ));
     }
 
     #[test]
