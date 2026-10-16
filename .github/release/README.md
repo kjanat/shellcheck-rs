@@ -205,10 +205,6 @@ A partial npm publication can be resumed by rerunning its failed job.
 Prerelease versions use the `next` dist-tag; stable versions use `latest`.
 Also enable **Allow npm dist-tag** in each package's trusted publisher settings;
 upstream alias promotion needs this permission in addition to direct publishing.
-The npm CLI has no flag for it. Without it `npm dist-tag add` fails with E403.
-`npm dist-tag` exchanges the OIDC token from npm 11.21.0 and 12.2.0 onwards;
-Node 26 bundles npm 11.20.0, so the alias job installs npm 12.2.0 and an older
-npm fails every `dist-tag add` with E401.
 
 ## Follow an upstream version
 
