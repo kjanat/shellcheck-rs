@@ -258,13 +258,17 @@ impl Claim {
         let snippet_agrees = match self {
             Self::Reproduces => reports,
             Self::Absent => {
+                // Base dialects preserve upstream portability diagnostics even when
+                // a concrete interpreter implements the extension. Only added
+                // dialects use measured absence to filter snippet diagnostics.
+                let upstream = Dialect::from_name(dialect).is_some_and(|d| !d.is_added());
                 // A versionless dialect keeps a code if another version reproduces it.
                 let reproduces = recorded.row.iter().any(|row| {
                     row.code == code
                         && row.outcome == Outcome::Reproduces
                         && Dialect::from_name(&row.shell).is_some_and(|d| d.name() == dialect)
                 });
-                !reports || reproduces
+                !reports || upstream || reproduces
             }
         };
         snippet_agrees && !on_fixed.contains(&code)
@@ -683,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_claim_requires_silence_on_both_scripts() {
+    fn absent_claims_check_added_dialects_and_every_fixed_script() {
         let mut spec = parse_spec();
         spec.code = 2086;
         let snippet = "x=\"a b\"; printf '<%s>' $x\n";
@@ -702,9 +706,13 @@ mod tests {
             )
         };
         assert!(matches!(
-            check("bash", snippet, fixed),
+            check("mksh", snippet, fixed),
             Ok((Outcome::PortMiss, _))
         ));
+        assert_eq!(
+            check("bash", snippet, fixed),
+            Ok((Outcome::Absent, String::new()))
+        );
         assert!(matches!(
             check("bash", fixed, snippet),
             Ok((Outcome::PortMiss, _))
@@ -724,13 +732,82 @@ mod tests {
     }
 
     #[test]
+    fn dash_smoke_absence_preserves_upstream_portability_checks_for_all_seven_specs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        // CI's dash 0.5.13 run matched these fixed observables on both scripts.
+        // That does not invalidate their diagnostics in generic POSIX sh mode.
+        let observations = [
+            (3012, "y\n"),
+            (3026, "y\n"),
+            (3043, "g\n"),
+            (3049, "caught\ndone\n"),
+            (3065, "y\n"),
+            (3066, "y\n"),
+            (3067, "y\n"),
+        ];
+        let codes: Vec<i64> = observations.iter().map(|(code, _)| *code).collect();
+        let specs = spec::load_from(&root.join(crate::validity::SPECS), &codes).unwrap();
+        let matrix = matrix::load_from(&root.join(crate::validity::MATRIX)).unwrap();
+        let recorded = outcomes::load_from(&root.join(crate::validity::OUTCOMES)).unwrap();
+        let dash = matrix.find("dash", "0.5.13").unwrap();
+        assert_eq!(specs.len(), observations.len());
+        let actual: Vec<_> = specs
+            .iter()
+            .zip(observations)
+            .map(|(spec, (code, stdout))| {
+                assert_eq!(spec.code, code);
+                assert_eq!(port_dialect(dash, spec), Some("sh"));
+                let parsed = [run_with(0, "", ""), run_with(0, "", "")];
+                let ran = [run_with(0, stdout, ""), run_with(0, stdout, "")];
+                assert_eq!(parse_verdict(spec, &parsed), None);
+                let result = match verdict(spec, &parsed, &ran) {
+                    Verdict::Claim(claim) => {
+                        assert_eq!(claim, Claim::Absent);
+                        assert!(
+                            matches!(
+                                port_check_claim(
+                                    dash,
+                                    spec,
+                                    &spec.snippet.script,
+                                    &spec.snippet.script,
+                                    claim,
+                                    Baseline::Verify,
+                                    &recorded,
+                                ),
+                                Ok((Outcome::PortMiss, _))
+                            ),
+                            "SC{code}: a diagnostic on the fixed script must still fail"
+                        );
+                        port_check_claim(
+                            dash,
+                            spec,
+                            &spec.snippet.script,
+                            &spec.fixed.script,
+                            claim,
+                            Baseline::Verify,
+                            &recorded,
+                        )
+                    }
+                    other @ Verdict::Outcome(..) => panic!("SC{code}: {other:?}"),
+                };
+                (code, result)
+            })
+            .collect();
+        let expected: Vec<_> = codes
+            .into_iter()
+            .map(|code| (code, Ok((Outcome::Absent, String::new()))))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn recording_shell_evidence_does_not_depend_on_the_previous_rules() {
         let mut spec = parse_spec();
         spec.code = 2086;
         spec.shell = None;
         let snippet = "x=\"a b\"; printf '<%s>' $x\n";
         let fixed = "x=\"a b\"; printf '<%s>' \"$x\"\n";
-        for (shell, claim) in [("bash", Claim::Absent), ("zsh", Claim::Reproduces)] {
+        for (shell, claim) in [("mksh", Claim::Absent), ("zsh", Claim::Reproduces)] {
             assert!(matches!(
                 port_check_claim(
                     &cell(shell, None),

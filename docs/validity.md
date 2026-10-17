@@ -146,9 +146,9 @@ the directory is discarded after the run.
 4. During verification, a recognized port dialect reports `code` on a
    reproducing snippet when the spec applies to that dialect's floor.
 5. During verification, that dialect reports nothing with `code` on the fix.
-   When the shell records `absent`, neither script may report `code`, except
-   that the snippet may retain it if another version of that dialect records
-   `reproduces`.
+   For an added dialect, an `absent` snippet must also be silent unless another
+   version records `reproduces`. Upstream dialects preserve their portability
+   diagnostics: one shell accepting an extension does not make it portable.
 
 ## Outcomes
 
