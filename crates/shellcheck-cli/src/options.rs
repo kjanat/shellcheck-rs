@@ -215,7 +215,7 @@ const OPTS: &[OptDef] = &[
         key: "shell",
         kind: ArgKind::Required,
         arg: "SHELLNAME",
-        help: "Specify dialect (sh, bash, dash, ksh, busybox)",
+        help: "Specify dialect (sh, bash, dash, ksh, busybox, zsh, mksh, oksh, loksh, yash, posh, bosh, osh, brush, freebsd-sh, netbsd-sh)",
     },
     OptDef {
         short: Some('S'),
@@ -1179,6 +1179,19 @@ mod tests {
     #[test]
     fn help_exits_zero() {
         assert_eq!(parse(&args(&["--help"])), Outcome::PrintHelp);
+    }
+
+    #[test]
+    fn shell_help_lists_every_dialect() {
+        let shell = OPTS
+            .iter()
+            .find(|o| o.long == "shell")
+            .expect("--shell exists");
+        let names: Vec<_> = Dialect::ALL.iter().map(|d| d.name()).collect();
+        assert_eq!(
+            shell.help,
+            format!("Specify dialect ({})", names.join(", "))
+        );
     }
 
     #[test]
