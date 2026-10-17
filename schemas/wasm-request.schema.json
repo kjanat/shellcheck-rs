@@ -1,6 +1,45 @@
 {
   "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/wasm-request.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "RequestSeverity": {
+      "description": "The minimum severity a request reports.",
+      "type": "string",
+      "enum": [
+        "style",
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "ShellName": {
+      "type": "string",
+      "enum": [
+        "sh",
+        "bash",
+        "dash",
+        "ksh",
+        "busybox",
+        "zsh",
+        "mksh",
+        "oksh",
+        "loksh",
+        "yash",
+        "posh",
+        "bosh",
+        "osh",
+        "brush",
+        "freebsd-sh",
+        "netbsd-sh",
+        "bats",
+        "ash",
+        "ksh88",
+        "ksh93",
+        "busybox sh",
+        "busybox ash"
+      ]
+    }
+  },
   "title": "shellcheck-wasm request",
   "description": "The JSON request that `check_json` analyzes.",
   "type": "object",
@@ -68,19 +107,25 @@
       "type": "string"
     },
     "severity": {
-      "description": "The minimum severity: `error`, `warning`, `info` or `style`.",
-      "default": null,
-      "type": [
-        "null",
-        "string"
+      "description": "The minimum severity, `style` when unset.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RequestSeverity"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "shell": {
       "description": "The dialect to check as, by shell name. Unset, the shebang or file name decides.",
-      "default": null,
-      "type": [
-        "null",
-        "string"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShellName"
+        },
+        {
+          "type": "null"
+        }
       ]
     }
   },

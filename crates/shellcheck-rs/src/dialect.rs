@@ -61,6 +61,33 @@ impl Dialect {
         Self::NetbsdSh,
     ];
 
+    /// Every name [`Dialect::from_name`] accepts: each [`Dialect::name`], then
+    /// upstream's aliases.
+    pub const NAMES: [&'static str; 22] = [
+        "sh",
+        "bash",
+        "dash",
+        "ksh",
+        "busybox",
+        "zsh",
+        "mksh",
+        "oksh",
+        "loksh",
+        "yash",
+        "posh",
+        "bosh",
+        "osh",
+        "brush",
+        "freebsd-sh",
+        "netbsd-sh",
+        "bats",
+        "ash",
+        "ksh88",
+        "ksh93",
+        "busybox sh",
+        "busybox ash",
+    ];
+
     /// The upstream shell whose checks run for this dialect.
     #[must_use]
     pub const fn floor(self) -> Shell {
@@ -223,6 +250,23 @@ mod tests {
             crate::data::shell_for_executable("oksh"),
             Some(Dialect::Oksh.floor())
         );
+    }
+
+    #[test]
+    fn names_lists_every_accepted_name() {
+        for name in Dialect::NAMES {
+            assert!(Dialect::from_name(name).is_some(), "{name}");
+        }
+        for dialect in Dialect::ALL {
+            assert!(
+                Dialect::NAMES.contains(&dialect.name()),
+                "{}",
+                dialect.name()
+            );
+        }
+        for name in ["bats", "ash", "ksh88", "ksh93", "busybox sh", "busybox ash"] {
+            assert!(crate::data::shell_for_executable(name).is_some(), "{name}");
+        }
     }
 
     #[test]
