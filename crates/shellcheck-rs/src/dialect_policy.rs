@@ -1,6 +1,8 @@
 //! Which codes an added dialect keeps, decided by what the validity matrix
 //! recorded for it in `dialect_rules.rs`.
 
+use crate::ast::{InnerToken, Token};
+use crate::ast_lib::oversimplify;
 use crate::dialect::Dialect;
 use crate::dialect_rules::RULES;
 
@@ -34,11 +36,53 @@ pub struct Rule {
     pub outcome: Outcome,
 }
 
-/// Whether `code` applies to `dialect`. A `Reproduces` row keeps the code, an
-/// `Absent` row drops it, and `Reproduces` wins.
-#[must_use]
-pub fn applies(code: i64, dialect: Dialect) -> bool {
-    applies_by(RULES, code, dialect)
+/// The codes one script keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Policy {
+    /// Every code of the floor dialect.
+    Floor,
+    /// The codes the matrix recorded for an added dialect under its default options.
+    Measured(Dialect),
+}
+
+impl Policy {
+    /// `Measured` for an added dialect whose script keeps the default options.
+    #[must_use]
+    pub fn of(dialect: Dialect, root: &Token) -> Self {
+        if dialect.is_added() && keeps_default_options(root) {
+            Self::Measured(dialect)
+        } else {
+            Self::Floor
+        }
+    }
+
+    /// Whether the script keeps `code`.
+    #[must_use]
+    pub fn keeps(self, code: i64) -> bool {
+        match self {
+            Self::Floor => true,
+            Self::Measured(dialect) => applies_by(RULES, code, dialect),
+        }
+    }
+}
+
+fn keeps_default_options(root: &Token) -> bool {
+    let mut keeps = true;
+    root.visit_preorder(&mut |t| {
+        if matches!(&*t.inner, InnerToken::T_SimpleCommand { .. }) && sets_options(&oversimplify(t))
+        {
+            keeps = false;
+        }
+    });
+    keeps
+}
+
+fn sets_options(words: &[String]) -> bool {
+    match words.split_first() {
+        Some((name, _)) if matches!(name.as_str(), "setopt" | "unsetopt" | "emulate") => true,
+        Some((name, args)) if name == "set" => args.iter().any(|a| a == "-o" || a == "+o"),
+        _ => false,
+    }
 }
 
 fn applies_by(rules: &[Rule], code: i64, dialect: Dialect) -> bool {
@@ -110,10 +154,48 @@ mod tests {
         }
     }
 
+    fn policy(dialect: Dialect, script: &str) -> Policy {
+        let root = crate::parser::parse_script("-", script)
+            .root
+            .expect("script parses");
+        Policy::of(dialect, &root)
+    }
+
     #[test]
     fn the_recorded_table_drops_sc2086_for_zsh_and_keeps_it_for_bash() {
-        assert!(!applies(2086, Dialect::Zsh));
-        assert!(applies(2086, Dialect::Bash));
-        assert!(applies(2164, Dialect::Zsh));
+        assert!(!policy(Dialect::Zsh, "echo $x\n").keeps(2086));
+        assert!(policy(Dialect::Zsh, "echo $x\n").keeps(2164));
+        assert!(policy(Dialect::Bash, "echo $x\n").keeps(2086));
+    }
+
+    #[test]
+    fn a_script_that_changes_its_options_keeps_the_floor_codes() {
+        for script in [
+            "setopt SH_WORD_SPLIT\necho $x\n",
+            "setopt shwordsplit; echo $x\n",
+            "unsetopt NO_SH_WORD_SPLIT\necho $x\n",
+            "emulate sh\necho $x\n",
+            "set -o shwordsplit\necho $x\n",
+            "set +o shwordsplit\necho $x\n",
+            "f() { setopt localoptions shwordsplit; echo $x; }\n",
+        ] {
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
+            assert!(policy(Dialect::Zsh, script).keeps(2086), "{script:?}");
+        }
+    }
+
+    #[test]
+    fn single_letter_set_flags_keep_the_measured_codes() {
+        for script in [
+            "set -e\necho $x\n",
+            "set -eu\necho $x\n",
+            "echo setopt $x\n",
+        ] {
+            assert_eq!(
+                policy(Dialect::Zsh, script),
+                Policy::Measured(Dialect::Zsh),
+                "{script:?}"
+            );
+        }
     }
 }

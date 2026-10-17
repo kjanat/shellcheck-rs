@@ -184,16 +184,19 @@ missing from `matrix.toml` fails the command. Rows sort by code, dialect name
 and version, so a second run writes the same bytes, and a test compares the
 committed table with what the committed outcomes render.
 
-`crates/shellcheck-rs/src/dialect_policy.rs` reads the table. `applies(code,
-dialect)` is true when the dialect has no row for the code or any version
-records `reproduces`, and false when every weighted row records `absent`.
-`differs`, `unparsable`, `timeout` and `port-miss` rows carry no weight. The
-checker drops the analysis findings whose code does not apply, after analysis
-and alongside the `disable` directives, only when the script is checked as an
-added dialect. Upstream dialects never consult the table, so the snapshot and
-the oracle gate do not move for them. The `added-dialect` deviation class
-expects the port's findings to equal the oracle's run as the floor shell minus
-the codes `applies` drops.
+`crates/shellcheck-rs/src/dialect_policy.rs` reads the table. A dialect keeps
+a code when it has no row for the code or any version records `reproduces`,
+and drops it when every weighted row records `absent`. `differs`,
+`unparsable`, `timeout` and `port-miss` rows carry no weight. Every cell runs
+under its shell's default options. A script that runs `setopt`, `unsetopt`,
+`emulate`, or `set` with `-o` or `+o` keeps every code of its floor.
+`Policy::of(dialect, root)` returns `Measured` for an added dialect whose
+script keeps the default options, else `Floor`. The checker drops the analysis
+findings whose code `Policy::keeps` rejects, after analysis and alongside the
+`disable` directives. Upstream dialects never consult the table, so the
+snapshot and the oracle gate do not move for them. The `added-dialect`
+deviation class expects the port's findings to equal the oracle's run as the
+floor shell minus the codes the policy drops.
 
 A dialect ships when its cells show no `port-miss`: flip `shipped = true` in
 `sources.toml` and the gate treats changes to its cells as fatal.

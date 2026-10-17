@@ -266,9 +266,10 @@ mod tests {
             let checked = port_keys(&script, "-", None).unwrap();
             let floor =
                 port_keys(&script, "-", Some(Dialect::from(dialect.floor()).name())).unwrap();
+            let policy = shellcheck_rs::dialect_policy::Policy::of(dialect, &root);
             let kept: Vec<_> = floor
                 .iter()
-                .filter(|k| shellcheck_rs::dialect_policy::applies(k.code, dialect))
+                .filter(|k| policy.keeps(k.code))
                 .cloned()
                 .collect();
             assert_eq!(checked, kept, "{script:?}");

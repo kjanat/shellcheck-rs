@@ -80,10 +80,10 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
             spec.extended_analysis,
         );
         let analysis = analytics::analyze_with(&params, &optional);
+        let policy = dialect_policy::Policy::of(params.dialect, &params.root);
         for tc in analysis {
             if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced)
-                || (params.dialect.is_added()
-                    && !dialect_policy::applies(tc.comment.code, params.dialect))
+                || !policy.keeps(tc.comment.code)
             {
                 continue;
             }
@@ -1170,6 +1170,18 @@ mod source_tests {
                 }
             ),
             vec![2086]
+        );
+    }
+
+    #[test]
+    fn a_zsh_script_that_enables_word_splitting_keeps_sc2086() {
+        assert_eq!(
+            check("#!/bin/zsh\nsetopt SH_WORD_SPLIT\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            vec![2086]
+        );
+        assert_eq!(
+            check("#!/bin/zsh\nset -e\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            Vec::<i64>::new()
         );
     }
 

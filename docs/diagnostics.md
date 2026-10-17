@@ -120,7 +120,10 @@ is run in the real shell at each pinned version. `cargo validity rules` writes
 them to `crates/shellcheck-rs/src/dialect_rules.rs`, one entry per code,
 dialect, version and outcome. A code applies to a dialect when the table has no
 entry for it, or when any version records `reproduces`; it is dropped when every
-version records `absent`. Other outcomes carry no weight. Upstream dialects
+version records `absent`. Other outcomes carry no weight. The matrix runs each
+shell with its default options. A script that runs `setopt`, `unsetopt`,
+`emulate`, or `set` with `-o` or `+o` keeps every code of its floor. A zsh
+script with `setopt SH_WORD_SPLIT` keeps SC2086. Upstream dialects
 never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
 its shebang still draws SC1071.
 

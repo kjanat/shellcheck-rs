@@ -145,10 +145,11 @@ fn added_dialect(
     }
     let floor_name = Dialect::from(dialect.floor()).name();
     let (comments, _) = runner?.check_one(script, Some(floor_name)).ok()?;
+    let policy = shellcheck_rs::dialect_policy::Policy::of(dialect, &root);
     Some(
         crate::oracle_keys(&comments)
             .into_iter()
-            .filter(|k| k.code != 1103 && shellcheck_rs::dialect_policy::applies(k.code, dialect))
+            .filter(|k| k.code != 1103 && policy.keeps(k.code))
             .collect(),
     )
 }
