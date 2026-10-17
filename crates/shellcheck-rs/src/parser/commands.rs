@@ -3588,9 +3588,10 @@ mod tests {
     }
     #[test]
     fn prop_readScript7() {
-        assert!(is_ok(
-            "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n",
-            read_script
-        ));
+        // PARITY-NOTES "Dialects beyond upstream": the port parses the zsh body as bash.
+        let script = "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n";
+        assert!(is_not_ok(script, read_script));
+        let notes = crate::parser::parse_script("-", script).notes;
+        assert!(notes.iter().any(|n| n.code == 1073), "{notes:?}");
     }
 }
