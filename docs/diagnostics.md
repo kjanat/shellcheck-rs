@@ -123,8 +123,10 @@ entry for it, or when any version records `reproduces`; it is dropped when every
 version records `absent`. Other outcomes carry no weight. The matrix runs each
 shell with its default options. A script that runs `setopt`, `unsetopt`,
 `emulate`, or `set` with an option flag keeps every code of its floor, also
-behind a zsh precommand modifier such as `builtin`. A zsh script with
-`setopt SH_WORD_SPLIT` keeps SC2086. Upstream dialects
+behind a zsh precommand modifier such as `builtin`. So does a script whose
+shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
+`#!/usr/bin/env -S zsh -y`. A zsh script with `setopt SH_WORD_SPLIT` keeps
+SC2086. Upstream dialects
 never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
 its shebang still draws SC1071.
 

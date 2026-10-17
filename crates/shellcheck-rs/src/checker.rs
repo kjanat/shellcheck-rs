@@ -1192,6 +1192,10 @@ mod source_tests {
             vec![2086]
         );
         assert_eq!(
+            check("#!/usr/bin/env -S zsh -y\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            vec![2086]
+        );
+        assert_eq!(
             check("#!/bin/zsh\nset -- a b\nx=\"a b\"; printf '<%s>\\n' $x\n"),
             Vec::<i64>::new()
         );
