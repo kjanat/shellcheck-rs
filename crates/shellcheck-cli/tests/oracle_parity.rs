@@ -2,6 +2,7 @@
 //! `rshellcheck`, and both must print the same stdout and stderr and exit alike.
 
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,7 +11,9 @@ struct Case {
     args: &'static [&'static str],
     stdin: &'static [u8],
     files: &'static [(&'static str, &'static [u8])],
+    #[cfg(unix)]
     unreadable: &'static [&'static str],
+    #[cfg(target_os = "linux")]
     full_stdout: bool,
     /// The port's json1 `sources`: the oracle's document is expected to carry
     /// exactly this list appended.
@@ -25,7 +28,9 @@ const fn script(stdin: &'static [u8]) -> Case {
         args: &["-f", "json1", "-"],
         stdin,
         files: &[],
+        #[cfg(unix)]
         unreadable: &[],
+        #[cfg(target_os = "linux")]
         full_stdout: false,
         sources: &[],
         port_only: &[],
@@ -50,7 +55,9 @@ const fn piped(
         args,
         stdin,
         files,
+        #[cfg(unix)]
         unreadable: &[],
+        #[cfg(target_os = "linux")]
         full_stdout: false,
         sources: &[],
         port_only: &[],
@@ -79,11 +86,14 @@ fn oracle() -> io::Result<PathBuf> {
 }
 
 fn run(binary: &Path, dir: &Path, case: &Case) -> io::Result<Run> {
+    #[cfg(target_os = "linux")]
     let stdout = if case.full_stdout {
         Stdio::from(std::fs::OpenOptions::new().write(true).open("/dev/full")?)
     } else {
         Stdio::piped()
     };
+    #[cfg(not(target_os = "linux"))]
+    let stdout = Stdio::piped();
     let args = case
         .args
         .iter()
@@ -127,11 +137,13 @@ fn assert_parity(name: &str, case: &Case) -> io::Result<()> {
         }
         std::fs::write(path, contents)?;
     }
+    #[cfg(unix)]
     for path in case.unreadable {
         std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o000))?;
     }
     let oracle = run(&oracle()?, &dir, case).map(|run| with_sources(run, case.sources));
     let port = run(Path::new(env!("CARGO_BIN_EXE_rshellcheck")), &dir, case);
+    #[cfg(unix)]
     for path in case.unreadable {
         std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o644))?;
     }
@@ -186,7 +198,8 @@ fn assert_parity_without_port_codes(name: &str, port: &Run, oracle: &Run, expect
 }
 
 macro_rules! parity {
-    ($($name:ident = $case:expr;)*) => {$(
+    ($($(#[$attr:meta])* $name:ident = $case:expr;)*) => {$(
+        $(#[$attr])*
         #[test]
         fn $name() -> io::Result<()> {
             assert_parity(stringify!($name), &$case)
@@ -377,6 +390,7 @@ parity! {
     single_bracket_closed_by_double = script(b"#!/bin/bash\n[ x ]]\n");
     comment_ending_in_a_backslash_after_a_continuation = script(b"#!/bin/sh\necho foo \\\n # this does not continue \\\necho bar\n");
     quoted_literal_with_spaces_in_a_for_loop = script(b"#!/bin/sh\nfor f in \"literal with spaces\"; do echo \"$f\"; done\n");
+    #[cfg(unix)]
     an_unreadable_input_among_others = Case {
         unreadable: &["b.sh"],
         ..files(
@@ -408,6 +422,7 @@ parity! {
         &["-f", "json1", "x.sh"],
         &[(".shellcheckrc", b"shell=sh\nshell=bash\n"), ("x.sh", b"echo $'x'\n")],
     );
+    #[cfg(unix)]
     shellcheckrc_unreadable_stops_the_search = Case {
         unreadable: &["sub/.shellcheckrc"],
         ..files(
@@ -435,7 +450,9 @@ parity! {
         args: &["--shell=bash", "-f", "json1", "-"],
         ..script(b"#!/usr/bin/foo\necho $1\n")
     };
+    #[cfg(target_os = "linux")]
     output_write_failure = Case { full_stdout: true, ..script(b"#!/bin/sh\necho $1\n") };
+    #[cfg(target_os = "linux")]
     output_write_failure_on_a_clean_script = Case { full_stdout: true, ..script(b"#!/bin/sh\ntrue\n") };
     shellcheckrc_two_directives_on_a_line = files(
         &["-f", "json1", "x.sh"],

@@ -5,6 +5,7 @@
 //! `{TX}`, and the first 15 characters of it as `{T15}`.
 
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -483,6 +484,7 @@ fn exit_4_outranks_a_clean_input() -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unreadable_editorconfig_is_reported_for_every_input() -> io::Result<()> {
     let f = Fixture::new("unreadable")?;
