@@ -40,6 +40,7 @@
       "properties": {
         "argv": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "string"
           }
@@ -92,6 +93,7 @@
         },
         "versions": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "string"
           }
@@ -101,7 +103,60 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "tarball",
+                  "image"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "const": "git"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "repo",
+              "tag"
+            ],
+            "properties": {
+              "repo": {
+                "minLength": 1
+              },
+              "tag": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "title": "Validity matrix sources",

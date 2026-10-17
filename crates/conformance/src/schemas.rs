@@ -132,6 +132,48 @@ mod tests {
     }
 
     #[test]
+    fn validity_specs_require_observations_and_constrain_parse_results() {
+        let schema = Value::from(input::<spec::Spec>());
+        assert_eq!(schema["properties"]["observe"]["minItems"], 1);
+        let observe = &schema["$defs"]["Observe"];
+        assert_eq!(observe["if"]["properties"]["kind"]["const"], "parse");
+        assert_eq!(observe["if"]["required"], serde_json::json!(["kind"]));
+        for field in ["snippet", "fixed"] {
+            assert_eq!(
+                observe["then"]["properties"][field]["enum"],
+                serde_json::json!(["accepted", "rejected"])
+            );
+            assert!(observe["properties"][field].get("enum").is_none());
+        }
+    }
+
+    #[test]
+    fn validity_sources_require_versions_argv_and_their_kind_location() {
+        let schema = Value::from(input::<sources::Sources>());
+        let source = &schema["$defs"]["Source"];
+        for field in ["versions", "argv"] {
+            assert_eq!(source["properties"][field]["minItems"], 1);
+        }
+        let conditions = source["allOf"].as_array().unwrap();
+        assert_eq!(conditions.len(), 2);
+        assert_eq!(
+            conditions[0]["if"]["properties"]["kind"]["enum"],
+            serde_json::json!(["tarball", "image"])
+        );
+        assert_eq!(conditions[1]["if"]["properties"]["kind"]["const"], "git");
+        for (condition, fields) in [
+            (&conditions[0], &["url"][..]),
+            (&conditions[1], &["repo", "tag"][..]),
+        ] {
+            assert_eq!(condition["if"]["required"], serde_json::json!(["kind"]));
+            assert_eq!(condition["then"]["required"], serde_json::json!(fields));
+            for field in fields {
+                assert_eq!(condition["then"]["properties"][field]["minLength"], 1);
+            }
+        }
+    }
+
+    #[test]
     fn the_upstream_pin_schema_is_committed() {
         committed("upstream-pin");
     }

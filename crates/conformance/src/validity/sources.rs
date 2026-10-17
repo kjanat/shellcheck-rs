@@ -29,6 +29,19 @@ pub enum Kind {
 
 #[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("allOf" = [
+    {
+        "if": { "properties": { "kind": { "enum": ["tarball", "image"] } }, "required": ["kind"] },
+        "then": { "properties": { "url": { "minLength": 1 } }, "required": ["url"] }
+    },
+    {
+        "if": { "properties": { "kind": { "const": "git" } }, "required": ["kind"] },
+        "then": {
+            "properties": { "repo": { "minLength": 1 }, "tag": { "minLength": 1 } },
+            "required": ["repo", "tag"]
+        }
+    }
+]))]
 pub struct Source {
     pub kind: Kind,
     #[serde(default)]
@@ -37,7 +50,9 @@ pub struct Source {
     pub repo: String,
     #[serde(default)]
     pub tag: String,
+    #[schemars(length(min = 1))]
     pub versions: Vec<String>,
+    #[schemars(length(min = 1))]
     pub argv: Vec<String>,
     pub parse: Option<Vec<String>>,
     #[serde(default)]

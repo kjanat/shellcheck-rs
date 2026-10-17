@@ -11,6 +11,7 @@ pub struct Spec {
     pub shell: Option<String>,
     pub snippet: Script,
     pub fixed: Script,
+    #[schemars(length(min = 1))]
     pub observe: Vec<Observe>,
 }
 
@@ -22,6 +23,20 @@ pub struct Script {
 
 #[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend(
+    "if" = {
+        "properties": {
+            "kind": { "const": "parse" }
+        },
+        "required": ["kind"]
+    },
+    "then" = {
+        "properties": {
+            "snippet": { "enum": [PARSE_ACCEPTED, PARSE_REJECTED] },
+            "fixed": { "enum": [PARSE_ACCEPTED, PARSE_REJECTED] }
+        }
+    }
+))]
 pub struct Observe {
     pub kind: Kind,
     pub snippet: String,
