@@ -76,7 +76,21 @@ fn keeps_default_options(dialect: Dialect, root: &Token) -> bool {
                 matches!(&*shebang.inner, InnerToken::T_Literal(s) if shebang_sets_options(s))
             }
             InnerToken::T_SimpleCommand { .. } => sets_options(&oversimplify(t)),
-            InnerToken::T_Assignment { var, .. } => dialect == Dialect::Zsh && var == "options",
+            InnerToken::T_Assignment { var, .. } => {
+                dialect == Dialect::Zsh
+                    && matches!(
+                        var.as_str(),
+                        "options"
+                            | "functions"
+                            | "dis_functions"
+                            | "aliases"
+                            | "dis_aliases"
+                            | "galiases"
+                            | "dis_galiases"
+                            | "saliases"
+                            | "dis_saliases"
+                    )
+            }
             _ => false,
         };
         if changes {
@@ -416,6 +430,50 @@ mod tests {
                 policy(Dialect::Zsh, script),
                 Policy::Measured(Dialect::Zsh),
                 "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_parameter_writes_may_change_zsh_options() {
+        for script in [
+            "functions[split]='setopt SH_WORD_SPLIT'; split; echo $x\n",
+            "functions[$name]=$body; echo $x\n",
+            "functions+=(split 'setopt SH_WORD_SPLIT'); echo $x\n",
+            "dis_functions[split]='setopt SH_WORD_SPLIT'; enable -f split; split; echo $x\n",
+        ] {
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script}");
+        }
+        for script in [
+            "echo \"${functions[split]}\"; echo $x\n",
+            "echo 'functions[split]=setopt'; echo $x\n",
+            "other_functions[split]=body; echo $x\n",
+        ] {
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Measured(Dialect::Zsh));
+        }
+        assert_eq!(
+            policy(Dialect::Mksh, "functions[0]=body; echo $x\n"),
+            Policy::Measured(Dialect::Mksh)
+        );
+    }
+
+    #[test]
+    fn alias_parameter_writes_may_change_zsh_options() {
+        for name in [
+            "aliases",
+            "dis_aliases",
+            "galiases",
+            "dis_galiases",
+            "saliases",
+            "dis_saliases",
+        ] {
+            let script = format!("{name}[split]='setopt SH_WORD_SPLIT'\nsplit\necho $x\n");
+            assert_eq!(policy(Dialect::Zsh, &script), Policy::Floor, "{name}");
+            let read = format!("echo \"${{{name}[split]}}\"\necho $x\n");
+            assert_eq!(policy(Dialect::Zsh, &read), Policy::Measured(Dialect::Zsh));
+            assert_eq!(
+                policy(Dialect::Mksh, &script),
+                Policy::Measured(Dialect::Mksh)
             );
         }
     }

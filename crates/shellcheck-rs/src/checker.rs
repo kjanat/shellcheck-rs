@@ -1205,6 +1205,20 @@ mod source_tests {
     }
 
     #[test]
+    fn dynamically_defined_zsh_functions_keep_sc2086() {
+        for parameter in ["functions", "aliases"] {
+            let script = format!(
+                "#!/bin/zsh\nzmodload zsh/parameter\n{parameter}[split]='setopt SH_WORD_SPLIT'\nsplit\nx='a b'; printf '%s\\n' $x\n"
+            );
+            assert!(check(&script).contains(&2086), "{parameter}");
+            assert!(
+                check_as(&script, Dialect::Zsh).contains(&2086),
+                "{parameter}"
+            );
+        }
+    }
+
+    #[test]
     fn a_zsh_eval_that_enables_word_splitting_keeps_sc2086() {
         for setup in [
             "eval 'setopt SH_WORD_SPLIT'",
