@@ -297,7 +297,7 @@ fn port_check(
     snippet: &str,
     fixed: &str,
 ) -> Result<(Outcome, String), String> {
-    let Some(dialect) = cell.port_shell() else {
+    let Some(dialect) = port_dialect(cell, spec) else {
         return Ok((Outcome::Reproduces, String::new()));
     };
     if spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
@@ -318,6 +318,15 @@ fn port_check(
         Outcome::PortMiss,
         format!("port as {dialect}: snippet {on_snippet:?} fixed {on_fixed:?}"),
     ))
+}
+
+fn port_dialect<'a>(cell: &'a Cell, spec: &Spec) -> Option<&'a str> {
+    let own = Dialect::from_name(&cell.shell).map(Dialect::name);
+    if own.is_some() && spec.shell.as_deref() == own {
+        own
+    } else {
+        cell.port_shell()
+    }
 }
 
 fn speaks(port_shell: &str, spec_shell: &str) -> bool {
@@ -630,6 +639,38 @@ mod tests {
         assert!(speaks("zsh", "bash"));
         assert!(!speaks("zsh", "sh"));
         assert!(!speaks("bash", "sh"));
+    }
+
+    #[test]
+    fn a_spec_for_the_cells_own_shell_runs_the_port_as_that_shell() {
+        let spec = |shell: &str| Spec {
+            code: 3036,
+            claim: String::new(),
+            shell: Some(shell.to_string()),
+            snippet: spec::Script {
+                script: String::new(),
+            },
+            fixed: spec::Script {
+                script: String::new(),
+            },
+            observe: vec![],
+        };
+        let dash = cell("dash", Some("sh"));
+        assert_eq!(port_dialect(&dash, &spec("dash")), Some("dash"));
+        assert_eq!(port_dialect(&dash, &spec("sh")), Some("sh"));
+        assert_eq!(
+            port_dialect(&cell("zsh-sh", Some("sh")), &spec("sh")),
+            Some("sh")
+        );
+        let fixed = "printf 'a\\n'\n";
+        assert_eq!(
+            port_check(&dash, &spec("dash"), "echo -e 'a'\n", fixed),
+            Ok((Outcome::Reproduces, String::new()))
+        );
+        assert!(matches!(
+            port_check(&dash, &spec("dash"), "echo hi\n", fixed),
+            Ok((Outcome::PortMiss, _))
+        ));
     }
 
     #[test]
