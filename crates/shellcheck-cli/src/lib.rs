@@ -7,5 +7,6 @@
 
 pub mod formatter;
 pub mod options;
+pub mod oracle;
 pub mod paths;
 pub mod rc;

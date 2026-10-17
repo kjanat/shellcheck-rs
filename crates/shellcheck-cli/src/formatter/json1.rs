@@ -11,6 +11,7 @@ use shellcheck_rs::interface::{InsertionPoint, PositionedComment};
 
 /// The json1 document: `{"comments": [...], "sources": [...]}`.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Output {
     /// Every comment of every checked file.
     pub comments: Vec<Comment>,
@@ -21,6 +22,7 @@ pub struct Output {
 
 /// One comment, in the field order of the Haskell `toEncoding`.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Comment {
     /// The file the comment starts in.
     pub file: String,
@@ -35,6 +37,10 @@ pub struct Comment {
     #[serde(rename = "endColumn")]
     pub end_column: i64,
     /// The severity: `error`, `warning`, `info` or `style`.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("enum" = ["error", "warning", "info", "style"]))
+    )]
     pub level: String,
     /// The SC code, without the `SC` prefix.
     pub code: i64,
@@ -46,6 +52,7 @@ pub struct Comment {
 
 /// A fix: the replacements that make it.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Fix {
     /// The replacements, in the order the checker produced them.
     pub replacements: Vec<Replacement>,
@@ -54,6 +61,7 @@ pub struct Fix {
 /// Fields in alphabetical order to match aeson's sorted-key `object` encoding
 /// of `Replacement` (which defines only `toJSON`), so json1 is byte-exact.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Replacement {
     /// The 1-based column the replaced range starts at.
     pub column: i64,
@@ -65,6 +73,10 @@ pub struct Replacement {
     pub end_line: i64,
     /// `afterEnd` or `beforeStart`.
     #[serde(rename = "insertionPoint")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("enum" = ["afterEnd", "beforeStart"]))
+    )]
     pub insertion_point: String,
     /// The 1-based line the replaced range starts on.
     pub line: i64,

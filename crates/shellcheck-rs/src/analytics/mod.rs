@@ -18,6 +18,16 @@ pub(crate) mod redirections;
 pub(crate) mod script;
 pub(crate) mod variables;
 
+/// The SC9002 warnings the port reports for signal-only cleanup traps.
+#[must_use]
+pub fn cleanup_trap_warnings(params: &Parameters) -> Vec<crate::interface::PositionedComment> {
+    let mut out = Out::new();
+    extensions::check_cleanup_traps(params, &params.root, &mut out);
+    out.iter()
+        .map(|tc| crate::checker::token_to_position(tc, &params.token_positions))
+        .collect()
+}
+
 /// A check function, as the `treeChecks` and `nodeChecks` lists hold them.
 type CheckPtr = fn(&Parameters, &crate::ast::Token, &mut Out);
 

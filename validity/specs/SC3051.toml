@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3051
+claim = "sh has no source: it is a missing command and the file is not read"
+shell = "sh"
+
+[snippet]
+script = "echo x=1 >\"$TMPDIR/lib.sh\"\n# shellcheck source=/dev/null\nsource \"$TMPDIR/lib.sh\" 2>/dev/null; echo \"[$x]\""
+
+[fixed]
+script = "echo x=1 >\"$TMPDIR/lib.sh\"\n# shellcheck source=/dev/null\n. \"$TMPDIR/lib.sh\"; echo \"[$x]\""
+
+[[observe]]
+kind    = "stdout"
+snippet = "[]\n"
+fixed   = "[1]\n"

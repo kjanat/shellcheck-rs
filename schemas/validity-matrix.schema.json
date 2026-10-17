@@ -1,0 +1,162 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/validity-matrix.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Cell": {
+      "type": "object",
+      "required": [
+        "argv",
+        "base",
+        "dockerfile",
+        "image",
+        "parse",
+        "shell",
+        "shipped",
+        "source",
+        "version"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base": {
+          "type": "string"
+        },
+        "dialect": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "digest": {
+          "type": "string"
+        },
+        "dockerfile": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "parse": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "shell": {
+          "type": "string"
+        },
+        "shipped": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/SourcePin"
+        },
+        "version": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SourcePin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "sha256",
+            "url"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tarball"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "commit",
+            "kind",
+            "repo",
+            "tag"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "git"
+            },
+            "repo": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "version"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "crate"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "sha256",
+            "url"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "image"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "title": "Validity matrix",
+  "type": "object",
+  "properties": {
+    "cell": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Cell"
+      }
+    }
+  }
+}

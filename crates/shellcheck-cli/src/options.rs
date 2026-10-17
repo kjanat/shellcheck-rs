@@ -32,6 +32,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+use shellcheck_rs::Dialect;
 use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
 
 /// Formats the port implements. `getOpt`'s format validation lists exactly
@@ -72,6 +73,8 @@ pub struct RunConfig {
     pub inputs: Vec<PathBuf>,
     /// The `CheckSpec` every input starts from.
     pub spec_template: CheckSpec,
+    /// The `-s`/`--shell` dialect every input is checked as.
+    pub dialect: Option<Dialect>,
     /// Resolved color setting from `-C`/`--color` (defaults to `auto`), used by tty and diff output.
     pub color: ColorOption,
     /// Max wiki link count from `-W`/`--wiki-link-count` (defaults to 3), used by tty wiki summary.
@@ -214,7 +217,7 @@ const OPTS: &[OptDef] = &[
         key: "shell",
         kind: ArgKind::Required,
         arg: "SHELLNAME",
-        help: "Specify dialect (sh, bash, dash, ksh, busybox)",
+        help: "Specify dialect (sh, bash, dash, ksh, busybox, zsh, mksh, oksh, loksh, yash, posh, bosh, osh, brush, freebsd-sh, netbsd-sh)",
     },
     OptDef {
         short: Some('S'),
@@ -646,8 +649,7 @@ fn parse_codes(value: Option<&str>) -> ControlFlow<Outcome, Vec<i64>> {
 }
 
 /// `shellForExecutable` (ShellCheck.Data): maps interpreter names, including
-/// the established aliases, to a dialect. Used for `--shell`, rc `shell=`, and
-/// `# shellcheck shell=` directives.
+/// the established aliases, to one of upstream's five shells.
 #[must_use]
 pub fn parse_shell(s: &str) -> Option<Shell> {
     Some(match s {
@@ -658,6 +660,13 @@ pub fn parse_shell(s: &str) -> Option<Shell> {
         "ksh" | "ksh88" | "ksh93" | "oksh" => Shell::Ksh,
         _ => return None,
     })
+}
+
+/// `shellForExecutable` over every [`Dialect`]. Used for `--shell`, rc
+/// `shell=`, and `# shellcheck shell=` directives.
+#[must_use]
+pub fn parse_dialect(s: &str) -> Option<Dialect> {
+    Dialect::from_name(s)
 }
 
 fn parse_severity(s: &str) -> Option<Severity> {
@@ -673,6 +682,7 @@ fn parse_severity(s: &str) -> Option<Severity> {
 /// The options folded so far, flag by flag.
 struct Folded {
     spec: CheckSpec,
+    dialect: Option<Dialect>,
     format: Option<String>,
     color: ColorOption,
     wiki_link_count: usize,
@@ -683,9 +693,15 @@ struct Folded {
 }
 
 impl Folded {
+    const fn check_as(&mut self, dialect: Dialect) {
+        self.spec.shell_type_override = Some(dialect.floor());
+        self.dialect = Some(dialect);
+    }
+
     fn new() -> Self {
         Self {
             spec: CheckSpec::default(),
+            dialect: None,
             format: None,
             color: ColorOption::ColorAuto,
             wiki_link_count: 3,
@@ -720,8 +736,8 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         // --- Wired into CheckSpec (effective in the analysis core). ---
         "shell" => {
             let v = flag.value.as_deref().unwrap_or("");
-            match parse_shell(v) {
-                Some(sh) => o.spec.shell_type_override = Some(sh),
+            match parse_dialect(v) {
+                Some(dialect) => o.check_as(dialect),
                 None => {
                     return ControlFlow::Break(Outcome::Error {
                         message: format!("Unknown shell: {v}"),
@@ -946,6 +962,7 @@ pub fn parse_os(argv: &[OsString], exists: &dyn Fn(&Path) -> bool) -> Outcome {
         format,
         inputs,
         spec_template: o.spec,
+        dialect: o.dialect,
         color: o.color,
         wiki_link_count: o.wiki_link_count,
         jobs: o.jobs,
@@ -1150,18 +1167,16 @@ mod tests {
     #[test]
     fn version_banner_names_the_port_and_the_upstream_pin() -> Result<(), Box<dyn std::error::Error>>
     {
-        let pin: serde_json::Value =
+        let pin: crate::oracle::UpstreamPin =
             serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
-        let upstream = pin["version"].as_str().ok_or("pin lacks version")?;
-        let revision = pin["revision"].as_str().ok_or("pin lacks revision")?;
         let banner = version_banner();
         let lines: Vec<&str> = banner.lines().collect();
         assert_eq!(lines[1], concat!("version: ", env!("CARGO_PKG_VERSION")));
         assert_eq!(
             lines[2],
-            format!("upstream: {upstream} (git {})", &revision[..12])
+            format!("upstream: {} (git {})", pin.version, &pin.revision[..12])
         );
-        assert_ne!(upstream, env!("CARGO_PKG_VERSION"));
+        assert_ne!(pin.version, env!("CARGO_PKG_VERSION"));
         Ok(())
     }
 
@@ -1190,6 +1205,19 @@ mod tests {
     }
 
     #[test]
+    fn shell_help_lists_every_dialect() {
+        let shell = OPTS
+            .iter()
+            .find(|o| o.long == "shell")
+            .expect("--shell exists");
+        let names: Vec<_> = Dialect::ALL.iter().map(|d| d.name()).collect();
+        assert_eq!(
+            shell.help,
+            format!("Specify dialect ({})", names.join(", "))
+        );
+    }
+
+    #[test]
     fn unknown_format_is_support_error() {
         // With a valid input target, format is validated last (exit 4).
         match parse(&args(&["--format=bogus", "-"])) {
@@ -1212,40 +1240,74 @@ mod tests {
     #[test]
     fn unknown_shell_is_support_error() {
         for a in [
-            vec!["--shell=zsh"],
-            vec!["-s", "zsh"],
-            vec!["--shell", "zsh"],
+            vec!["--shell=tcsh"],
+            vec!["-s", "tcsh"],
+            vec!["--shell", "tcsh"],
         ] {
             match parse(&args(&a)) {
-                Outcome::Error { code, .. } => assert_eq!(code, 4, "for {a:?}"),
+                Outcome::Error { code, message } => {
+                    assert_eq!(code, 4, "for {a:?}");
+                    assert_eq!(message, "Unknown shell: tcsh", "for {a:?}");
+                }
                 other => panic!("expected Error(4) for {a:?}, got {other:?}"),
             }
         }
     }
 
     #[test]
+    fn added_dialects_are_shells() {
+        let c = run(&["--shell", "yash", "-"]);
+        assert_eq!(c.dialect, Some(Dialect::Yash));
+        let c = run(&["-s", "zsh", "-"]);
+        assert_eq!(c.dialect, Some(Dialect::Zsh));
+        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+    }
+
+    #[test]
+    fn the_spec_template_keeps_the_upstream_shell_override() {
+        for (name, shell) in [
+            ("sh", Shell::Sh),
+            ("bash", Shell::Bash),
+            ("dash", Shell::Dash),
+            ("ksh", Shell::Ksh),
+            ("busybox", Shell::BusyboxSh),
+            ("yash", Shell::Sh),
+            ("mksh", Shell::Ksh),
+        ] {
+            let c = run(&["-s", name, "-"]);
+            assert_eq!(c.spec_template.shell_type_override, Some(shell), "{name}");
+        }
+        assert_eq!(run(&["-"]).spec_template.shell_type_override, None);
+    }
+
+    #[test]
+    fn parse_shell_names_upstream_shells_only() {
+        assert_eq!(parse_shell("bats"), Some(Shell::Bash));
+        assert_eq!(parse_shell("oksh"), Some(Shell::Ksh));
+        assert_eq!(parse_shell("busybox ash"), Some(Shell::BusyboxSh));
+        assert_eq!(parse_shell("zsh"), None);
+        assert_eq!(parse_dialect("oksh"), Some(Dialect::Oksh));
+        assert_eq!(parse_dialect("zsh"), Some(Dialect::Zsh));
+    }
+
+    #[test]
     fn valid_shell_both_forms() {
         // Separate-arg form must set the shell, not be treated as a filename.
         let c = run(&["-s", "bash", "-"]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+        assert_eq!(c.dialect, Some(Dialect::Bash));
         assert_eq!(c.inputs, vec![PathBuf::from("-")]);
 
         let c = run(&["--shell=ksh", "-"]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Ksh));
+        assert_eq!(c.dialect, Some(Dialect::Ksh));
 
         let c = run(&["-sdash", "-"]); // glued short
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Dash));
+        assert_eq!(c.dialect, Some(Dialect::Dash));
 
         assert_eq!(
-            run(&["-s", "busybox", "-"])
-                .spec_template
-                .shell_type_override,
-            Some(Shell::BusyboxSh)
+            run(&["-s", "busybox", "-"]).dialect,
+            Some(Dialect::BusyboxSh)
         );
-        assert_eq!(
-            run(&["-s", "sh", "-"]).spec_template.shell_type_override,
-            Some(Shell::Sh)
-        );
+        assert_eq!(run(&["-s", "sh", "-"]).dialect, Some(Dialect::Sh));
     }
 
     #[test]
@@ -1385,7 +1447,7 @@ mod tests {
     fn files_and_options_interleave() {
         let c = run(&["a.sh", "-s", "bash", "b.sh"]);
         assert_eq!(c.inputs, vec![PathBuf::from("a.sh"), PathBuf::from("b.sh")]);
-        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+        assert_eq!(c.dialect, Some(Dialect::Bash));
     }
 
     #[test]

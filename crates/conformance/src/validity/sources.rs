@@ -1,23 +1,24 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Sources {
     pub defaults: Defaults,
     pub shell: BTreeMap<String, Source>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     pub base: String,
     pub parse: Vec<String>,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Tarball,
@@ -26,8 +27,21 @@ pub enum Kind {
     Image,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("allOf" = [
+    {
+        "if": { "properties": { "kind": { "enum": ["tarball", "image"] } }, "required": ["kind"] },
+        "then": { "properties": { "url": { "minLength": 1 } }, "required": ["url"] }
+    },
+    {
+        "if": { "properties": { "kind": { "const": "git" } }, "required": ["kind"] },
+        "then": {
+            "properties": { "repo": { "minLength": 1 }, "tag": { "minLength": 1 } },
+            "required": ["repo", "tag"]
+        }
+    }
+]))]
 pub struct Source {
     pub kind: Kind,
     #[serde(default)]
@@ -36,7 +50,9 @@ pub struct Source {
     pub repo: String,
     #[serde(default)]
     pub tag: String,
+    #[schemars(length(min = 1))]
     pub versions: Vec<String>,
+    #[schemars(length(min = 1))]
     pub argv: Vec<String>,
     pub parse: Option<Vec<String>>,
     #[serde(default)]

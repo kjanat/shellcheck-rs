@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3059
+claim = "sh has no ${x^^}: the expansion is a fatal bad substitution"
+shell = "sh"
+
+[snippet]
+script = 'x=ab; echo "${x^^}" 2>/dev/null'
+
+[fixed]
+script = "x=ab; echo \"$x\" | tr '[:lower:]' '[:upper:]'"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "AB\n"

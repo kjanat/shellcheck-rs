@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3065
+claim = "sh's test has no -k: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = 'mkdir "$TMPDIR/d"; chmod 1777 "$TMPDIR/d"; if [ -k "$TMPDIR/d" ] 2>/dev/null; then echo y; else echo n; fi'
+
+[fixed]
+script = 'mkdir "$TMPDIR/d"; chmod 1777 "$TMPDIR/d"; if [ -n "$(find "$TMPDIR/d" -prune -perm -1000)" ]; then echo y; else echo n; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "n\n"
+fixed   = "y\n"

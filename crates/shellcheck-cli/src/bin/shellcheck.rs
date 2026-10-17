@@ -17,6 +17,7 @@ use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1,
 use shellcheck_cli::options::{self, Outcome, RunConfig};
 use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize_path};
 use shellcheck_cli::rc::{self, ConfigLookup};
+use shellcheck_rs::Dialect;
 use shellcheck_rs::cfg::InternalError;
 use shellcheck_rs::interface::{
     CheckSpec, ErrorMessage, PositionedComment, RSC_DATAFLOW_SKIPPED, System, decode_bytes,
@@ -289,6 +290,7 @@ fn dataflow_failure(InternalError(what): InternalError) -> String {
 fn load(
     path: &Path,
     spec_template: &CheckSpec,
+    dialect: Option<Dialect>,
     config: Option<&ConfigLookup>,
     sys: &Rc<IoSystem>,
 ) -> Input {
@@ -297,7 +299,7 @@ fn load(
         Ok(spec) => spec,
         Err(error) => return error,
     };
-    analyze_input(spec, sys)
+    analyze_input(spec, dialect, sys)
 }
 
 fn prepare_spec(
@@ -330,9 +332,9 @@ fn prepare_spec(
     Ok(spec)
 }
 
-fn analyze_input(spec: CheckSpec, sys: Rc<IoSystem>) -> Input {
+fn analyze_input(spec: CheckSpec, dialect: Option<Dialect>, sys: Rc<IoSystem>) -> Input {
     let sys_dyn = Rc::clone(&sys) as Rc<dyn System>;
-    let result = shellcheck_rs::checker::check_script_with(sys_dyn, &spec);
+    let result = shellcheck_rs::checker::check_script_as(sys_dyn, &spec, dialect);
     Input::Ok(Loaded {
         name: spec.filename,
         sys,
@@ -348,6 +350,7 @@ fn analyze_input(spec: CheckSpec, sys: Rc<IoSystem>) -> Input {
 fn load_parallel(
     inputs: &[PathBuf],
     template: &CheckSpec,
+    dialect: Option<Dialect>,
     config: Option<&ConfigLookup>,
     sys: &IoSystem,
     jobs: usize,
@@ -381,7 +384,8 @@ fn load_parallel(
                             .recv();
                         let Ok((index, spec)) = task else { break };
                         let system = Rc::new(sys.for_input(&inputs[index]));
-                        let result = shellcheck_rs::checker::check_script_with(system, &spec);
+                        let result =
+                            shellcheck_rs::checker::check_script_as(system, &spec, dialect);
                         if results.send((index, result)).is_err() {
                             break;
                         }
@@ -399,7 +403,7 @@ fn load_parallel(
             let sys = Rc::new(sys.clone());
             loaded = inputs
                 .iter()
-                .map(|path| load(path, template, config, &sys))
+                .map(|path| load(path, template, dialect, config, &sys))
                 .collect();
             return;
         }
@@ -461,6 +465,7 @@ fn run(config: RunConfig) -> ExitCode {
         format,
         inputs,
         spec_template,
+        dialect,
         color,
         wiki_link_count,
         jobs,
@@ -489,7 +494,7 @@ fn run(config: RunConfig) -> ExitCode {
     // runtime error (2), matching the oracle.
     if format == "quiet" {
         for i in &inputs {
-            if load(i, &spec_template, config.as_ref(), &sys).is_problem() {
+            if load(i, &spec_template, dialect, config.as_ref(), &sys).is_problem() {
                 return ExitCode::from(1);
             }
         }
@@ -497,11 +502,18 @@ fn run(config: RunConfig) -> ExitCode {
     }
 
     let loaded = if jobs > 1 && inputs.len() > 1 && inputs.iter().all(|path| path.is_file()) {
-        load_parallel(&inputs, &spec_template, config.as_ref(), &sys, jobs)
+        load_parallel(
+            &inputs,
+            &spec_template,
+            dialect,
+            config.as_ref(),
+            &sys,
+            jobs,
+        )
     } else {
         inputs
             .iter()
-            .map(|i| load(i, &spec_template, config.as_ref(), &sys))
+            .map(|i| load(i, &spec_template, dialect, config.as_ref(), &sys))
             .collect()
     };
 

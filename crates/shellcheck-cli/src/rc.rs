@@ -22,6 +22,7 @@
 //! state and keeps only the annotations, so only the fatal SC1134 survives.
 
 use std::cell::RefCell;
+use std::path::Path;
 
 use shellcheck_rs::ast::Annotation;
 use shellcheck_rs::editor_config::{
@@ -30,8 +31,7 @@ use shellcheck_rs::editor_config::{
 use shellcheck_rs::interface::{CheckSpec, RcDirectives, RcParseProblem, decode_bytes};
 
 use crate::paths::{
-    combine, does_file_exist, io_error_message, normalize, take_directory, take_file_name,
-    xdg_config_home,
+    combine, does_file_exist, io_error_message, normalize, take_directory, xdg_config_home,
 };
 
 /// The directives of one rc file.
@@ -717,13 +717,14 @@ fn editor_config_with(filename: &str, global: Option<&str>) -> Option<RawConfig>
     // Resolve the directory (to find .editorconfig files) but keep the leaf
     // filename as-is so that globs match the symlink name rather than the
     // resolved target.
-    let dir = normalize(&take_directory(filename));
-    let path = combine(&dir, take_file_name(filename));
+    let filename = Path::new(filename);
+    let dir = crate::paths::normalize_path(filename.parent().unwrap_or_else(|| Path::new(".")));
+    let path = dir.join(filename.file_name().unwrap_or_default());
     let mut configs = dir_editor_configs(&dir);
     configs.extend(global.and_then(read_config));
     let contributions: Vec<RawConfig> = configs
         .iter()
-        .filter_map(|config| directives_for(&path, config))
+        .filter_map(|config| directives_for(&path.to_string_lossy(), config))
         .collect();
     let (first, _) = contributions.first()?;
     Some((
@@ -745,7 +746,13 @@ fn directives_for(path: &str, (file, contents): &RawConfig) -> Option<RawConfig>
         Some(&line) => rejected_root(line),
         None => shellcheck_rs::editor_config::directives(
             contents,
-            &make_relative_to(&take_directory(file), path),
+            &make_relative_to(
+                &Path::new(file)
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_string_lossy(),
+                path,
+            ),
         )?,
     };
     Some((file.clone(), blob))
@@ -753,32 +760,30 @@ fn directives_for(path: &str, (file, contents): &RawConfig) -> Option<RawConfig>
 
 /// `makeRelativeTo`: `path` below `dir`, or its file name when it is not.
 fn make_relative_to(dir: &str, path: &str) -> String {
-    let prefix = if dir.is_empty() || dir.ends_with('/') {
-        dir.to_string()
-    } else {
-        format!("{dir}/")
-    };
-    path.strip_prefix(&prefix)
-        .map_or_else(|| take_file_name(path).to_string(), str::to_string)
+    let path = Path::new(path);
+    let relative = path
+        .strip_prefix(dir)
+        .unwrap_or_else(|_| path.file_name().map_or_else(|| Path::new(""), Path::new));
+    relative
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 /// `collectDirConfigs`: the `.editorconfig` files from `dir` upwards, nearest
 /// first, up to the first that declares itself the root.
-fn dir_editor_configs(dir: &str) -> Vec<RawConfig> {
+fn dir_editor_configs(dir: &Path) -> Vec<RawConfig> {
     let mut configs = Vec::new();
-    let mut dir = dir.to_string();
-    loop {
-        let current = read_config(&combine(&dir, ".editorconfig"));
+    for dir in dir.ancestors() {
+        let current = read_config(&dir.join(".editorconfig").to_string_lossy());
         let is_root = current
             .as_ref()
             .is_some_and(|(_, contents)| is_editor_config_root(contents));
         configs.extend(current);
-        let next = take_directory(&dir);
-        if next == dir || is_root {
-            return configs;
+        if is_root {
+            break;
         }
-        dir = next;
     }
+    configs
 }
 
 /// `getConfigPaths`: get a list of candidate filenames. This includes
@@ -820,7 +825,8 @@ fn default_paths() -> Vec<String> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
-    use crate::options::parse_shell;
+    use crate::options::parse_dialect;
+    use shellcheck_rs::Dialect;
     use shellcheck_rs::interface::Shell;
 
     impl Config {
@@ -845,14 +851,14 @@ mod tests {
         }
 
         /// `determineShell`: the first override, valid or not.
-        fn shell(&self) -> Option<Shell> {
+        fn shell(&self) -> Option<Dialect> {
             self.annotations
                 .iter()
                 .find_map(|a| match a {
                     Annotation::ShellOverride(s) => Some(s),
                     _ => None,
                 })
-                .and_then(|s| parse_shell(s))
+                .and_then(|s| parse_dialect(s))
         }
 
         /// `getExtendedAnalysisDirective`: the first one.
@@ -954,7 +960,7 @@ mod tests {
         let c = parse("disable=SC2086 shell=sh\n");
         assert_eq!(c.disabled().len(), 1);
         assert_eq!(c.disabled()[0].0, 2086);
-        assert_eq!(c.shell(), Some(Shell::Sh));
+        assert_eq!(c.shell(), Some(Dialect::Sh));
         assert!(c.parse_problem.is_none());
 
         let c =
@@ -984,20 +990,33 @@ mod tests {
 
     #[test]
     fn shell_valid_and_invalid() {
-        assert_eq!(parse("shell=bash").shell(), Some(Shell::Bash));
-        assert_eq!(parse("shell=sh").shell(), Some(Shell::Sh));
+        assert_eq!(parse("shell=bash").shell(), Some(Dialect::Bash));
+        assert_eq!(parse("shell=sh").shell(), Some(Dialect::Sh));
         // Unknown dialect: SC1103 is discarded and there is no usable override.
-        assert_eq!(parse("shell=zsh").shell(), None);
-        // Aliases route through parse_shell (shellForExecutable).
-        assert_eq!(parse("shell=ksh93").shell(), Some(Shell::Ksh));
+        assert_eq!(parse("shell=fish").shell(), None);
+        // Aliases route through parse_dialect (shellForExecutable).
+        assert_eq!(parse("shell=ksh93").shell(), Some(Dialect::Ksh));
+    }
+
+    #[test]
+    fn shell_accepts_an_added_dialect() {
+        assert_eq!(parse("shell=posh").shell(), Some(Dialect::Posh));
+        assert_eq!(
+            check_with_rc(|| "shell=posh", script("[[ -n $1 ]]")),
+            vec![3010]
+        );
+        assert_eq!(
+            check_with_rc(|| "shell=bash", script("[[ -n $1 ]]")),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]
     fn shell_keeps_first_override_even_if_unknown() {
         // determineShell takes the first ShellOverride and resolves that one, so
         // a valid override after an invalid one never applies.
-        assert_eq!(parse("shell=sh\nshell=bash\n").shell(), Some(Shell::Sh));
-        assert_eq!(parse("shell=zsh\nshell=sh\n").shell(), None);
+        assert_eq!(parse("shell=sh\nshell=bash\n").shell(), Some(Dialect::Sh));
+        assert_eq!(parse("shell=fish\nshell=sh\n").shell(), None);
     }
 
     #[test]
@@ -1006,7 +1025,7 @@ mod tests {
             ranges("disable='SC2086,SC2181'"),
             vec![(2086, 2087), (2181, 2182)]
         );
-        assert_eq!(parse("shell=\"bash\"").shell(), Some(Shell::Bash));
+        assert_eq!(parse("shell=\"bash\"").shell(), Some(Dialect::Bash));
         // An unterminated quote is a configuration parse failure.
         assert_eq!(
             problem("shell='bash\""),
@@ -1219,7 +1238,7 @@ mod tests {
     #[test]
     fn prop_editorConfigAppliesKnownShell() {
         let c = with_editor_config("[foo]\nshellcheck.shell=bash\n", "foo");
-        assert_eq!(c.shell(), Some(Shell::Bash));
+        assert_eq!(c.shell(), Some(Dialect::Bash));
         assert!(c.parse_problem.is_none());
     }
 
@@ -1234,7 +1253,7 @@ mod tests {
     // parse error (SC1134) rather than being dropped.
     #[test]
     fn prop_editorConfigUnknownShellIsReported() {
-        let problem = with_editor_config("[foo]\nshellcheck.shell=zsh\n", "foo")
+        let problem = with_editor_config("[foo]\nshellcheck.shell=fish\n", "foo")
             .parse_problem
             .expect("SC1134");
         assert_eq!((problem.line, problem.column), (2, 8));
@@ -1286,6 +1305,21 @@ mod tests {
         assert_eq!(make_relative_to("/ab", "/abc/d.sh"), "d.sh");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn make_relative_to_uses_slashes_for_native_editorconfig_globs() {
+        assert_eq!(make_relative_to(r"C:\a", r"C:\a\sub\x.sh"), "sub/x.sh");
+        assert_eq!(make_relative_to(r"C:\a", r"D:\a\x.sh"), "x.sh");
+        assert_eq!(
+            make_relative_to(r"\\?\C:\a", r"\\?\C:\a\sub\x.sh"),
+            "sub/x.sh"
+        );
+        assert_eq!(
+            make_relative_to(r"\\server\share", r"\\server\share\sub\x.sh"),
+            "sub/x.sh"
+        );
+    }
+
     /// A directory tree under the temp dir, removed on drop.
     struct Tree(std::path::PathBuf);
 
@@ -1332,7 +1366,7 @@ mod tests {
         assert_eq!(name, tree.path("inner/.editorconfig"));
         let c = parse_contents(&name, &blob);
         assert!(c.parse_problem.is_none());
-        assert_eq!(c.shell(), Some(Shell::Bash));
+        assert_eq!(c.shell(), Some(Dialect::Bash));
         assert_eq!(c.disabled(), vec![(2154, 2155)]);
         assert_eq!(c.extended_analysis(), Some(false));
     }
@@ -1361,7 +1395,7 @@ mod tests {
         let (name, blob) = editor_config_with(&tree.path("a/x.sh"), None).expect("root");
         assert_eq!(name, tree.path("a/.editorconfig"));
         let c = parse_contents(&name, &blob);
-        assert_eq!(c.shell(), Some(Shell::Sh));
+        assert_eq!(c.shell(), Some(Dialect::Sh));
         assert_eq!(c.disabled(), [] as [(i64, i64); 0]);
 
         let (name, blob) = editor_config_with(&tree.path("b/x.sh"), None).expect("rejected");
@@ -1616,7 +1650,7 @@ mod tests {
     #[test]
     fn prop_rcCanSuppressEarlyProblems1() {
         assert_eq!(
-            check_with_rc(|| "disable=1071", script("#!/bin/zsh\necho $1")),
+            check_with_rc(|| "disable=1071", script("#!/usr/bin/python\necho $1")),
             Vec::<i64>::new()
         );
     }

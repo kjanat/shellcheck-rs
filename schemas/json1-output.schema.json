@@ -1,0 +1,168 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/json1-output.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Comment": {
+      "description": "One comment, in the field order of the Haskell `toEncoding`.",
+      "type": "object",
+      "required": [
+        "code",
+        "column",
+        "endColumn",
+        "endLine",
+        "file",
+        "fix",
+        "level",
+        "line",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "description": "The SC code, without the `SC` prefix.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "column": {
+          "description": "The 1-based column it starts at.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "endColumn": {
+          "description": "The 1-based column it ends at.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "endLine": {
+          "description": "The 1-based line it ends on.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "file": {
+          "description": "The file the comment starts in.",
+          "type": "string"
+        },
+        "fix": {
+          "description": "The suggested fix, or `null`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fix"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "description": "The severity: `error`, `warning`, `info` or `style`.",
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "style"
+          ]
+        },
+        "line": {
+          "description": "The 1-based line it starts on.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "message": {
+          "description": "The message text.",
+          "type": "string"
+        }
+      }
+    },
+    "Fix": {
+      "description": "A fix: the replacements that make it.",
+      "type": "object",
+      "required": [
+        "replacements"
+      ],
+      "properties": {
+        "replacements": {
+          "description": "The replacements, in the order the checker produced them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Replacement"
+          }
+        }
+      }
+    },
+    "Replacement": {
+      "description": "Fields in alphabetical order to match aeson's sorted-key `object` encoding\nof `Replacement` (which defines only `toJSON`), so json1 is byte-exact.",
+      "type": "object",
+      "required": [
+        "column",
+        "endColumn",
+        "endLine",
+        "insertionPoint",
+        "line",
+        "precedence",
+        "replacement"
+      ],
+      "properties": {
+        "column": {
+          "description": "The 1-based column the replaced range starts at.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "endColumn": {
+          "description": "The 1-based column the replaced range ends at.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "endLine": {
+          "description": "The 1-based line the replaced range ends on.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "insertionPoint": {
+          "description": "`afterEnd` or `beforeStart`.",
+          "type": "string",
+          "enum": [
+            "afterEnd",
+            "beforeStart"
+          ]
+        },
+        "line": {
+          "description": "The 1-based line the replaced range starts on.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "precedence": {
+          "description": "The precedence that orders overlapping replacements.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "replacement": {
+          "description": "The text that replaces the range.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "title": "rshellcheck json1 output",
+  "description": "The json1 document: `{\"comments\": [...], \"sources\": [...]}`.",
+  "type": "object",
+  "required": [
+    "comments",
+    "sources"
+  ],
+  "properties": {
+    "comments": {
+      "description": "Every comment of every checked file.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Comment"
+      }
+    },
+    "sources": {
+      "description": "Every sourced file that was read, by resolved name, each once, in the\norder the inputs first read them.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

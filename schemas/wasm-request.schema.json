@@ -1,0 +1,133 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/wasm-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "RequestSeverity": {
+      "description": "The minimum severity a request reports.",
+      "type": "string",
+      "enum": [
+        "style",
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "ShellName": {
+      "type": "string",
+      "enum": [
+        "sh",
+        "bash",
+        "dash",
+        "ksh",
+        "busybox",
+        "zsh",
+        "mksh",
+        "oksh",
+        "loksh",
+        "yash",
+        "posh",
+        "bosh",
+        "osh",
+        "brush",
+        "freebsd-sh",
+        "netbsd-sh",
+        "bats",
+        "ash",
+        "ksh88",
+        "ksh93",
+        "busybox sh",
+        "busybox ash"
+      ]
+    }
+  },
+  "title": "shellcheck-wasm request",
+  "description": "The JSON request that `check_json` analyzes.",
+  "type": "object",
+  "required": [
+    "script"
+  ],
+  "properties": {
+    "checkSourced": {
+      "description": "Report diagnostics in supplied source files.",
+      "default": false,
+      "type": "boolean"
+    },
+    "exclude": {
+      "description": "Diagnostic codes to omit.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "extendedAnalysis": {
+      "description": "Override the script's extended analysis directive.",
+      "default": null,
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "filename": {
+      "description": "The file name diagnostics report.",
+      "default": "script.sh",
+      "type": "string"
+    },
+    "files": {
+      "description": "Virtual source files by the exact name `source` uses.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "include": {
+      "description": "Report only these diagnostic codes.",
+      "default": null,
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "optionalChecks": {
+      "description": "Optional check names to enable.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "script": {
+      "description": "The script to check.",
+      "type": "string"
+    },
+    "severity": {
+      "description": "The minimum severity, `style` when unset.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RequestSeverity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "shell": {
+      "description": "The dialect to check as, by shell name. Unset, the shebang or file name decides.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShellName"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

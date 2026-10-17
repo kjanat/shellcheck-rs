@@ -348,7 +348,7 @@ impl Parser {
             "shell" => {
                 let pos = self.pos();
                 let v = self.read_directive_word()?;
-                if crate::data::shell_for_executable(&v).is_none() {
+                if crate::dialect::Dialect::from_name(&v).is_none() {
                     self.note_at(
                         pos.clone(),
                         pos,

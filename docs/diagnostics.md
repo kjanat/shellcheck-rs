@@ -90,6 +90,51 @@ present. The inputs themselves are not listed. `json` stays a bare array of
 comments. The library returns the same list in `CheckResult::sources`, and the
 WASM response carries it as `sources`.
 
+## Dialects
+
+`--shell`, rc `shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell`
+and the shebang accept these dialects beyond upstream's sh, bash, dash, ksh and
+busybox. Each is checked with the rules of its floor, the upstream shell its
+grammar extends. No SC1071 or SC1008 is reported for them.
+
+| Dialect      | Floor |
+| ------------ | ----- |
+| `zsh`        | bash  |
+| `osh`        | bash  |
+| `brush`      | bash  |
+| `mksh`       | ksh   |
+| `oksh`       | ksh   |
+| `loksh`      | ksh   |
+| `yash`       | sh    |
+| `posh`       | sh    |
+| `bosh`       | sh    |
+| `freebsd-sh` | sh    |
+| `netbsd-sh`  | sh    |
+
+```sh
+rshellcheck --shell zsh script.zsh
+```
+
+A dialect's own rules come from `validity/outcomes.toml`, where each diagnostic
+is run in the real shell at each pinned version. `cargo validity rules` writes
+them to `crates/shellcheck-rs/src/dialect_rules.rs`, one entry per code,
+dialect, version and outcome. A code applies to a dialect when the table has no
+entry for it, or when any version records `reproduces`; it is dropped when every
+version records `absent`. Other outcomes carry no weight. The matrix runs each
+shell with its default options. A script that runs `setopt`, `unsetopt`,
+`emulate`, `eval`, `.`, `source`, `alias`, or `set` with an option flag keeps every code of its floor, also
+behind a zsh precommand modifier such as `builtin`. So does a script whose
+shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
+`#!/usr/bin/env -S zsh -y` (also `-Szsh -y`), or a zsh script that assigns to the special
+`options` array. A zsh script with `options[shwordsplit]=on` keeps
+SC2086. Writes to zsh's `functions`, `aliases`, `galiases`, `saliases` or their
+`dis_` variants also keep floor codes: their values can define commands that change options.
+GNU `env -S` quoting, escapes and comments are decoded when identifying the
+interpreter and checking its flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
+Upstream dialects
+never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
+its shebang still draws SC1071.
+
 ## Clearer parser errors
 
 `clarify-parse-errors` omits redundant enclosing-context notes at the same position
