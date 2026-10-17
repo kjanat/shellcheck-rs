@@ -163,9 +163,9 @@ the directory is discarded after the run.
 ## Gate
 
 - A shipped cell: any change from `reproduces` fails. `port-miss` fails.
-- An unshipped cell: changes are reported, never fatal. The recorded outcome
-  is the rule the dialect will ship with. `absent` on zsh for SC2086 means
-  SC2086 is off in zsh native mode when that dialect lands.
+- An unshipped cell: changes are reported, never fatal.
+- A full-matrix run without `--record` fails on a row with no recorded
+  outcome. A `--record` run and a `--cell` run report the row as new.
 - A spec with no `reproduces` cell at all fails: the claim is false
   everywhere we can test, and the diagnostic needs rethinking.
 
