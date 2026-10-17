@@ -693,6 +693,11 @@ struct Folded {
 }
 
 impl Folded {
+    const fn check_as(&mut self, dialect: Dialect) {
+        self.spec.shell_type_override = Some(dialect.floor());
+        self.dialect = Some(dialect);
+    }
+
     fn new() -> Self {
         Self {
             spec: CheckSpec::default(),
@@ -732,7 +737,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         "shell" => {
             let v = flag.value.as_deref().unwrap_or("");
             match parse_dialect(v) {
-                Some(dialect) => o.dialect = Some(dialect),
+                Some(dialect) => o.check_as(dialect),
                 None => {
                     return ControlFlow::Break(Outcome::Error {
                         message: format!("Unknown shell: {v}"),
@@ -1255,7 +1260,24 @@ mod tests {
         assert_eq!(c.dialect, Some(Dialect::Yash));
         let c = run(&["-s", "zsh", "-"]);
         assert_eq!(c.dialect, Some(Dialect::Zsh));
-        assert_eq!(c.spec_template.shell_type_override, None);
+        assert_eq!(c.spec_template.shell_type_override, Some(Shell::Bash));
+    }
+
+    #[test]
+    fn the_spec_template_keeps_the_upstream_shell_override() {
+        for (name, shell) in [
+            ("sh", Shell::Sh),
+            ("bash", Shell::Bash),
+            ("dash", Shell::Dash),
+            ("ksh", Shell::Ksh),
+            ("busybox", Shell::BusyboxSh),
+            ("yash", Shell::Sh),
+            ("mksh", Shell::Ksh),
+        ] {
+            let c = run(&["-s", name, "-"]);
+            assert_eq!(c.spec_template.shell_type_override, Some(shell), "{name}");
+        }
+        assert_eq!(run(&["-"]).spec_template.shell_type_override, None);
     }
 
     #[test]
