@@ -77,8 +77,14 @@ fn keeps_default_options(root: &Token) -> bool {
     keeps
 }
 
+const PRECOMMAND_MODIFIERS: [&str; 6] = ["-", "builtin", "command", "exec", "nocorrect", "noglob"];
+
 fn sets_options(words: &[String]) -> bool {
-    match words.split_first() {
+    let start = words
+        .iter()
+        .take_while(|w| PRECOMMAND_MODIFIERS.contains(&w.as_str()))
+        .count();
+    match words[start..].split_first() {
         Some((name, _)) if matches!(name.as_str(), "setopt" | "unsetopt" | "emulate") => true,
         Some((name, args)) if name == "set" => args
             .iter()
@@ -185,6 +191,9 @@ mod tests {
             "set +y\necho $x\n",
             "set -e\necho $x\n",
             "f() { setopt localoptions shwordsplit; echo $x; }\n",
+            "builtin setopt SH_WORD_SPLIT\necho $x\n",
+            "noglob builtin set -y\necho $x\n",
+            "exec emulate sh\necho $x\n",
         ] {
             assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
             assert!(policy(Dialect::Zsh, script).keeps(2086), "{script:?}");
@@ -199,6 +208,8 @@ mod tests {
             "set - a\necho $x\n",
             "set -- -e\necho $x\n",
             "echo setopt $x\n",
+            "builtin echo setopt $x\n",
+            "command printf '%s' set -e $x\n",
         ] {
             assert_eq!(
                 policy(Dialect::Zsh, script),

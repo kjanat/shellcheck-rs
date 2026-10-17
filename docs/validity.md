@@ -189,7 +189,8 @@ a code when it has no row for the code or any version records `reproduces`,
 and drops it when every weighted row records `absent`. `differs`,
 `unparsable`, `timeout` and `port-miss` rows carry no weight. Every cell runs
 under its shell's default options. A script that runs `setopt`, `unsetopt`,
-`emulate`, or `set` with an option flag keeps every code of its floor.
+`emulate`, or `set` with an option flag keeps every code of its floor, also
+behind a zsh precommand modifier such as `builtin`.
 `Policy::of(dialect, root)` returns `Measured` for an added dialect whose
 script keeps the default options, else `Floor`. The checker drops the analysis
 findings whose code `Policy::keeps` rejects, after analysis and alongside the
