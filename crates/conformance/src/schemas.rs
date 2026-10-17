@@ -189,6 +189,77 @@ mod tests {
     }
 
     #[test]
+    fn json1_output_constrains_severities_and_insertion_points() {
+        use shellcheck_rs::interface::{
+            Comment, Fix, InsertionPoint, Position, PositionedComment, Replacement, Severity,
+        };
+
+        let schema = Value::from(output::<json1::Output>());
+        let levels = schema["$defs"]["Comment"]["properties"]["level"]["enum"]
+            .as_array()
+            .unwrap();
+        let points = schema["$defs"]["Replacement"]["properties"]["insertionPoint"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(levels.len(), 4);
+        assert_eq!(points.len(), 2);
+        let pos = Position {
+            file: "example.sh".to_string(),
+            line: 1,
+            column: 1,
+        };
+        for severity in [
+            Severity::ErrorC,
+            Severity::WarningC,
+            Severity::InfoC,
+            Severity::StyleC,
+        ] {
+            let comment = PositionedComment {
+                start: pos.clone(),
+                end: pos.clone(),
+                comment: Comment {
+                    severity,
+                    code: 2086,
+                    message: String::new(),
+                },
+                fix: Some(Fix {
+                    replacements: [InsertionPoint::InsertAfter, InsertionPoint::InsertBefore]
+                        .into_iter()
+                        .map(|insertion_point| Replacement {
+                            start: pos.clone(),
+                            end: pos.clone(),
+                            string: String::new(),
+                            precedence: 0,
+                            insertion_point,
+                        })
+                        .collect(),
+                }),
+            };
+            let document: Value =
+                serde_json::from_str(&json1::render(&[comment], &[]).unwrap()).unwrap();
+            let comment = &document["comments"][0];
+            assert!(levels.contains(&comment["level"]));
+            for replacement in comment["fix"]["replacements"].as_array().unwrap() {
+                assert!(points.contains(&replacement["insertionPoint"]));
+            }
+        }
+        for invalid in [
+            serde_json::json!("fatal"),
+            Value::Null,
+            serde_json::json!(0),
+        ] {
+            assert!(!levels.contains(&invalid));
+        }
+        for invalid in [
+            serde_json::json!("after"),
+            Value::Null,
+            serde_json::json!(0),
+        ] {
+            assert!(!points.contains(&invalid));
+        }
+    }
+
+    #[test]
     fn every_hand_written_validity_file_names_its_schema() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut files = vec![(

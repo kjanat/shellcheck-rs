@@ -54,7 +54,13 @@
         },
         "level": {
           "description": "The severity: `error`, `warning`, `info` or `style`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info",
+            "style"
+          ]
         },
         "line": {
           "description": "The 1-based line it starts on.",
@@ -113,7 +119,11 @@
         },
         "insertionPoint": {
           "description": "`afterEnd` or `beforeStart`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "afterEnd",
+            "beforeStart"
+          ]
         },
         "line": {
           "description": "The 1-based line the replaced range starts on.",

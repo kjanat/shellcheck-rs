@@ -37,6 +37,10 @@ pub struct Comment {
     #[serde(rename = "endColumn")]
     pub end_column: i64,
     /// The severity: `error`, `warning`, `info` or `style`.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("enum" = ["error", "warning", "info", "style"]))
+    )]
     pub level: String,
     /// The SC code, without the `SC` prefix.
     pub code: i64,
@@ -69,6 +73,10 @@ pub struct Replacement {
     pub end_line: i64,
     /// `afterEnd` or `beforeStart`.
     #[serde(rename = "insertionPoint")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("enum" = ["afterEnd", "beforeStart"]))
+    )]
     pub insertion_point: String,
     /// The 1-based line the replaced range starts on.
     pub line: i64,
