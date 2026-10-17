@@ -143,8 +143,12 @@ the directory is discarded after the run.
    observe expects its rejection.
 2. The snippet produces `observe.snippet`.
 3. The fixed script produces `observe.fixed`.
-4. On a cell with `dialect`: the port reports `code` on the snippet.
-5. On a cell with `dialect`: the port reports nothing with `code` on the fix.
+4. During verification, a recognized port dialect reports `code` on a
+   reproducing snippet when the spec applies to that dialect's floor.
+5. During verification, that dialect reports nothing with `code` on the fix.
+   When the shell records `absent`, neither script may report `code`, except
+   that the snippet may retain it if another version of that dialect records
+   `reproduces`.
 
 ## Outcomes
 
@@ -158,13 +162,16 @@ the directory is discarded after the run.
 | `port-miss`  | Assertion 4 or 5 failed.                                             |
 
 `cargo validity` verifies current results against the committed outcomes.\
-`cargo validity --record` updates those outcomes and `dialect_rules.rs`.
+`cargo validity --record` records shell evidence without port assertions,
+then updates those outcomes and `dialect_rules.rs`. Verification checks the
+port against the generated rules; recording does not depend on the old rules.
 Recording also removes rows for retired specs or cells. A partial recording
 preserves other current rows and regenerates the report for all current specs.
 
 ## Gate
 
-- A shipped cell: any change from `reproduces` fails. `port-miss` fails.
+- During verification, a shipped cell's changed outcome fails. `port-miss`
+  fails. Recording reports changed outcomes as drift.
 - An unshipped cell: changes are reported, never fatal.
 - A full-matrix run without `--record` fails on a row with no recorded
   outcome. A `--record` run and a `--cell` run report the row as new.

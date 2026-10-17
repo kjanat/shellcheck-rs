@@ -13,6 +13,7 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
         return Err("no spec matches --code".to_string());
     }
     let recorded = outcomes::load()?;
+    let baseline = Baseline::of(args.record);
     let mut rows: Vec<Row> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut ran = 0usize;
@@ -24,7 +25,7 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
         ran += 1;
         let container = Container::start(cell, &reference)?;
         for (n, s) in specs.iter().enumerate() {
-            let result = evaluate(&container, cell, s, n);
+            let result = evaluate(&container, cell, s, n, baseline, &recorded);
             let (outcome, observed) = match result {
                 Ok(pair) => pair,
                 Err(e) => {
@@ -49,7 +50,6 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
             missing.len()
         ));
     }
-    let baseline = Baseline::of(args.record);
     let (mut failures, drift) = compare(
         &matrix,
         &recorded,
@@ -115,7 +115,7 @@ fn compare(
         }
         match recorded.find(row) {
             Some(prev) if prev.outcome == row.outcome && prev.observed == row.observed => {}
-            Some(prev) if shipped => failures.push(format!(
+            Some(prev) if shipped && baseline == Baseline::Verify => failures.push(format!(
                 "{id} (recorded {}) {}",
                 prev.outcome.label(),
                 row.observed
@@ -177,12 +177,14 @@ fn evaluate(
     cell: &Cell,
     spec: &Spec,
     n: usize,
+    baseline: Baseline,
+    recorded: &Outcomes,
 ) -> Result<(Outcome, String), String> {
     let dirs = [format!("/tmp/run{n}a"), format!("/tmp/run{n}b")];
     for d in &dirs {
         container.mkdir(d)?;
     }
-    let result = observe(container, cell, spec, &dirs);
+    let result = observe(container, cell, spec, &dirs, baseline, recorded);
     for d in &dirs {
         container.remove(d)?;
     }
@@ -194,6 +196,8 @@ fn observe(
     cell: &Cell,
     spec: &Spec,
     dirs: &[String; 2],
+    baseline: Baseline,
+    recorded: &Outcomes,
 ) -> Result<(Outcome, String), String> {
     let snippet = format!("{}\n", spec.snippet.script);
     let fixed = format!("{}\n", spec.fixed.script);
@@ -215,15 +219,56 @@ fn observe(
         parsed.clone()
     };
     match verdict(spec, &parsed, &ran) {
-        Verdict::Snippet => port_check(cell, spec, &snippet, &fixed),
+        Verdict::Claim(claim) => {
+            port_check_claim(cell, spec, &snippet, &fixed, claim, baseline, recorded)
+        }
         Verdict::Outcome(outcome, observed) => Ok((outcome, observed)),
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
-    Snippet,
+    Claim(Claim),
     Outcome(Outcome, String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Claim {
+    Reproduces,
+    Absent,
+}
+
+impl Claim {
+    const fn outcome(self) -> Outcome {
+        match self {
+            Self::Reproduces => Outcome::Reproduces,
+            Self::Absent => Outcome::Absent,
+        }
+    }
+
+    fn agrees(
+        self,
+        code: i64,
+        dialect: &str,
+        recorded: &Outcomes,
+        on_snippet: &[i64],
+        on_fixed: &[i64],
+    ) -> bool {
+        let reports = on_snippet.contains(&code);
+        let snippet_agrees = match self {
+            Self::Reproduces => reports,
+            Self::Absent => {
+                // A versionless dialect keeps a code if another version reproduces it.
+                let reproduces = recorded.row.iter().any(|row| {
+                    row.code == code
+                        && row.outcome == Outcome::Reproduces
+                        && Dialect::from_name(&row.shell).is_some_and(|d| d.name() == dialect)
+                });
+                !reports || reproduces
+            }
+        };
+        snippet_agrees && !on_fixed.contains(&code)
+    }
 }
 
 fn parse_verdict(spec: &Spec, parsed: &[Run; 2]) -> Option<(Outcome, String)> {
@@ -252,10 +297,10 @@ fn verdict(spec: &Spec, parsed: &[Run; 2], ran: &[Run; 2]) -> Verdict {
     let a_fixed = holds(0, |o| &o.fixed);
     let b_fixed = holds(1, |o| &o.fixed);
     if a_snippet && b_fixed {
-        return Verdict::Snippet;
+        return Verdict::Claim(Claim::Reproduces);
     }
     if a_fixed && b_fixed {
-        return Verdict::Outcome(Outcome::Absent, String::new());
+        return Verdict::Claim(Claim::Absent);
     }
     Verdict::Outcome(
         Outcome::Differs,
@@ -293,17 +338,24 @@ fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or("").trim().to_string()
 }
 
-fn port_check(
+fn port_check_claim(
     cell: &Cell,
     spec: &Spec,
     snippet: &str,
     fixed: &str,
+    claim: Claim,
+    baseline: Baseline,
+    recorded: &Outcomes,
 ) -> Result<(Outcome, String), String> {
+    if baseline == Baseline::Record {
+        // The table is built from shell evidence, not from its previous rules.
+        return Ok((claim.outcome(), String::new()));
+    }
     let Some(dialect) = port_dialect(cell, spec) else {
-        return Ok((Outcome::Reproduces, String::new()));
+        return Ok((claim.outcome(), String::new()));
     };
-    if spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
-        return Ok((Outcome::Reproduces, String::new()));
+    if claim == Claim::Reproduces && spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
+        return Ok((claim.outcome(), String::new()));
     }
     let codes = |script: &str| -> Result<Vec<i64>, String> {
         Ok(port_keys(script, "-", Some(dialect))?
@@ -313,8 +365,8 @@ fn port_check(
     };
     let on_snippet = codes(snippet)?;
     let on_fixed = codes(fixed)?;
-    if on_snippet.contains(&spec.code) && !on_fixed.contains(&spec.code) {
-        return Ok((Outcome::Reproduces, String::new()));
+    if claim.agrees(spec.code, dialect, recorded, &on_snippet, &on_fixed) {
+        return Ok((claim.outcome(), String::new()));
     }
     Ok((
         Outcome::PortMiss,
@@ -340,6 +392,23 @@ fn speaks(port_shell: &str, spec_shell: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn port_check(
+        cell: &Cell,
+        spec: &Spec,
+        snippet: &str,
+        fixed: &str,
+    ) -> Result<(Outcome, String), String> {
+        port_check_claim(
+            cell,
+            spec,
+            snippet,
+            fixed,
+            Claim::Reproduces,
+            Baseline::Verify,
+            &Outcomes::default(),
+        )
+    }
 
     fn run_with(status: i32, stdout: &str, stderr: &str) -> Run {
         Run {
@@ -400,7 +469,10 @@ mod tests {
             run_with(2, "", "sh: 1: Syntax error"),
             run_with(0, "hi\n", ""),
         ];
-        assert_eq!(verdict(&spec, &parsed, &ran), Verdict::Snippet);
+        assert_eq!(
+            verdict(&spec, &parsed, &ran),
+            Verdict::Claim(Claim::Reproduces)
+        );
     }
 
     #[test]
@@ -409,10 +481,7 @@ mod tests {
         let parsed = [run_with(0, "", ""), run_with(0, "", "")];
         assert_eq!(parse_verdict(&spec, &parsed), None);
         let ran = [run_with(0, "hi\n", ""), run_with(0, "hi\n", "")];
-        assert_eq!(
-            verdict(&spec, &parsed, &ran),
-            Verdict::Outcome(Outcome::Absent, String::new())
-        );
+        assert_eq!(verdict(&spec, &parsed, &ran), Verdict::Claim(Claim::Absent));
     }
 
     #[test]
@@ -445,7 +514,10 @@ mod tests {
         let parsed = [run_with(0, "", ""), run_with(0, "", "")];
         assert_eq!(parse_verdict(&spec, &parsed), None);
         let ran = [run_with(0, "", ""), run_with(0, "hi\n", "")];
-        assert_eq!(verdict(&spec, &parsed, &ran), Verdict::Snippet);
+        assert_eq!(
+            verdict(&spec, &parsed, &ran),
+            Verdict::Claim(Claim::Reproduces)
+        );
         let ran = [run_with(0, "x\n", ""), run_with(0, "hi\n", "")];
         assert!(matches!(
             verdict(&spec, &parsed, &ran),
@@ -499,6 +571,17 @@ mod tests {
         assert!(failures[0].starts_with("SC2086 bash:1 absent"));
         assert_eq!(drift.len(), 1);
         assert!(drift[0].starts_with("SC2086 zsh:1 absent"));
+        let (failures, drift) = compare(
+            &m,
+            &recorded,
+            &rows,
+            &[],
+            Coverage::Matrix,
+            Baseline::Record,
+        );
+        assert_eq!(failures, Vec::<String>::new());
+        assert_eq!(drift.len(), 2);
+        assert!(drift[0].starts_with("SC2086 bash:1 absent (recorded reproduces)"));
         let (failures, drift) = compare(
             &m,
             &Outcomes::default(),
@@ -597,6 +680,138 @@ mod tests {
             port_check(&cell("tcsh", None), &spec, snippet, fixed),
             Ok((Outcome::Reproduces, String::new()))
         );
+    }
+
+    #[test]
+    fn an_absent_claim_requires_silence_on_both_scripts() {
+        let mut spec = parse_spec();
+        spec.code = 2086;
+        let snippet = "x=\"a b\"; printf '<%s>' $x\n";
+        let fixed = "x=\"a b\"; printf '<%s>' \"$x\"\n";
+        // Even a spec on another floor must not bypass an absent assertion.
+        assert_eq!(spec.shell.as_deref(), Some("sh"));
+        let check = |shell, a, b| {
+            port_check_claim(
+                &cell(shell, None),
+                &spec,
+                a,
+                b,
+                Claim::Absent,
+                Baseline::Verify,
+                &Outcomes::default(),
+            )
+        };
+        assert!(matches!(
+            check("bash", snippet, fixed),
+            Ok((Outcome::PortMiss, _))
+        ));
+        assert!(matches!(
+            check("bash", fixed, snippet),
+            Ok((Outcome::PortMiss, _))
+        ));
+        assert_eq!(
+            check("bash", fixed, fixed),
+            Ok((Outcome::Absent, String::new()))
+        );
+        assert_eq!(
+            check("zsh", snippet, fixed),
+            Ok((Outcome::Absent, String::new()))
+        );
+        assert_eq!(
+            check("tcsh", snippet, fixed),
+            Ok((Outcome::Absent, String::new()))
+        );
+    }
+
+    #[test]
+    fn recording_shell_evidence_does_not_depend_on_the_previous_rules() {
+        let mut spec = parse_spec();
+        spec.code = 2086;
+        spec.shell = None;
+        let snippet = "x=\"a b\"; printf '<%s>' $x\n";
+        let fixed = "x=\"a b\"; printf '<%s>' \"$x\"\n";
+        for (shell, claim) in [("bash", Claim::Absent), ("zsh", Claim::Reproduces)] {
+            assert!(matches!(
+                port_check_claim(
+                    &cell(shell, None),
+                    &spec,
+                    snippet,
+                    fixed,
+                    claim,
+                    Baseline::Verify,
+                    &Outcomes::default(),
+                ),
+                Ok((Outcome::PortMiss, _))
+            ));
+            assert_eq!(
+                port_check_claim(
+                    &cell(shell, None),
+                    &spec,
+                    snippet,
+                    fixed,
+                    claim,
+                    Baseline::Record,
+                    &Outcomes::default(),
+                ),
+                Ok((claim.outcome(), String::new()))
+            );
+        }
+    }
+
+    #[test]
+    fn absent_verification_respects_other_versions_but_not_other_dialects_or_codes() {
+        let row = |code, shell: &str, version: &str, outcome| Row {
+            code,
+            shell: shell.to_string(),
+            version: version.to_string(),
+            outcome,
+            observed: String::new(),
+        };
+        let mut recorded = Outcomes::default();
+        recorded.merge(&[
+            row(2086, "zsh", "5.9", Outcome::Absent),
+            row(2086, "bash", "5.3", Outcome::Reproduces),
+            row(2046, "zsh", "5.9", Outcome::Reproduces),
+        ]);
+        // Independent evidence must catch a port regression that emits a suppressed code.
+        assert!(!Claim::Absent.agrees(2086, "zsh", &recorded, &[2086], &[]));
+        assert!(Claim::Absent.agrees(2086, "zsh", &recorded, &[], &[]));
+        recorded.merge(&[row(2086, "zsh", "5.8", Outcome::Reproduces)]);
+        assert!(Claim::Absent.agrees(2086, "zsh", &recorded, &[2086], &[]));
+        assert!(!Claim::Absent.agrees(2086, "zsh", &recorded, &[2086], &[2086]));
+
+        recorded.merge(&[
+            row(2086, "mksh", "1", Outcome::Absent),
+            row(2086, "mksh", "2", Outcome::Reproduces),
+        ]);
+        let mut spec = parse_spec();
+        spec.code = 2086;
+        let snippet = "x=\"a b\"; printf '<%s>' $x\n";
+        let fixed = "x=\"a b\"; printf '<%s>' \"$x\"\n";
+        assert_eq!(
+            port_check_claim(
+                &cell("mksh", None),
+                &spec,
+                snippet,
+                fixed,
+                Claim::Absent,
+                Baseline::Verify,
+                &recorded,
+            ),
+            Ok((Outcome::Absent, String::new()))
+        );
+        assert!(matches!(
+            port_check_claim(
+                &cell("mksh", None),
+                &spec,
+                snippet,
+                snippet,
+                Claim::Absent,
+                Baseline::Verify,
+                &recorded,
+            ),
+            Ok((Outcome::PortMiss, _))
+        ));
     }
 
     #[test]
@@ -749,7 +964,10 @@ mod tests {
         assert!(spec_with(Kind::Stdout, "", "hi\n").observes_runtime());
         let parsed = [run_with(2, "", "sh: 1: Syntax error"), run_with(0, "", "")];
         assert_eq!(parse_verdict(&spec, &parsed), None);
-        assert_eq!(verdict(&spec, &parsed, &parsed.clone()), Verdict::Snippet);
+        assert_eq!(
+            verdict(&spec, &parsed, &parsed.clone()),
+            Verdict::Claim(Claim::Reproduces)
+        );
     }
 
     #[test]
