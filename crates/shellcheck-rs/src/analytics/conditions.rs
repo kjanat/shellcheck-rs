@@ -2089,14 +2089,17 @@ pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, ou
     root.visit_preorder(&mut |t: &Token| {
         if let InnerToken::T_Condition {
             typ: ConditionType::SingleBracket,
+            close,
             ..
         } = &*t.inner
         {
             let fix = if is_simple(t) {
-                fix_with(vec![
-                    replace_start(params, t.id(), 0, "["),
-                    replace_end(params, t.id(), 0, "]"),
-                ])
+                let mut replacements = vec![replace_start(params, t.id(), 0, "[")];
+                // Don't add another ] if it was (wrongly) closed with ]] already
+                if *close != ConditionType::DoubleBracket {
+                    replacements.push(replace_end(params, t.id(), 0, "]"));
+                }
+                fix_with(replacements)
             } else {
                 fix_with(Vec::new())
             };
@@ -2257,6 +2260,16 @@ pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token,
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn prop_checkRequireDoubleBracket1_4() {
+        for s in ["[ -x foo ]", "[ foo -o bar ]"] {
+            assert!(tree_emits(check_require_double_bracket, s), "{s}");
+        }
+        for s in ["#!/bin/sh\n[ -x foo ]", "[[ -x foo ]]"] {
+            assert!(!tree_emits(check_require_double_bracket, s), "{s}");
+        }
+    }
 
     #[test]
     fn prop_checkRequireDoubleEquals1_5() {

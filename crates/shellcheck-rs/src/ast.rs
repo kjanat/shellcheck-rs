@@ -344,8 +344,10 @@ pub enum InnerToken {
     },
     /// `T_Condition`: a `[ ... ]` or `[[ ... ]]` test.
     T_Condition {
-        /// Which bracket form it uses.
+        /// Which bracket form opens it.
         typ: ConditionType,
+        /// Which bracket form closes it.
+        close: ConditionType,
         /// The test expression.
         token: Token,
     },

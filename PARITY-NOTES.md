@@ -7,10 +7,11 @@ Most items here are reproduced by the port **on purpose**; an entry's **Port**
 line says when it is not. A fix that makes the port better than the oracle needs
 a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
-is one class, `upstream-false-parse-error`: the oracle rejects the file, the port
-does not, and `<shell> -n` agrees with the port. See
-`crates/conformance/src/deviations.rs`; no shell to ask means the difference
-counts as a divergence, so it fails closed.
+are five classes: `upstream-false-parse-error` (the oracle rejects the file, the
+port does not, and `<shell> -n` agrees with the port), `interpreter-path-typo`,
+`upstream-function-tail-cd`, `completed-statement-notes` and
+`unclosed-test-quote`. See `crates/conformance/src/deviations.rs`; missing
+evidence means the difference counts as a divergence, so each class fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
 the port's output and files it as a port bug would be wrong — and "fixing" it
@@ -553,7 +554,7 @@ they belong here rather than in an upstream issue.
 
 Rust deliberately warns when a failed `cd` inside a final compound statement can
 be followed by another command or loop iteration. The pinned upstream source
-(`98deabe126a26861fb02aa2b431eaf31e39e6abe`) suppresses some of these warnings by
+(`c36c85a05ed3a1560e31bf7d89db040f84ef4556`) suppresses some of these warnings by
 checking only whether the enclosing compound statement is last in a function.
 For example, `f() { if true; then cd /missing; echo continued; fi; }` must warn.
 A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt.
