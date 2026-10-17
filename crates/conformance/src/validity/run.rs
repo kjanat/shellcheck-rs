@@ -4,6 +4,7 @@ use super::matrix::{self, Cell};
 use super::outcomes::{self, Outcome, Outcomes, Row};
 use super::spec::{self, Kind, Spec};
 use crate::port_keys;
+use shellcheck_rs::Dialect;
 
 pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let matrix = matrix::load()?;
@@ -286,7 +287,7 @@ fn port_check(
     let Some(dialect) = cell.port_shell() else {
         return Ok((Outcome::Reproduces, String::new()));
     };
-    if spec.shell.as_deref().is_some_and(|s| s != dialect) {
+    if spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
         return Ok((Outcome::Reproduces, String::new()));
     }
     let codes = |script: &str| -> Result<Vec<i64>, String> {
@@ -304,6 +305,12 @@ fn port_check(
         Outcome::PortMiss,
         format!("port as {dialect}: snippet {on_snippet:?} fixed {on_fixed:?}"),
     ))
+}
+
+fn speaks(port_shell: &str, spec_shell: &str) -> bool {
+    port_shell == spec_shell
+        || Dialect::from_name(port_shell)
+            .is_some_and(|d| Dialect::from(d.floor()).name() == spec_shell)
 }
 
 #[cfg(test)]
@@ -566,6 +573,50 @@ mod tests {
             port_check(&cell("tcsh", None), &spec, snippet, fixed),
             Ok((Outcome::Reproduces, String::new()))
         );
+    }
+
+    #[test]
+    fn a_floor_spec_runs_the_port_in_the_dialects_on_that_floor() {
+        let spec = |snippet: &str| Spec {
+            code: 3010,
+            claim: String::new(),
+            shell: Some("sh".to_string()),
+            snippet: spec::Script {
+                script: snippet.to_string(),
+            },
+            fixed: spec::Script {
+                script: String::new(),
+            },
+            observe: vec![],
+        };
+        let bashism = spec("[[ -n $1 ]]\n");
+        let fixed = "[ -n \"$1\" ]\n";
+        assert_eq!(
+            port_check(&cell("posh", None), &bashism, "[[ -n $1 ]]\n", fixed),
+            Ok((Outcome::Reproduces, String::new()))
+        );
+        let silent = spec("echo hi\n");
+        for shell in ["posh", "yash", "netbsd-sh"] {
+            assert!(
+                matches!(
+                    port_check(&cell(shell, None), &silent, "echo hi\n", fixed),
+                    Ok((Outcome::PortMiss, _))
+                ),
+                "{shell}"
+            );
+        }
+        for shell in ["zsh", "mksh", "osh"] {
+            assert_eq!(
+                port_check(&cell(shell, None), &silent, "echo hi\n", fixed),
+                Ok((Outcome::Reproduces, String::new())),
+                "{shell}"
+            );
+        }
+        assert!(speaks("sh", "sh"));
+        assert!(speaks("posh", "sh"));
+        assert!(speaks("zsh", "bash"));
+        assert!(!speaks("zsh", "sh"));
+        assert!(!speaks("bash", "sh"));
     }
 
     #[test]
