@@ -125,7 +125,7 @@ shell with its default options. A script that runs `setopt`, `unsetopt`,
 `emulate`, `eval`, `.`, `source`, or `set` with an option flag keeps every code of its floor, also
 behind a zsh precommand modifier such as `builtin`. So does a script whose
 shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
-`#!/usr/bin/env -S zsh -y`, or a zsh script that assigns to the special
+`#!/usr/bin/env -S zsh -y` (also `-Szsh -y`), or a zsh script that assigns to the special
 `options` array. A zsh script with `options[shwordsplit]=on` keeps
 SC2086. Upstream dialects
 never consult the table. `tcsh` is not a dialect: its grammar is unrelated and

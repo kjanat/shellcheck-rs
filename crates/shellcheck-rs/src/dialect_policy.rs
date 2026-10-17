@@ -92,17 +92,16 @@ fn shebang_sets_options(shebang: &str) -> bool {
     if basename(first) != "env" {
         return has_option_flag(rest);
     }
-    let interpreter_args: Vec<&str> = rest
-        .iter()
-        .filter_map(|w| match w.strip_prefix("--split-string=") {
-            Some("") => None,
-            Some(w) => Some(w),
-            None => Some(*w),
-        })
-        .skip_while(|a| a.starts_with('-') || a.contains('='))
-        .skip(1)
-        .collect();
-    has_option_flag(&interpreter_args)
+    for (index, word) in rest.iter().enumerate() {
+        let command = word
+            .strip_prefix("--split-string=")
+            .or_else(|| word.strip_prefix("-S"))
+            .unwrap_or(word);
+        if !command.is_empty() && !command.starts_with('-') && !command.contains('=') {
+            return has_option_flag(&rest[index + 1..]);
+        }
+    }
+    false
 }
 
 const PRECOMMAND_MODIFIERS: [&str; 6] = ["-", "builtin", "command", "exec", "nocorrect", "noglob"];
@@ -237,6 +236,11 @@ mod tests {
             "#!/bin/zsh -o shwordsplit\necho $x\n",
             "#!/bin/zsh --shwordsplit\necho $x\n",
             "#!/usr/bin/env -S zsh -y\necho $x\n",
+            "#!/usr/bin/env -Szsh -y\necho $x\n",
+            "#!/usr/bin/env -Szsh -o shwordsplit\necho $x\n",
+            "#!/usr/bin/env -Szsh -S\necho $x\n",
+            "#!/usr/bin/env zsh -S\necho $x\n",
+            "#!/usr/bin/env -SLC_ALL=C zsh +y\necho $x\n",
             "#!/usr/bin/env --split-string=zsh -y\necho $x\n",
             "#!/usr/bin/env -S LC_ALL=C zsh +y\necho $x\n",
             "options[SH_WORD_SPLIT]=on\necho $x\n",
@@ -264,6 +268,8 @@ mod tests {
             "#!/bin/zsh -\necho $x\n",
             "#!/usr/bin/env zsh\necho $x\n",
             "#!/usr/bin/env -S zsh\necho $x\n",
+            "#!/usr/bin/env -Szsh\necho $x\n",
+            "#!/usr/bin/env -SLC_ALL=C zsh\necho $x\n",
             "#!/usr/bin/env -S LC_ALL=C zsh\necho $x\n",
             "echo \"${options[shwordsplit]}\"\necho $x\n",
             "echo 'options[shwordsplit]=on'\necho $x\n",

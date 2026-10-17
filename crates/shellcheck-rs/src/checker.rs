@@ -1231,6 +1231,20 @@ mod source_tests {
     }
 
     #[test]
+    fn attached_env_split_strings_preserve_zsh_option_flags() {
+        for shebang in [
+            "#!/usr/bin/env -Szsh -y",
+            "#!/usr/bin/env -SLC_ALL=C zsh -y",
+        ] {
+            let script = format!("{shebang}\nx='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+        let script = "#!/usr/bin/env -Szsh\nx='a b'; printf '<%s>\\n' $x\n";
+        assert!(!check(script).contains(&2086));
+    }
+
+    #[test]
     fn prop_optionDisablesBadShebang() {
         assert_eq!(
             check_with_spec(
