@@ -193,7 +193,8 @@ under its shell's default options. A script that runs `setopt`, `unsetopt`,
 `emulate`, or `set` with an option flag keeps every code of its floor, also
 behind a zsh precommand modifier such as `builtin`. So does a script whose
 shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
-`#!/usr/bin/env -S zsh -y`.
+`#!/usr/bin/env -S zsh -y`, or a zsh script that assigns to the special
+`options` array, as in `options[shwordsplit]=on`.
 `Policy::of(dialect, root)` returns `Measured` for an added dialect whose
 script keeps the default options, else `Floor`. The checker drops the analysis
 findings whose code `Policy::keeps` rejects, after analysis and alongside the

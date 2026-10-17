@@ -1183,6 +1183,9 @@ mod source_tests {
 
     #[test]
     fn a_zsh_script_that_enables_word_splitting_keeps_sc2086() {
+        let assignment = "#!/bin/zsh\noptions[shwordsplit]=on\nx=\"a b\"; printf '<%s>\\n' $x\n";
+        assert!(check(assignment).contains(&2086));
+        assert!(check_as(assignment, Dialect::Zsh).contains(&2086));
         assert_eq!(
             check("#!/bin/zsh\nsetopt SH_WORD_SPLIT\nx=\"a b\"; printf '<%s>\\n' $x\n"),
             vec![2086]

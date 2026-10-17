@@ -49,7 +49,7 @@ impl Policy {
     /// `Measured` for an added dialect whose script keeps the default options.
     #[must_use]
     pub fn of(dialect: Dialect, root: &Token) -> Self {
-        if dialect.is_added() && keeps_default_options(root) {
+        if dialect.is_added() && keeps_default_options(dialect, root) {
             Self::Measured(dialect)
         } else {
             Self::Floor
@@ -66,7 +66,7 @@ impl Policy {
     }
 }
 
-fn keeps_default_options(root: &Token) -> bool {
+fn keeps_default_options(dialect: Dialect, root: &Token) -> bool {
     let mut keeps = true;
     root.visit_preorder(&mut |t| {
         let changes = match &*t.inner {
@@ -74,6 +74,7 @@ fn keeps_default_options(root: &Token) -> bool {
                 matches!(&*shebang.inner, InnerToken::T_Literal(s) if shebang_sets_options(s))
             }
             InnerToken::T_SimpleCommand { .. } => sets_options(&oversimplify(t)),
+            InnerToken::T_Assignment { var, .. } => dialect == Dialect::Zsh && var == "options",
             _ => false,
         };
         if changes {
@@ -231,6 +232,11 @@ mod tests {
             "#!/usr/bin/env -S zsh -y\necho $x\n",
             "#!/usr/bin/env --split-string=zsh -y\necho $x\n",
             "#!/usr/bin/env -S LC_ALL=C zsh +y\necho $x\n",
+            "options[SH_WORD_SPLIT]=on\necho $x\n",
+            "options[shwordsplit]=on\necho $x\n",
+            "options[$name]=on\necho $x\n",
+            "options=(shwordsplit on)\necho $x\n",
+            "options+=(shwordsplit on)\necho $x\n",
         ] {
             assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
             assert!(policy(Dialect::Zsh, script).keeps(2086), "{script:?}");
@@ -252,6 +258,9 @@ mod tests {
             "#!/usr/bin/env zsh\necho $x\n",
             "#!/usr/bin/env -S zsh\necho $x\n",
             "#!/usr/bin/env -S LC_ALL=C zsh\necho $x\n",
+            "echo \"${options[shwordsplit]}\"\necho $x\n",
+            "echo 'options[shwordsplit]=on'\necho $x\n",
+            "other_options[shwordsplit]=on\necho $x\n",
         ] {
             assert_eq!(
                 policy(Dialect::Zsh, script),
@@ -259,5 +268,13 @@ mod tests {
                 "{script:?}"
             );
         }
+    }
+
+    #[test]
+    fn options_is_an_ordinary_variable_in_other_added_dialects() {
+        assert_eq!(
+            policy(Dialect::Mksh, "options[0]=on\necho $x\n"),
+            Policy::Measured(Dialect::Mksh)
+        );
     }
 }
