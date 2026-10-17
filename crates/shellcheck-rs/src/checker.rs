@@ -1245,6 +1245,20 @@ mod source_tests {
     }
 
     #[test]
+    fn quoted_env_split_flags_keep_zsh_floor_diagnostics() {
+        for shebang in [
+            "#!/usr/bin/env -S zsh '-y'",
+            "#!/usr/bin/env -S zsh \"-y\"",
+            "#!/usr/bin/env -Szsh -'y'",
+            "#!/usr/bin/env --split-string=zsh '-y'",
+        ] {
+            let script = format!("{shebang}\nx='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+    }
+
+    #[test]
     fn a_zsh_alias_that_enables_word_splitting_keeps_sc2086() {
         for definition in [
             "alias split='setopt SH_WORD_SPLIT'",

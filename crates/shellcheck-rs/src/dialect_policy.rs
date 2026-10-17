@@ -6,6 +6,8 @@ use crate::ast_lib::{basename, oversimplify};
 use crate::dialect::Dialect;
 use crate::dialect_rules::RULES;
 
+mod env_split;
+
 /// What the validity matrix recorded for one diagnostic in one cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -85,23 +87,54 @@ fn keeps_default_options(dialect: Dialect, root: &Token) -> bool {
 }
 
 fn shebang_sets_options(shebang: &str) -> bool {
-    let words: Vec<&str> = shebang.split_whitespace().collect();
-    let Some((first, rest)) = words.split_first() else {
-        return false;
-    };
+    let (first, rest) = shebang
+        .trim_start()
+        .split_once(char::is_whitespace)
+        .unwrap_or_else(|| (shebang.trim(), ""));
     if basename(first) != "env" {
-        return has_option_flag(rest);
+        return has_option_flag(&rest.split_whitespace().collect::<Vec<_>>());
     }
-    for (index, word) in rest.iter().enumerate() {
-        let command = word
-            .strip_prefix("--split-string=")
-            .or_else(|| word.strip_prefix("-S"))
-            .unwrap_or(word);
-        if !command.is_empty() && !command.starts_with('-') && !command.contains('=') {
-            return has_option_flag(&rest[index + 1..]);
+    env_shebang_sets_options(rest)
+}
+
+fn env_shebang_sets_options(mut rest: &str) -> bool {
+    while !rest.trim_start().is_empty() {
+        rest = rest.trim_start();
+        let (word, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let split = rest
+            .strip_prefix("-S")
+            .or_else(|| rest.strip_prefix("--split-string="))
+            .or_else(|| (word == "--split-string").then_some(tail));
+        if let Some(payload) = split {
+            return env_split::split(payload).is_none_or(|words| env_words_set_options(&words));
+        }
+        if !env_prefix_word(word) {
+            return word.starts_with('-')
+                || has_option_flag(&tail.split_whitespace().collect::<Vec<_>>());
+        }
+        rest = tail;
+    }
+    true
+}
+
+fn env_words_set_options(words: &[String]) -> bool {
+    for (index, word) in words.iter().enumerate() {
+        if !env_prefix_word(word) {
+            // Unknown env options, including nested -S, cannot establish
+            // the interpreter's default options without more evaluation.
+            return word.is_empty()
+                || word.starts_with('-')
+                || has_option_flag(&words[index + 1..]);
         }
     }
-    false
+    true
+}
+
+fn env_prefix_word(word: &str) -> bool {
+    matches!(
+        word,
+        "-" | "--" | "-i" | "--ignore-environment" | "-v" | "--debug"
+    ) || (!word.starts_with('-') && word.contains('='))
 }
 
 const PRECOMMAND_MODIFIERS: [&str; 6] = ["-", "builtin", "command", "exec", "nocorrect", "noglob"];
@@ -279,6 +312,54 @@ mod tests {
                 policy(Dialect::Zsh, script),
                 Policy::Measured(Dialect::Zsh),
                 "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_split_strings_decode_flags_or_conservatively_keep_the_floor() {
+        for arguments in [
+            "-S zsh '-y'",
+            "-S zsh \"-y\"",
+            "-Szsh -'y'",
+            "--split-string=zsh '-y'",
+            "--split-string zsh '-y'",
+            r"-S zsh\_-y",
+            "-S zsh ${FLAGS}",
+            "-S zsh \"${FLAGS}\"",
+            "-S zsh '-y",
+            r"-S zsh \q",
+            "-S zsh '-S'",
+            "-S -u NAME zsh",
+            "-S '-S zsh -y'",
+            "-vS zsh '-y'",
+        ] {
+            let script = format!("#!/usr/bin/env {arguments}\necho $x\n");
+            assert_eq!(
+                policy(Dialect::Zsh, &script),
+                Policy::Floor,
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_split_literals_and_terminators_do_not_create_flags() {
+        for arguments in [
+            "-S zsh # '-y'",
+            r"-S zsh\c -y",
+            "-S zsh '--' '-y'",
+            "-S zsh '-'",
+            "-S zsh ''",
+            "-S LC_ALL='C' zsh",
+            "-S zsh '${FLAGS}'",
+            r"-S zsh '\_ -y'",
+        ] {
+            let script = format!("#!/usr/bin/env {arguments}\necho $x\n");
+            assert_eq!(
+                policy(Dialect::Zsh, &script),
+                Policy::Measured(Dialect::Zsh),
+                "{arguments:?}"
             );
         }
     }

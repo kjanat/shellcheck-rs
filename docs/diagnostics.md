@@ -127,7 +127,9 @@ behind a zsh precommand modifier such as `builtin`. So does a script whose
 shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `#!/usr/bin/env -S zsh -y` (also `-Szsh -y`), or a zsh script that assigns to the special
 `options` array. A zsh script with `options[shwordsplit]=on` keeps
-SC2086. Upstream dialects
+SC2086. GNU `env -S` quoting, escapes and comments are decoded before checking
+interpreter flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
+Upstream dialects
 never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
 its shebang still draws SC1071.
 

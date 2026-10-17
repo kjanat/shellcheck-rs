@@ -204,6 +204,8 @@ behind a zsh precommand modifier such as `builtin`. So does a script whose
 shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `#!/usr/bin/env -S zsh -y` (also `-Szsh -y`), or a zsh script that assigns to the special
 `options` array, as in `options[shwordsplit]=on`.
+GNU `env -S` quoting, escapes and comments are decoded before checking interpreter
+flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
 `Policy::of(dialect, root)` returns `Measured` for an added dialect whose
 script keeps the default options, else `Floor`. The checker drops the analysis
 findings whose code `Policy::keeps` rejects, after analysis and alongside the
