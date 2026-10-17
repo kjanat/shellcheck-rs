@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3020
+claim = "sh has no &>: the command is backgrounded and the file stays empty"
+shell = "sh"
+
+[snippet]
+script = 'echo hi &>"$TMPDIR/o"; wait; if [ -s "$TMPDIR/o" ]; then echo full; else echo empty; fi'
+
+[fixed]
+script = 'echo hi >"$TMPDIR/o" 2>&1; wait; if [ -s "$TMPDIR/o" ]; then echo full; else echo empty; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "hi\nempty\n"
+fixed   = "full\n"

@@ -139,6 +139,7 @@ fn pick(pinned: &str, tag: &str, probe: impl Fn(&[&str]) -> bool) -> Option<Stri
     None
 }
 
+#[derive(Clone)]
 pub struct Run {
     pub status: i32,
     pub stdout: String,

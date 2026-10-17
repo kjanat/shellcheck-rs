@@ -1,8 +1,9 @@
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     pub code: i64,
@@ -10,29 +11,58 @@ pub struct Spec {
     pub shell: Option<String>,
     pub snippet: Script,
     pub fixed: Script,
+    #[schemars(length(min = 1))]
     pub observe: Vec<Observe>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
     pub script: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, JsonSchema, Debug)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend(
+    "if" = {
+        "properties": {
+            "kind": { "const": "parse" }
+        },
+        "required": ["kind"]
+    },
+    "then" = {
+        "properties": {
+            "snippet": { "enum": [PARSE_ACCEPTED, PARSE_REJECTED] },
+            "fixed": { "enum": [PARSE_ACCEPTED, PARSE_REJECTED] }
+        }
+    }
+))]
 pub struct Observe {
     pub kind: Kind,
     pub snippet: String,
     pub fixed: String,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Stdout,
     Status,
     StderrContains,
+    Parse,
+}
+
+pub const PARSE_ACCEPTED: &str = "accepted";
+pub const PARSE_REJECTED: &str = "rejected";
+
+impl Spec {
+    pub fn observes_parse(&self) -> bool {
+        self.observe.iter().any(|o| o.kind == Kind::Parse)
+    }
+
+    pub fn observes_runtime(&self) -> bool {
+        self.observe.iter().any(|o| o.kind != Kind::Parse)
+    }
 }
 
 pub fn load(codes: &[i64]) -> Result<Vec<Spec>, String> {
@@ -61,6 +91,18 @@ pub fn load_from(dir: &Path, codes: &[i64]) -> Result<Vec<Spec>, String> {
         }
         if spec.observe.is_empty() {
             return Err(format!("{shown}: no observe block"));
+        }
+        for value in spec
+            .observe
+            .iter()
+            .filter(|o| o.kind == Kind::Parse)
+            .flat_map(|o| [&o.snippet, &o.fixed])
+        {
+            if value != PARSE_ACCEPTED && value != PARSE_REJECTED {
+                return Err(format!(
+                    "{shown}: a parse observe takes {PARSE_ACCEPTED:?} or {PARSE_REJECTED:?}, not {value:?}"
+                ));
+            }
         }
         if codes.is_empty() || codes.contains(&spec.code) {
             specs.push(spec);
@@ -106,5 +148,20 @@ mod tests {
         let err = load_from(&dir, &[]).unwrap_err();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(err.contains("does not match code 2"));
+    }
+
+    #[test]
+    fn a_parse_observe_takes_only_accepted_or_rejected() {
+        let dir = std::env::temp_dir().join(format!("validity-parse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SC3001.toml"),
+            "code = 3001\nclaim = \"c\"\n[snippet]\nscript = \"a\"\n[fixed]\nscript = \"b\"\n[[observe]]\nkind = \"parse\"\nsnippet = \"rejected\"\nfixed = \"ok\"\n",
+        )
+        .unwrap();
+        let err = load_from(&dir, &[]).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(err.contains("a parse observe takes"));
+        assert!(err.contains("\"ok\""));
     }
 }

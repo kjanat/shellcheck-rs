@@ -3,18 +3,20 @@
 use std::error::Error;
 use std::path::PathBuf;
 
+#[path = "src/oracle.rs"]
+mod oracle;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let pin = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("../../tools/oracle.json");
     println!("cargo:rerun-if-changed={}", pin.display());
-    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pin)?)?;
-    for (key, name) in [
-        ("version", "RSHELLCHECK_UPSTREAM_VERSION"),
-        ("revision", "RSHELLCHECK_UPSTREAM_REVISION"),
-    ] {
-        let value = json[key]
-            .as_str()
-            .ok_or_else(|| format!("{} lacks a string {key}", pin.display()))?;
-        println!("cargo:rustc-env={name}={value}");
-    }
+    let pin: oracle::UpstreamPin = serde_json::from_str(&std::fs::read_to_string(&pin)?)?;
+    println!(
+        "cargo:rustc-env=RSHELLCHECK_UPSTREAM_VERSION={}",
+        pin.version
+    );
+    println!(
+        "cargo:rustc-env=RSHELLCHECK_UPSTREAM_REVISION={}",
+        pin.revision
+    );
     Ok(())
 }

@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3032
+claim = "sh has no coproc: it is a missing command"
+shell = "sh"
+
+[snippet]
+script = 'coproc cat 2>/dev/null; echo "$?"'
+
+[fixed]
+script = 'cat </dev/null; echo "$?"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "127\n"
+fixed   = "0\n"

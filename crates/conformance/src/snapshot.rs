@@ -19,6 +19,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use shellcheck_rs::Dialect;
+
 use crate::{Args, port_keys};
 
 /// The corpus a snapshot covers, as (label, script) pairs.
@@ -65,20 +67,15 @@ struct Entry {
 
 /// Run the port over every dialect it can be asked for, so a change that only
 /// shows in one of them cannot hide.
-const DIALECTS: [Option<&str>; 6] = [
-    None,
-    Some("bash"),
-    Some("sh"),
-    Some("dash"),
-    Some("ksh"),
-    Some("busybox"),
-];
+fn dialects() -> impl Iterator<Item = Option<&'static str>> {
+    std::iter::once(None).chain(Dialect::ALL.iter().map(|d| Some(d.name())))
+}
 
 fn record(script: &str) -> Result<Entry, String> {
     let mut payload = String::new();
     let mut messages = String::new();
     let mut codes: Vec<String> = Vec::new();
-    for shell in DIALECTS {
+    for shell in dialects() {
         let keys = port_keys(script, "-", shell)?;
         let _ = write!(payload, "[{}]", shell.unwrap_or("-"));
         for k in &keys {
@@ -224,4 +221,62 @@ pub fn run(args: &Args) -> Result<bool, String> {
         );
     }
     Ok(changed.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use shellcheck_rs::Dialect;
+
+    use crate::port_keys;
+
+    fn frozen_corpus() -> Vec<String> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/ShellCheck");
+        let seeds: Vec<String> = crate::corpus::coverage(&src)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.script)
+            .collect();
+        let mut scripts = seeds.clone();
+        scripts.extend(crate::fuzz::sample_scripts(&seeds, 0, 2000));
+        scripts
+    }
+
+    #[test]
+    fn corpus_scripts_naming_an_added_dialect_lose_only_the_codes_the_table_drops() {
+        let mut lost_codes = BTreeSet::new();
+        let mut scripts_losing = 0;
+        for script in frozen_corpus() {
+            let Some(root) =
+                shellcheck_rs::parser::parse_script_with("-", &script, false, None).root
+            else {
+                continue;
+            };
+            let Some(dialect) =
+                shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())
+            else {
+                continue;
+            };
+            let checked = port_keys(&script, "-", None).unwrap();
+            let floor =
+                port_keys(&script, "-", Some(Dialect::from(dialect.floor()).name())).unwrap();
+            let policy = shellcheck_rs::dialect_policy::Policy::of(dialect, &root);
+            let kept: Vec<_> = floor
+                .iter()
+                .filter(|k| policy.keeps(k.code))
+                .cloned()
+                .collect();
+            assert_eq!(checked, kept, "{script:?}");
+            let lost: Vec<_> = floor.iter().filter(|k| !kept.contains(k)).collect();
+            if !lost.is_empty() {
+                scripts_losing += 1;
+                lost_codes.extend(lost.iter().map(|k| k.code));
+            }
+        }
+        assert_eq!(lost_codes, BTreeSet::from([2086]));
+        assert_eq!(scripts_losing, 13);
+    }
 }

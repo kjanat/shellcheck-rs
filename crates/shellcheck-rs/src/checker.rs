@@ -4,6 +4,8 @@
 use crate::analytics;
 use crate::analyzer_lib;
 use crate::ast::Id;
+use crate::dialect::Dialect;
+use crate::dialect_policy;
 use crate::interface::{
     CheckResult, CheckSpec, Code, Comment, NoExternalSources, Position, PositionedComment,
     RcParseProblem, Severity, Shell, System, TokenComment,
@@ -24,13 +26,23 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 /// supplies a default so that an embedder that never sources anything does not
 /// have to.
 pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
+    check_script_as(sys, spec, spec.shell_type_override.map(Dialect::from))
+}
+
+/// [`check_script_with`], checked as `dialect` in place of
+/// `spec.shell_type_override`.
+pub fn check_script_as(
+    sys: Rc<dyn System>,
+    spec: &CheckSpec,
+    dialect: Option<Dialect>,
+) -> CheckResult {
     let mut parse = parser::parse_script_spec(&parser::ParseSpec {
         filename: spec.filename.clone(),
         script: spec.script.clone(),
         check_sourced: spec.check_sourced,
-        shell_flag_specified: spec.shell_type_override.is_some(),
-        shell_hint: spec
-            .shell_type_override
+        shell_flag_specified: dialect.is_some(),
+        shell_hint: dialect
+            .map(Dialect::floor)
             .or_else(|| shell_from_filename(&spec.filename)),
         rc_annotations: spec
             .rc
@@ -69,16 +81,22 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         // `asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec`
         let mut optional = analyzer_lib::get_enable_directives(&root);
         optional.extend(spec.optional_checks.iter().cloned());
-        let params = analyzer_lib::make_parameters_ext(
+        let fallback = shell_from_filename(&spec.filename);
+        let checked_as =
+            dialect.unwrap_or_else(|| analyzer_lib::determine_dialect(fallback, &root));
+        let params = analyzer_lib::make_parameters_as(
             root,
             parse.positions,
-            spec.shell_type_override,
-            shell_from_filename(&spec.filename),
+            dialect,
+            fallback,
             spec.extended_analysis,
         );
         let analysis = analytics::analyze_with(&params, &optional);
+        let policy = dialect_policy::Policy::of(checked_as, &params.root);
         for tc in analysis {
-            if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced) {
+            if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced)
+                || !policy.keeps(tc.comment.code)
+            {
                 continue;
             }
             positioned.push(token_to_position(&tc, &params.token_positions));
@@ -212,7 +230,7 @@ fn note_to_positioned(n: &ParseNote) -> PositionedComment {
     }
 }
 
-fn token_to_position(
+pub(crate) fn token_to_position(
     tc: &TokenComment,
     positions: &std::collections::BTreeMap<Id, (Position, Position)>,
 ) -> PositionedComment {
@@ -289,13 +307,25 @@ mod source_tests {
 
     /// `getErrors`: the codes, sorted.
     fn errors(sys: Rc<dyn System>, spec: &CheckSpec) -> Vec<i64> {
-        let mut codes: Vec<i64> = check_script_with(sys, spec)
-            .comments
-            .iter()
-            .map(|c| c.comment.code)
-            .collect();
+        codes_of(&check_script_with(sys, spec))
+    }
+
+    fn codes_of(result: &CheckResult) -> Vec<i64> {
+        let mut codes: Vec<i64> = result.comments.iter().map(|c| c.comment.code).collect();
         codes.sort_unstable();
         codes
+    }
+
+    fn check_as(script: &str, dialect: Dialect) -> Vec<i64> {
+        let spec = CheckSpec {
+            script: script.to_string(),
+            ..CheckSpec::default()
+        };
+        codes_of(&check_script_as(
+            Rc::new(MockSystem::new(&[])),
+            &spec,
+            Some(dialect),
+        ))
     }
 
     /// `checkWithIncludes`: SC2148 excluded, sources read from the mock.
@@ -1116,6 +1146,175 @@ mod source_tests {
     #[test]
     fn prop_wontParseBadShell() {
         assert_eq!(check("#!/usr/bin/python\ntrue $1\n"), vec![1071]);
+    }
+
+    #[test]
+    fn an_added_dialect_shebang_is_checked_as_its_floor() {
+        assert_eq!(check("#!/bin/zsh\necho $x\n"), vec![2154]);
+        assert_eq!(check("#!/bin/posh\n[[ -n $1 ]]\n"), vec![3010]);
+        assert_eq!(check("#!/bin/yash\n[[ -n $1 ]]\n"), Vec::<i64>::new());
+        assert_eq!(check("#!/bin/mksh\n[[ -n $1 ]]\n"), Vec::<i64>::new());
+        assert_eq!(check("#!/bin/tcsh\necho $x\n"), vec![1071]);
+        assert_eq!(
+            check_as("#!/bin/zsh\n[[ -n $1 ]]\n", Dialect::Posh),
+            vec![3010]
+        );
+    }
+
+    #[test]
+    fn a_code_the_matrix_records_absent_for_a_dialect_is_dropped() {
+        let script = "#!/bin/zsh\nx=\"a b\"; echo $x\n";
+        assert_eq!(check(script), Vec::<i64>::new());
+        assert_eq!(check("#!/bin/bash\nx=\"a b\"; echo $x\n"), vec![2086]);
+        assert_eq!(check_as(script, Dialect::Zsh), Vec::<i64>::new());
+        assert_eq!(check_as(script, Dialect::Bash), vec![2086]);
+        assert_eq!(
+            check_with_spec(
+                &[],
+                &CheckSpec {
+                    script: script.to_string(),
+                    shell_type_override: Some(Shell::Bash),
+                    ..CheckSpec::default()
+                }
+            ),
+            vec![2086]
+        );
+    }
+
+    #[test]
+    fn a_zsh_script_that_enables_word_splitting_keeps_sc2086() {
+        let assignment = "#!/bin/zsh\noptions[shwordsplit]=on\nx=\"a b\"; printf '<%s>\\n' $x\n";
+        assert!(check(assignment).contains(&2086));
+        assert!(check_as(assignment, Dialect::Zsh).contains(&2086));
+        assert_eq!(
+            check("#!/bin/zsh\nsetopt SH_WORD_SPLIT\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            vec![2086]
+        );
+        assert_eq!(
+            check("#!/bin/zsh\nset -y\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            vec![2086]
+        );
+        assert_eq!(
+            check("#!/usr/bin/env -S zsh -y\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            vec![2086]
+        );
+        assert_eq!(
+            check("#!/bin/zsh\nset -- a b\nx=\"a b\"; printf '<%s>\\n' $x\n"),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn dynamically_defined_zsh_functions_keep_sc2086() {
+        for parameter in ["functions", "aliases"] {
+            let script = format!(
+                "#!/bin/zsh\nzmodload zsh/parameter\n{parameter}[split]='setopt SH_WORD_SPLIT'\nsplit\nx='a b'; printf '%s\\n' $x\n"
+            );
+            assert!(check(&script).contains(&2086), "{parameter}");
+            assert!(
+                check_as(&script, Dialect::Zsh).contains(&2086),
+                "{parameter}"
+            );
+        }
+    }
+
+    #[test]
+    fn autoloaded_zsh_functions_keep_sc2086() {
+        for setup in [
+            "autoload split",
+            "autoload -Uz split",
+            "builtin autoload split",
+            "functions -u split",
+            "functions -U split",
+            "typeset -fu split",
+            "typeset -f -u split",
+            "typeset -u -f split",
+            "declare -fU split",
+        ] {
+            let script = format!("#!/bin/zsh\n{setup}; split; x='a b'; printf '%s\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{setup}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{setup}");
+        }
+    }
+
+    #[test]
+    fn a_zsh_eval_that_enables_word_splitting_keeps_sc2086() {
+        for setup in [
+            "eval 'setopt SH_WORD_SPLIT'",
+            "builtin eval 'setopt SH_WORD_SPLIT'",
+            "command='setopt SH_WORD_SPLIT'; eval \"$command\"",
+        ] {
+            let script = format!("#!/bin/zsh\n{setup}; x='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_zsh_source_that_enables_word_splitting_keeps_sc2086() {
+        for setup in [
+            ". <(printf 'setopt SH_WORD_SPLIT\\n')",
+            "source <(printf 'setopt SH_WORD_SPLIT\\n')",
+            "builtin source \"$path\"",
+        ] {
+            let script = format!("#!/bin/zsh\n{setup}; x='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+    }
+
+    #[test]
+    fn attached_env_split_strings_preserve_zsh_option_flags() {
+        for shebang in [
+            "#!/usr/bin/env -Szsh -y",
+            "#!/usr/bin/env -SLC_ALL=C zsh -y",
+        ] {
+            let script = format!("{shebang}\nx='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+        let script = "#!/usr/bin/env -Szsh\nx='a b'; printf '<%s>\\n' $x\n";
+        assert!(!check(script).contains(&2086));
+    }
+
+    #[test]
+    fn quoted_env_interpreters_use_the_zsh_policy() {
+        for interpreter in ["'zsh'", "\"zsh\"", "z's'h", "'/bin/zsh'"] {
+            for options in ["", " -y"] {
+                let script = format!(
+                    "#!/usr/bin/env -S {interpreter}{options}\nx='a b'; printf '<%s>\\n' $x\n"
+                );
+                let codes = check(&script);
+                assert!(!codes.contains(&1008), "{script}");
+                assert_eq!(codes.contains(&2086), !options.is_empty(), "{script}");
+            }
+        }
+    }
+
+    #[test]
+    fn quoted_env_split_flags_keep_zsh_floor_diagnostics() {
+        for shebang in [
+            "#!/usr/bin/env -S zsh '-y'",
+            "#!/usr/bin/env -S zsh \"-y\"",
+            "#!/usr/bin/env -Szsh -'y'",
+            "#!/usr/bin/env --split-string=zsh '-y'",
+        ] {
+            let script = format!("{shebang}\nx='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_zsh_alias_that_enables_word_splitting_keeps_sc2086() {
+        for definition in [
+            "alias split='setopt SH_WORD_SPLIT'",
+            "builtin alias split='setopt SH_WORD_SPLIT'",
+        ] {
+            let script = format!("#!/bin/zsh\n{definition}\nsplit\nx='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
     }
 
     #[test]

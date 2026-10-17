@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3016
+claim = "sh's test has no -v: the test errors and the else branch runs"
+shell = "sh"
+
+[snippet]
+script = "x=1; if [ -v x ] 2>/dev/null; then echo set; else echo unset; fi"
+
+[fixed]
+script = 'x=1; if [ -n "${x+x}" ]; then echo set; else echo unset; fi'
+
+[[observe]]
+kind    = "stdout"
+snippet = "unset\n"
+fixed   = "set\n"

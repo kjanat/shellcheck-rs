@@ -1,0 +1,15 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 2068
+claim = "unquoted $@ word-splits each parameter"
+
+[snippet]
+script = 'set -- "a b" c; printf "<%s>" $@; echo'
+
+[fixed]
+script = 'set -- "a b" c; printf "<%s>" "$@"; echo'
+
+[[observe]]
+kind    = "stdout"
+snippet = "<a><b><c>\n"
+fixed   = "<a b><c>\n"

@@ -1,0 +1,15 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 2199
+claim = "an array in [[ ]] concatenates instead of matching any element"
+
+[snippet]
+script = 'a=(x y); if [[ "${a[@]}" == x ]] 2>/dev/null; then echo has; else echo lacks; fi'
+
+[fixed]
+script = 'a=(x y); found=lacks; for e in "${a[@]}"; do if [ "$e" = x ]; then found=has; fi; done; echo "$found"'
+
+[[observe]]
+kind    = "stdout"
+snippet = "lacks\n"
+fixed   = "has\n"

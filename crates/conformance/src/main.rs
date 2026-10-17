@@ -28,18 +28,20 @@ mod corpus;
 mod deviations;
 mod fuzz;
 mod oracle;
+mod schemas;
 mod shells;
 mod snapshot;
 mod validity;
 
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use actions_rs::{Annotation, Cell, Summary, log, output};
 use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
-use shellcheck_cli::options::parse_shell;
-use shellcheck_rs::interface::CheckSpec;
+use shellcheck_cli::options::parse_dialect;
+use shellcheck_rs::interface::{CheckSpec, NoExternalSources, PositionedComment};
 
 // ---------------------------------------------------------------------------
 // Comparison keys
@@ -195,13 +197,23 @@ pub fn port_keys_with(
     let spec = CheckSpec {
         filename: filename.to_string(),
         script: script.to_string(),
-        shell_type_override: shell.and_then(parse_shell),
         optional_checks: optional.to_vec(),
         ..CheckSpec::default()
     };
-    let result = shellcheck_rs::check_script(&spec);
-    let untabbed = fixer::make_non_virtual(&result.comments, script);
-    untabbed
+    let result = shellcheck_rs::checker::check_script_as(
+        Rc::new(NoExternalSources),
+        &spec,
+        shell.and_then(parse_dialect),
+    );
+    json1_keys(&result.comments, script, filename)
+}
+
+fn json1_keys(
+    comments: &[PositionedComment],
+    script: &str,
+    filename: &str,
+) -> Result<Vec<CommentKey>, String> {
+    fixer::make_non_virtual(comments, script)
         .iter()
         .map(|pc| {
             serde_json::to_value(json1::to_comment(pc))
@@ -313,7 +325,7 @@ fn gate(args: &Args) -> Result<bool, String> {
     let by_name = oracle.check(&named, args.shell.as_deref())?;
 
     let mut divergent: Vec<(String, Vec<CommentKey>, Vec<CommentKey>)> = Vec::new();
-    let mut deviations: Vec<(String, &'static deviations::Deviation)> = Vec::new();
+    let mut deviations: Vec<(String, Vec<&'static deviations::Deviation>)> = Vec::new();
     let mut compared = 0usize;
     for (entry, (name, script)) in entries.iter().zip(&named) {
         let Some(ocomments) = by_name.get(name) else {
@@ -327,9 +339,12 @@ fn gate(args: &Args) -> Result<bool, String> {
             continue;
         }
         // A difference the port is entitled to is not a divergence.
-        match deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok) {
-            Some(d) => deviations.push((entry.id.clone(), d)),
-            None => divergent.push((entry.id.clone(), pk, ok)),
+        let sanction =
+            deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle));
+        if sanction.is_empty() {
+            divergent.push((entry.id.clone(), pk, ok));
+        } else {
+            deviations.push((entry.id.clone(), sanction));
         }
     }
 
@@ -397,7 +412,7 @@ fn gate(args: &Args) -> Result<bool, String> {
 /// with an annotation on the defining Haskell line of each in CI.
 fn print_divergences(
     divergent: &[(String, Vec<CommentKey>, Vec<CommentKey>)],
-    deviations: &[(String, &'static deviations::Deviation)],
+    deviations: &[(String, Vec<&'static deviations::Deviation>)],
     where_of: &std::collections::HashMap<String, (String, usize)>,
     max: usize,
 ) {
@@ -422,10 +437,13 @@ fn print_divergences(
         if divergent.len() > max {
             println!("... and {} more", divergent.len() - max);
         }
-        for (id, d) in deviations.iter().take(max) {
-            println!("DEVIATION {id} [{}]: {}", d.id, d.what);
+        for (id, sanction) in deviations.iter().take(max) {
+            let ids: Vec<_> = sanction.iter().map(|d| d.id).collect();
+            let whats: Vec<_> = sanction.iter().map(|d| d.what).collect();
+            let (ids, whats) = (ids.join(", "), whats.join("; "));
+            println!("DEVIATION {id} [{ids}]: {whats}");
             if ci {
-                log::notice(format!("Sanctioned deviation {id} [{}]: {}", d.id, d.what));
+                log::notice(format!("Sanctioned deviation {id} [{ids}]: {whats}"));
             }
         }
     };
@@ -522,6 +540,8 @@ pub enum Command {
     Bench,
     /// Each diagnostic's reproducer and fix, run in real shells per version.
     Validity,
+    /// Write the JSON Schemas of the files and messages the crates own.
+    Schemas,
 }
 
 #[derive(Parser)]
@@ -531,7 +551,8 @@ pub enum Command {
     long_about = "Runs the Haskell ShellCheck (the oracle) and the Rust port over the same \
                   input and reports every disagreement.\n\n\
                   Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.",
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    args_override_self = true
 )]
 /// The command line.
 pub struct Args {
@@ -703,6 +724,7 @@ fn main() -> ExitCode {
         Command::Snapshot => snapshot::run(&args),
         Command::Bench => bench::run(&args),
         Command::Validity => validity::run(args.step, &args.validity),
+        Command::Schemas => schemas::run(),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::coverage(&src).and_then(|coverage| {
@@ -814,6 +836,17 @@ mod tests {
         let a = parse(&["fuzz", "--seed", "7"]);
         assert!(a.cmd == Command::Fuzz);
         assert_eq!(a.fuzzing.seed, 7);
+    }
+
+    #[test]
+    fn schemas_is_a_command() {
+        assert!(parse(&["schemas"]).cmd == Command::Schemas);
+    }
+
+    #[test]
+    fn a_later_flag_overrides_an_alias_default() {
+        let a = parse(&["shells", "--iterations", "300", "--iterations", "50"]);
+        assert_eq!(a.fuzzing.iterations, 50);
     }
 
     #[test]

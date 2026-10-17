@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3056
+claim = "sh has no ${!prefix@}: the expansion is a fatal bad substitution"
+shell = "sh"
+
+[snippet]
+script = 'ab=1; echo "${!a@}" 2>/dev/null'
+
+[fixed]
+script = "ab=1; set | sed 's/=.*//' | grep '^ab'"
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "ab\n"

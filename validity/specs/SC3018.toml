@@ -1,0 +1,16 @@
+#:schema ../../schemas/validity-spec.schema.json
+
+code  = 3018
+claim = "sh arithmetic has no ++: the expansion is a fatal error"
+shell = "sh"
+
+[snippet]
+script = 'x=1; echo $((x++)) 2>/dev/null; echo "$x"'
+
+[fixed]
+script = 'x=1; echo "$x"; x=$((x+1)); echo "$x"'
+
+[[observe]]
+kind    = "stdout"
+snippet = ""
+fixed   = "1\n2\n"

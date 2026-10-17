@@ -1,0 +1,26 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/upstream-pin.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Upstream ShellCheck pin",
+  "description": "The upstream ShellCheck source the port follows and the oracle builds from.",
+  "type": "object",
+  "required": [
+    "repository",
+    "revision",
+    "version"
+  ],
+  "properties": {
+    "repository": {
+      "description": "The GitHub repository, as `owner/name`.",
+      "type": "string"
+    },
+    "revision": {
+      "description": "The full commit SHA of the pinned source.",
+      "type": "string"
+    },
+    "version": {
+      "description": "The version that `ShellCheck.cabal` declares at that revision.",
+      "type": "string"
+    }
+  }
+}

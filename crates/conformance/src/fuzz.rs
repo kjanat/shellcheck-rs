@@ -479,7 +479,8 @@ impl Shrinker<'_> {
             return Ok(false);
         }
         Ok(signature(&pk, &ok, self.shell) == self.want
-            && crate::deviations::sanctioned(cand, self.shell, &pk, &ok).is_none())
+            && crate::deviations::sanctioned(cand, self.shell, &pk, &ok, Some(self.oracle))
+                .is_empty())
     }
 
     fn shrink(&self, start: &str) -> Result<String, String> {
@@ -610,9 +611,13 @@ pub fn run(args: &Args) -> Result<bool, String> {
             }
             // A difference the port is entitled to (see `deviations`) is not a
             // finding, however the generator spelled it.
-            if let Some(d) = crate::deviations::sanctioned(source, shell.as_deref(), &pk, &ok) {
-                if sanctioned.insert(d.id) && !args.quiet {
-                    println!("sanctioned deviation [{}]: {}", d.id, d.what);
+            let sanction =
+                crate::deviations::sanctioned(source, shell.as_deref(), &pk, &ok, Some(&oracle));
+            if !sanction.is_empty() {
+                for d in sanction {
+                    if sanctioned.insert(d.id) && !args.quiet {
+                        println!("sanctioned deviation [{}]: {}", d.id, d.what);
+                    }
                 }
                 continue;
             }

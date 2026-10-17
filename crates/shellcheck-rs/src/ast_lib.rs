@@ -258,11 +258,17 @@ pub(crate) fn basename(path: &str) -> String {
 /// `executableFromShebang`: extract the interpreter name from a shebang string.
 pub fn executable_from_shebang(sb: &str) -> String {
     use std::sync::OnceLock;
+    static ENV_RE: OnceLock<regex::Regex> = OnceLock::new();
+    if let Some((first, rest)) = sb.trim_start().split_once(char::is_whitespace)
+        && basename(first) == "env"
+        && let Some(executable) = from_split_env(rest)
+    {
+        return executable;
+    }
     // `re = mkRegex "/env +(-S|--split-string=?)? *(.*)"`, unanchored and
     // applied to the whole string, so it is the *path* `/env` that selects the
     // env form -- not the word `env` appearing anywhere. `#!n\tenv bash` is an
     // interpreter called `n`, not bash.
-    static ENV_RE: OnceLock<regex::Regex> = OnceLock::new();
     let env_re = ENV_RE.get_or_init(|| mk_regex(r"/env +(-S|--split-string=?)? *(.*)"));
     if let Some(caps) = env_re.captures(sb) {
         let rest = caps.get(2).map_or("", |m| m.as_str());
@@ -282,6 +288,28 @@ pub fn executable_from_shebang(sb: &str) -> String {
         // the leading word counts, and only once the regex above has declined.
         [first, args @ ..] if basename(first) == "env" => from_env_args(args),
         [first, ..] => basename(first),
+    }
+}
+
+/// Decode an explicit split-string payload before selecting its interpreter.
+/// Other env invocations retain the upstream interpretation below.
+fn from_split_env(mut rest: &str) -> Option<String> {
+    loop {
+        rest = rest.trim_start();
+        let (word, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let payload = rest
+            .strip_prefix("-S")
+            .or_else(|| rest.strip_prefix("--split-string="))
+            .or_else(|| (word == "--split-string").then_some(tail));
+        if let Some(payload) = payload {
+            let words = crate::env_split::split_prefix(payload);
+            let args: Vec<&str> = words.iter().map(String::as_str).collect();
+            return Some(basename(&from_env_args(&args)));
+        }
+        if !matches!(word, "-i" | "--ignore-environment" | "-v" | "--debug") {
+            return None;
+        }
+        rest = tail;
     }
 }
 
@@ -809,6 +837,37 @@ mod tests {
     #[test]
     fn prop_executableFromShebang11() {
         assert_eq!(executable_from_shebang("/bin/busybox ash"), "busybox ash");
+    }
+
+    #[test]
+    fn env_split_decodes_a_quoted_interpreter() {
+        for shebang in [
+            "/usr/bin/env -S 'zsh' -y",
+            "/usr/bin/env -S \"zsh\"",
+            "/usr/bin/env -Sz'sh'",
+            "/usr/bin/env --split-string='zsh' -y",
+            "/usr/bin/env --split-string 'zsh' -y",
+            "env -S LC_ALL=C 'zsh'",
+            "/usr/bin/env -v -S 'zsh'",
+            "/usr/bin/env -S 'zsh' ${FLAGS}",
+            "/usr/bin/env -S zsh\\_-y",
+            "/usr/bin/env -S '/bin/zsh' -y",
+        ] {
+            assert_eq!(executable_from_shebang(shebang), "zsh", "{shebang}");
+        }
+    }
+
+    #[test]
+    fn env_interpreter_decoding_requires_split_syntax_and_complete_words() {
+        assert_eq!(executable_from_shebang("/usr/bin/env 'zsh'"), "'zsh'");
+        for shebang in [
+            "/usr/bin/env -S 'zsh",
+            "/usr/bin/env -S z${SHELL}",
+            "/usr/bin/env -S # zsh",
+            "/usr/bin/env -S '' zsh",
+        ] {
+            assert!(executable_from_shebang(shebang).is_empty(), "{shebang}");
+        }
     }
 
     #[test]

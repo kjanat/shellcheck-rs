@@ -35,7 +35,11 @@ pub mod cfg_analysis;
 pub mod checker;
 pub mod checks;
 pub mod data;
+pub mod dialect;
+pub mod dialect_policy;
+mod dialect_rules;
 pub mod editor_config;
+mod env_split;
 pub mod idhash;
 pub mod parser;
 pub mod regex_lib;
@@ -44,6 +48,7 @@ pub mod tdfa;
 mod test_support;
 
 pub use checker::check_script;
+pub use dialect::Dialect;
 
 pub use interface::{
     CheckResult, CheckSpec, Code, ColorOption, Comment, ErrorMessage, ExecutionMode, Fix,
