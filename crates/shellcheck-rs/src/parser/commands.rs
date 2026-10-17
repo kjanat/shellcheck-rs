@@ -3041,3 +3041,546 @@ fn haskell_lines(s: &str) -> impl Iterator<Item = &str> {
     })
     .flat_map(|b| b.split('\n'))
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::super::tests::{is_not_ok, is_ok, is_warning};
+    use super::*;
+
+    fn read_script(p: &mut Parser) -> PResult<Token> {
+        p.read_script_file().ok_or(())
+    }
+
+    fn read_shebang(p: &mut Parser) -> PResult<Token> {
+        p.read_shebang().ok_or(())
+    }
+
+    fn read_here_string(p: &mut Parser) -> PResult<Token> {
+        let start = p.pos();
+        p.read_here_string(start.clone(), start, String::new())
+    }
+
+    #[test]
+    fn prop_readSingleQuoted5() {
+        assert!(is_warning(
+            "foo='bar\ncow 'arg",
+            Parser::read_simple_command
+        ));
+    }
+    #[test]
+    fn prop_readSingleQuoted6() {
+        assert!(is_ok("foo='bar cow 'arg", Parser::read_simple_command));
+    }
+
+    #[test]
+    fn prop_readBackTicked4() {
+        assert!(is_ok("`echo foo\necho bar`", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readBackTicked5() {
+        assert!(is_ok("echo `foo`bar", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readBackTicked6() {
+        assert!(is_warning(
+            "echo `foo\necho `bar",
+            Parser::read_simple_command
+        ));
+    }
+    #[test]
+    fn prop_readBackTicked7() {
+        assert!(is_ok("`#inline comment`", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readBackTicked8() {
+        assert!(is_ok(
+            "echo `#comment` \\\nbar baz",
+            Parser::read_simple_command
+        ));
+    }
+
+    #[test]
+    fn prop_readDoubleQuoted4() {
+        assert!(is_warning("\"foo\nbar\"foo", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readDoubleQuoted5() {
+        assert!(is_ok("lol \"foo\nbar\" etc", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readDoubleQuoted6() {
+        assert!(is_ok("echo \"${ ls; }\"", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readDoubleQuoted7() {
+        assert!(is_ok("echo \"${ ls;}bar\"", Parser::read_simple_command));
+    }
+
+    #[test]
+    fn prop_readArithmeticExpression() {
+        assert!(is_ok("((a?b:c))", Parser::read_arithmetic_command));
+    }
+
+    #[test]
+    fn prop_readCondition26() {
+        assert!(is_ok("[[ foo ]]\\\n && bar", read_script));
+    }
+
+    #[test]
+    fn prop_readHereDoc() {
+        assert!(is_ok("cat << foo\nlol\ncow\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc2() {
+        assert!(is_not_ok("cat <<- EOF\n  cow\n  EOF", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc3() {
+        assert!(is_ok("cat << foo\n$\"\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc4() {
+        assert!(is_not_ok("cat << foo\n`\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc5() {
+        assert!(is_ok("cat <<- !foo\nbar\n!foo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc6() {
+        assert!(is_ok("cat << foo\\ bar\ncow\nfoo bar", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc7() {
+        assert!(is_ok("cat << foo\n\\$(f ())\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc8() {
+        assert!(is_ok("cat <<foo>>bar\netc\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc9() {
+        assert!(is_ok(
+            "if true; then cat << foo; fi\nbar\nfoo\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readHereDoc10() {
+        assert!(is_ok(
+            "if true; then cat << foo << bar; fi\nfoo\nbar\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readHereDoc11() {
+        assert!(is_ok("cat << foo $(\nfoo\n)lol\nfoo\n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc12() {
+        assert!(is_ok("cat << foo|cat\nbar\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc13() {
+        assert!(is_ok("cat <<'#!'\nHello World\n#!\necho Done", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc14() {
+        assert!(is_warning("cat << foo\nbar\nfoo \n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc15() {
+        assert!(is_warning("cat <<foo\nbar\nfoo bar\nfoo", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc16() {
+        assert!(is_ok("cat <<- ' foo'\nbar\n foo\n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc17() {
+        assert!(is_warning(
+            "cat <<- ' foo'\nbar\n  foo\n foo\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readHereDoc18() {
+        assert!(is_ok("cat <<'\"foo'\nbar\n\"foo\n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc20() {
+        assert!(is_warning("cat << foo\n  foo\n()\nfoo\n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc21() {
+        assert!(is_ok(
+            "# shellcheck disable=SC1039\ncat << foo\n  foo\n()\nfoo\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readHereDoc22() {
+        assert!(is_warning("cat << foo\r\ncow\r\nfoo\r\n", read_script));
+    }
+    #[test]
+    fn prop_readHereDoc23() {
+        assert!(is_not_ok("cat << foo \r\ncow\r\nfoo\r\n", read_script));
+    }
+
+    #[test]
+    fn prop_readIoFile() {
+        assert!(is_ok(">> \"$(date +%YYmmDD)\"", Parser::read_io_redirect));
+    }
+
+    #[test]
+    fn prop_readIoRedirect() {
+        assert!(is_ok("3>&2", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect2() {
+        assert!(is_ok("2> lol", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect3() {
+        assert!(is_ok("4>&-", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect4() {
+        assert!(is_ok("&> lol", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect5() {
+        assert!(is_ok("{foo}>&2", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect6() {
+        assert!(is_ok("{foo}<&-", Parser::read_io_redirect));
+    }
+    #[test]
+    fn prop_readIoRedirect7() {
+        assert!(is_ok("{foo}>&1-", Parser::read_io_redirect));
+    }
+
+    #[test]
+    fn prop_readHereString() {
+        assert!(is_ok("<<< \"Hello $world\"", read_here_string));
+    }
+
+    #[test]
+    fn prop_readNewlineList1() {
+        assert!(is_ok("&> /dev/null echo foo", read_script));
+    }
+
+    #[test]
+    fn prop_readSeparator1() {
+        assert!(is_warning("a &; b", read_script));
+    }
+    #[test]
+    fn prop_readSeparator2() {
+        assert!(is_ok("a & b", read_script));
+    }
+    #[test]
+    fn prop_readSeparator3() {
+        assert!(is_warning("a &amp; b", read_script));
+    }
+    #[test]
+    fn prop_readSeparator4() {
+        assert!(is_warning("a &gt; file; b", read_script));
+    }
+    #[test]
+    fn prop_readSeparator5() {
+        assert!(is_warning(
+            "curl https://example.com/?foo=moo&bar=cow",
+            read_script
+        ));
+    }
+
+    #[test]
+    fn prop_readSimpleCommand() {
+        assert!(is_ok("echo test > file", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand2() {
+        assert!(is_ok("cmd &> file", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand3() {
+        assert!(is_ok("export foo=(bar baz)", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand4() {
+        assert!(is_ok("typeset -a foo=(lol)", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand5() {
+        assert!(is_ok(
+            "time if true; then echo foo; fi",
+            Parser::read_simple_command
+        ));
+    }
+    #[test]
+    fn prop_readSimpleCommand6() {
+        assert!(is_ok("time -p ( ls -l; )", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand7() {
+        assert!(is_ok("\\ls", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand7b() {
+        assert!(is_ok("\\:", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand8() {
+        assert!(is_warning("// Lol", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand9() {
+        assert!(is_warning("/* Lolbert */", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand10() {
+        assert!(is_warning("/**** Lolbert */", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand11() {
+        assert!(is_ok("/\\* foo", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand12() {
+        assert!(is_warning("elsif foo", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand13() {
+        assert!(is_warning("ElseIf foo", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand14() {
+        assert!(is_warning("elseif[$i==2]", Parser::read_simple_command));
+    }
+    #[test]
+    fn prop_readSimpleCommand15() {
+        assert!(is_warning(
+            "trap 'foo\"bar' INT",
+            Parser::read_simple_command
+        ));
+    }
+
+    #[test]
+    fn prop_readPipeline() {
+        assert!(is_ok(
+            "! cat /etc/issue | grep -i ubuntu",
+            Parser::read_pipeline
+        ));
+    }
+    #[test]
+    fn prop_readPipeline2() {
+        assert!(is_warning(
+            "!cat /etc/issue | grep -i ubuntu",
+            Parser::read_pipeline
+        ));
+    }
+    #[test]
+    fn prop_readPipeline3() {
+        assert!(is_ok("for f; do :; done|cat", Parser::read_pipeline));
+    }
+    #[test]
+    fn prop_readPipeline4() {
+        assert!(is_ok("! ! true", Parser::read_pipeline));
+    }
+    #[test]
+    fn prop_readPipeline5() {
+        assert!(is_ok("true | ! true", Parser::read_pipeline));
+    }
+
+    #[test]
+    fn prop_readAndOr() {
+        assert!(is_ok("grep -i lol foo || exit 1", Parser::read_and_or));
+    }
+    #[test]
+    fn prop_readAndOr1() {
+        assert!(is_ok("# shellcheck disable=1\nfoo", Parser::read_and_or));
+    }
+    #[test]
+    fn prop_readAndOr2() {
+        assert!(is_ok(
+            "# shellcheck disable=1\n# lol\n# shellcheck disable=3\nfoo",
+            Parser::read_and_or
+        ));
+    }
+
+    #[test]
+    fn prop_readTerm() {
+        assert!(is_ok("time ( foo; bar; )", |p| p.read_term().ok_or(())));
+    }
+
+    #[test]
+    fn prop_readCoProc1() {
+        assert!(is_ok("coproc foo { echo bar; }", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc2() {
+        assert!(is_ok("coproc { echo bar; }", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc3() {
+        assert!(is_ok("coproc echo bar", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc4() {
+        assert!(is_ok("coproc a=b echo bar", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc5() {
+        assert!(is_ok("coproc 'foo' { echo bar; }", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc6() {
+        assert!(is_ok("coproc \"foo$$\" { echo bar; }", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc7() {
+        assert!(is_ok("coproc 'foo' ( echo bar )", Parser::read_coproc));
+    }
+    #[test]
+    fn prop_readCoProc8() {
+        assert!(is_ok(
+            "coproc \"foo$$\" while true; do true; done",
+            Parser::read_coproc
+        ));
+    }
+
+    #[test]
+    fn prop_readAssignmentWord() {
+        assert!(is_ok("a=42", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord2() {
+        assert!(is_ok("b=(1 2 3)", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord5() {
+        assert!(is_ok("b+=lol", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord7() {
+        assert!(is_ok("a[3$n'']=42", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord8() {
+        assert!(is_ok("a[4''$(cat foo)]=42", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord9() {
+        assert!(is_ok("IFS= ", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord9a() {
+        assert!(is_ok("foo=", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord9b() {
+        assert!(is_ok("foo=  ", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord9c() {
+        assert!(is_ok("foo=  #bar", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord11() {
+        assert!(is_ok(
+            "foo=([a]=b [c] [d]= [e f )",
+            Parser::read_assignment_word
+        ));
+    }
+    #[test]
+    fn prop_readAssignmentWord12() {
+        assert!(is_ok(
+            "a[b <<= 3 + c]='thing'",
+            Parser::read_assignment_word
+        ));
+    }
+    #[test]
+    fn prop_readAssignmentWord13() {
+        assert!(is_ok("var=( (1 2) (3 4) )", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord14() {
+        assert!(is_ok("var=( 1 [2]=(3 4) )", Parser::read_assignment_word));
+    }
+    #[test]
+    fn prop_readAssignmentWord15() {
+        assert!(is_ok("var=(1 [2]=(3 4))", Parser::read_assignment_word));
+    }
+
+    #[test]
+    fn prop_readShebang1() {
+        assert!(is_ok("#!/bin/sh\n", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang2() {
+        assert!(is_warning("!# /bin/sh\n", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang3() {
+        assert!(is_not_ok("#shellcheck shell=/bin/sh\n", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang4() {
+        assert!(is_warning("! /bin/sh", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang5() {
+        assert!(is_warning("\n#!/bin/sh", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang6() {
+        assert!(is_warning(" # Copyright \n!#/bin/bash", read_shebang));
+    }
+    #[test]
+    fn prop_readShebang7() {
+        assert!(is_not_ok("# Copyright \nfoo\n#!/bin/bash", read_shebang));
+    }
+
+    #[test]
+    fn prop_readScript1() {
+        assert!(is_ok("#!/bin/bash\necho hello world\n", read_script));
+    }
+    #[test]
+    fn prop_readScript2() {
+        assert!(is_warning("#!/bin/bash\r\necho hello world\n", read_script));
+    }
+    #[test]
+    fn prop_readScript3() {
+        assert!(is_warning(
+            "#!/bin/bash\necho hello\u{A0}world",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readScript4() {
+        assert!(is_warning("#!/usr/bin/perl\nfoo=(", read_script));
+    }
+    #[test]
+    fn prop_readScript5() {
+        assert!(is_ok(
+            "#!/bin/bash\n#This is an empty script\n\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readScript6() {
+        assert!(is_ok(
+            "#!/usr/bin/env -S X=FOO bash\n#This is an empty script\n\n",
+            read_script
+        ));
+    }
+    #[test]
+    fn prop_readScript7() {
+        assert!(is_ok(
+            "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n",
+            read_script
+        ));
+    }
+}

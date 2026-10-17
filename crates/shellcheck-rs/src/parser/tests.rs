@@ -1,6 +1,83 @@
 //! Parser unit tests (ports of the `Parser.hs` props and regression cases).
 use super::*;
 
+pub(super) fn parses_cleanly<T>(
+    script: &str,
+    parser: impl FnOnce(&mut Parser) -> PResult<T>,
+) -> Option<bool> {
+    let mut p = Parser::new("-", script);
+    let parsed = parser(&mut p);
+    if parsed.is_err() || p.has_committed_failure() || !p.eof() {
+        return None;
+    }
+    Some(p.notes.is_empty() && p.problems.is_empty())
+}
+
+pub(super) fn is_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+    parses_cleanly(script, parser) == Some(true)
+}
+
+pub(super) fn is_warning<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+    parses_cleanly(script, parser) == Some(false)
+}
+
+pub(super) fn is_not_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+    parses_cleanly(script, parser).is_none()
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod spacing_tests {
+    use super::*;
+
+    #[test]
+    fn prop_spacing1() {
+        assert!(is_ok("  \\\n # Comment", |p| {
+            p.spacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_spacing2() {
+        assert!(is_ok("# We can continue lines with \\", |p| {
+            p.spacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_spacing3() {
+        assert!(is_warning("   \\\n #  --verbose=true \\", |p| {
+            p.spacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_allspacing() {
+        assert!(is_ok("#foo", |p| {
+            p.allspacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_allspacing2() {
+        assert!(is_ok(" #foo\n # bar\n#baz\n", |p| {
+            p.allspacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_allspacing3() {
+        assert!(is_ok("#foo\n#bar\n#baz\n", |p| {
+            p.allspacing();
+            Ok(())
+        }));
+    }
+    #[test]
+    fn prop_readAnyComment() {
+        assert!(is_ok("# Comment", Parser::read_any_comment));
+    }
+}
+
 #[test]
 fn lookahead_restores_context_frames_even_when_the_prefix_was_replaced() {
     let mut parser = Parser::new("-", "echo hello");
@@ -52,11 +129,7 @@ mod arith_tests {
     /// Mirrors `isOk readArithmeticContents s`: the parser succeeds, consumes
     /// all input (`>> eof`), and produces no notes or problems.
     fn arith_ok(script: &str) -> bool {
-        let mut p = Parser::new("-", script);
-        match p.read_arithmetic_contents() {
-            Ok(_) => p.eof() && p.notes.is_empty() && p.problems.is_empty(),
-            Err(()) => false,
-        }
+        is_ok(script, Parser::read_arithmetic_contents)
     }
 
     #[test]

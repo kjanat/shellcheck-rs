@@ -1057,20 +1057,170 @@ mod tests {
     }
 
     #[test]
-    fn prop_checkUuoc1_6() {
-        for s in ["cat foo | grep bar", "cat \"$var\" | grep bar"] {
-            assert!(emits(check_uuoc, s), "{s}");
-        }
-        for s in [
-            "cat * | grep bar",
-            "cat $var | grep bar",
-            "cat \"${!var}\" | grep bar",
-            "cat $var",
-            "cat \"$@\"",
-            "cat -n | grep bar",
-        ] {
-            assert!(!emits(check_uuoc, s), "{s}");
-        }
+    fn prop_checkUuoc1() {
+        assert!(emits(check_uuoc, "cat foo | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkUuoc2() {
+        assert!(!emits(check_uuoc, "cat * | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkUuoc3() {
+        assert!(emits(check_uuoc, "cat \"$var\" | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkUuoc3b() {
+        assert!(!emits(check_uuoc, "cat $var | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkUuoc3c() {
+        assert!(!emits(check_uuoc, "cat \"${!var}\" | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkUuoc4() {
+        assert!(!emits(check_uuoc, "cat $var"));
+    }
+
+    #[test]
+    fn prop_checkUuoc5() {
+        assert!(!emits(check_uuoc, "cat \"$@\""));
+    }
+
+    #[test]
+    fn prop_checkUuoc6() {
+        assert!(!emits(check_uuoc, "cat -n | grep bar"));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame() {
+        assert!(emits(check_redirect_to_same, "cat foo > foo"));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame2() {
+        assert!(emits(
+            check_redirect_to_same,
+            "cat lol | sed -e 's/a/b/g' > lol"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame3() {
+        assert!(!emits(
+            check_redirect_to_same,
+            "cat lol | sed -e 's/a/b/g' > foo.bar && mv foo.bar lol"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame4() {
+        assert!(!emits(check_redirect_to_same, "foo /dev/null > /dev/null"));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame5() {
+        assert!(!emits(check_redirect_to_same, "foo > bar 2> bar"));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame6() {
+        assert!(!emits(check_redirect_to_same, "echo foo > foo"));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame7() {
+        assert!(!emits(
+            check_redirect_to_same,
+            "sed 's/foo/bar/g' file | sponge file"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame8() {
+        assert!(!emits(
+            check_redirect_to_same,
+            "while read -r line; do _=\"$fname\"; done <\"$fname\""
+        ));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame9() {
+        assert!(!emits(
+            check_redirect_to_same,
+            "while read -r line; do cat < \"$fname\"; done <\"$fname\""
+        ));
+    }
+
+    #[test]
+    fn prop_checkRedirectToSame10() {
+        assert!(!emits(check_redirect_to_same, "mapfile -t foo <foo"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect() {
+        assert!(emits(check_stderr_redirect, "test 2>&1 > cow"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect2() {
+        assert!(!emits(check_stderr_redirect, "test > cow 2>&1"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect3() {
+        assert!(!emits(
+            check_stderr_redirect,
+            "test 2>&1 > file | grep stderr"
+        ));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect4() {
+        assert!(!emits(check_stderr_redirect, "errors=$(test 2>&1 > file)"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect5() {
+        assert!(!emits(check_stderr_redirect, "read < <(test 2>&1 > file)"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect6() {
+        assert!(emits(check_stderr_redirect, "foo | bar 2>&1 > /dev/null"));
+    }
+
+    #[test]
+    fn prop_checkStderrRedirect7() {
+        assert!(!emits(check_stderr_redirect, "{ cmd > file; } 2>&1"));
+    }
+
+    #[test]
+    fn prop_checkMultipleAppends1() {
+        assert!(emits(
+            check_multiple_appends,
+            "foo >> file; bar >> file; baz >> file;"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMultipleAppends2() {
+        assert!(emits(
+            check_multiple_appends,
+            "foo >> file; bar | grep f >> file; baz >> file;"
+        ));
+    }
+
+    #[test]
+    fn prop_checkMultipleAppends3() {
+        assert!(!emits(
+            check_multiple_appends,
+            "foo < file; bar < file; baz < file;"
+        ));
     }
 
     #[test]

@@ -953,30 +953,504 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
-    fn prop_CheckVariableBraces1_5() {
+    fn prop_checkUnquotedExpansions1() {
+        assert!(emits(check_unquoted_expansions, "rm $(ls)"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions1a() {
+        assert!(emits(check_unquoted_expansions, "rm `ls`"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions2() {
+        assert!(emits(check_unquoted_expansions, "rm foo$(date)"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions3() {
+        assert!(emits(check_unquoted_expansions, "[ $(foo) == cow ]"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions3a() {
+        assert!(emits(check_unquoted_expansions, "[ ! $(foo) ]"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions4() {
+        assert!(!emits(check_unquoted_expansions, "[[ $(foo) == cow ]]"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions5() {
+        assert!(!emits(
+            check_unquoted_expansions,
+            "for f in $(cmd); do echo $f; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions6() {
+        assert!(!emits(check_unquoted_expansions, "$(cmd)"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions7() {
+        assert!(!emits(check_unquoted_expansions, "cat << foo\n$(ls)\nfoo"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions8() {
+        assert!(!emits(check_unquoted_expansions, "set -- $(seq 1 4)"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions9() {
+        assert!(!emits(
+            check_unquoted_expansions,
+            "echo foo `# inline comment`"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions10() {
+        assert!(emits(
+            check_unquoted_expansions,
+            "#!/bin/sh\nexport var=$(val)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedExpansions11() {
+        assert!(!emits(check_unquoted_expansions, "ps -p $(pgrep foo)"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar() {
+        assert!(emits(check_dollar_star, "for f in $*; do ..; done"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar2() {
+        assert!(!emits(check_dollar_star, "a=$*"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar3() {
+        assert!(!emits(check_dollar_star, "[[ $* = 'a b' ]]"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar4() {
+        assert!(emits(check_dollar_star, "for f in ${var[*]}; do ..; done"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar5() {
+        assert!(emits(check_dollar_star, "ls ${*//foo/bar}"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar6() {
+        assert!(emits(check_dollar_star, "ls ${var[*]%%.*}"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar7() {
+        assert!(emits(check_dollar_star, "ls ${*}"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar8() {
+        assert!(!emits(check_dollar_star, "ls ${#*}"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar9() {
+        assert!(emits(check_dollar_star, "ls ${arr[*]}"));
+    }
+
+    #[test]
+    fn prop_checkDollarStar10() {
+        assert!(!emits(check_dollar_star, "ls ${#arr[*]}"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt() {
+        assert!(emits(check_unquoted_dollar_at, "ls $@"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt1() {
+        assert!(!emits(check_unquoted_dollar_at, "ls ${#@}"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt2() {
+        assert!(emits(check_unquoted_dollar_at, "ls ${foo[@]}"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt3() {
+        assert!(!emits(check_unquoted_dollar_at, "ls ${#foo[@]}"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt4() {
+        assert!(!emits(check_unquoted_dollar_at, "ls \"$@\""));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt5() {
+        assert!(!emits(check_unquoted_dollar_at, "ls ${foo/@/ at }"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt6() {
+        assert!(!emits(check_unquoted_dollar_at, "a=$@"));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt7() {
+        assert!(emits(
+            check_unquoted_dollar_at,
+            "for f in ${var[@]}; do true; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt8() {
+        assert!(!emits(
+            check_unquoted_dollar_at,
+            "echo \"${args[@]:+${args[@]}}\""
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt9() {
+        assert!(!emits(
+            check_unquoted_dollar_at,
+            "echo ${args[@]:+\"${args[@]}\"}"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnquotedDollarAt10() {
+        assert!(!emits(check_unquoted_dollar_at, "echo ${@+\"$@\"}"));
+    }
+
+    #[test]
+    fn prop_checkConcatenatedDollarAt1() {
+        assert!(emits(check_concatenated_dollar_at, "echo \"foo$@\""));
+    }
+
+    #[test]
+    fn prop_checkConcatenatedDollarAt2() {
+        assert!(emits(check_concatenated_dollar_at, "echo ${arr[@]}lol"));
+    }
+
+    #[test]
+    fn prop_checkConcatenatedDollarAt3() {
+        assert!(emits(check_concatenated_dollar_at, "echo $a$@"));
+    }
+
+    #[test]
+    fn prop_checkConcatenatedDollarAt4() {
+        assert!(!emits(check_concatenated_dollar_at, "echo $@"));
+    }
+
+    #[test]
+    fn prop_checkConcatenatedDollarAt5() {
+        assert!(!emits(check_concatenated_dollar_at, "echo \"${arr[@]}\""));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString1() {
+        assert!(emits(check_array_as_string, "a=$@"));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString2() {
+        assert!(emits(check_array_as_string, "a=\"${arr[@]}\""));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString3() {
+        assert!(emits(check_array_as_string, "a=*.png"));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString4() {
+        assert!(emits(check_array_as_string, "a={1..10}"));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString5() {
+        assert!(!emits(check_array_as_string, "a='*.gif'"));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString6() {
+        assert!(!emits(check_array_as_string, "a=$*"));
+    }
+
+    #[test]
+    fn prop_checkArrayAsString7() {
+        assert!(!emits(check_array_as_string, "a=( $@ )"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables() {
+        assert!(emits(check_single_quoted_variables, "echo '$foo'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables2() {
+        assert!(emits(check_single_quoted_variables, "echo 'lol$1.jpg'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables3() {
+        assert!(!emits(check_single_quoted_variables, "sed 's/foo$/bar/'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables3a() {
+        assert!(emits(check_single_quoted_variables, "sed 's/${foo}/bar/'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables3b() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "sed 's/$(echo cow)/bar/'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables3c() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "sed 's/$((1+foo))/bar/'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables4() {
+        assert!(!emits(check_single_quoted_variables, "awk '{print $1}'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables5() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "trap 'echo $SECONDS' EXIT"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables6() {
+        assert!(!emits(check_single_quoted_variables, "sed -n '$p'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables6a() {
+        assert!(emits(check_single_quoted_variables, "sed -n '$pattern'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables6b() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "sed -n -e '/foo/h; ${ g; }'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables6c() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "sed -e '${a\\\nEOF' -e '}'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables6d() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "sed -n -e '/0$/h; 42,${' -e G -e '}'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables7() {
+        assert!(!emits(check_single_quoted_variables, "PS1='$PWD \\$ '"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables8() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "find . -exec echo '$1' {} +"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables9() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "find . -exec awk '{print $1}' {} \\;"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables10() {
+        assert!(emits(check_single_quoted_variables, "echo '`pwd`'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables11() {
+        assert!(!emits(check_single_quoted_variables, "sed '${/lol/d}'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables12() {
+        assert!(!emits(check_single_quoted_variables, "eval 'echo $1'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables13() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "busybox awk '{print $1}'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables14() {
+        assert!(!emits(check_single_quoted_variables, "[ -v 'bar[$foo]' ]"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables15() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "git filter-branch 'test $GIT_COMMIT'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables16() {
+        assert!(emits(check_single_quoted_variables, "git '$a'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables17() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "rename 's/(.)a/$1/g' *"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables18() {
+        assert!(!emits(check_single_quoted_variables, "echo '``'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables19() {
+        assert!(!emits(check_single_quoted_variables, "echo '```'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables20() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "mumps -run %XCMD 'W $O(^GLOBAL(5))'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables21() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "mumps -run LOOP%XCMD --xec 'W $O(^GLOBAL(6))'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables22() {
+        assert!(!emits(check_single_quoted_variables, "jq '$__loc__'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables23() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "command jq '$__loc__'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables24() {
+        assert!(!emits(check_single_quoted_variables, "exec jq '$__loc__'"));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables25() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "exec -c -a foo jq '$__loc__'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkBackticks1() {
+        assert!(emits(check_backticks, "echo `foo`"));
+    }
+
+    #[test]
+    fn prop_checkBackticks2() {
+        assert!(!emits(check_backticks, "echo $(foo)"));
+    }
+
+    #[test]
+    fn prop_checkBackticks3() {
+        assert!(!emits(check_backticks, "echo `#inlined comment` foo"));
+    }
+
+    #[test]
+    fn prop_CheckVariableBraces1() {
         assert!(emits(check_variable_braces, "a='123'; echo $a"));
-        for s in [
-            "a='123'; echo ${a}",
-            "#shellcheck disable=SC2016\necho '$a'",
-            "echo $* $1",
-            "$foo=42",
-        ] {
-            assert!(!emits(check_variable_braces, s), "{s}");
-        }
+    }
+
+    #[test]
+    fn prop_CheckVariableBraces2() {
+        assert!(!emits(check_variable_braces, "a='123'; echo ${a}"));
+    }
+
+    #[test]
+    fn prop_CheckVariableBraces3() {
+        assert!(!emits(
+            check_variable_braces,
+            "#shellcheck disable=SC2016\necho '$a'"
+        ));
+    }
+
+    #[test]
+    fn prop_CheckVariableBraces4() {
+        assert!(!emits(check_variable_braces, "echo $* $1"));
+    }
+
+    #[test]
+    fn prop_CheckVariableBraces5() {
+        assert!(!emits(check_variable_braces, "$foo=42"));
     }
 
     #[test]
     fn sed_end_address_blocks_do_not_expand_variables() {
-        for script in [
-            "sed -n -e '/foo/h; ${ g; }'",
-            "sed -e '${a\\\nEOF' -e '}'",
-            "sed -n -e '/0$/h; 42,${' -e G -e '}'",
-        ] {
-            assert!(!emits(check_single_quoted_variables, script), "{script}");
-        }
-        for script in ["sed -n '$pattern'", "sed '${variable}'"] {
-            assert!(emits(check_single_quoted_variables, script), "{script}");
-        }
+        assert!(emits(check_single_quoted_variables, "sed '${variable}'"));
     }
 
     #[test]

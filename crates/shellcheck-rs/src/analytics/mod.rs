@@ -258,3 +258,86 @@ pub fn analyze_with(params: &Parameters, optional: &[String]) -> Out {
     }
     result
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    use crate::test_support::params_for;
+
+    const OPTIONAL_EXAMPLES: &[(&str, &str, &str)] = &[
+        (
+            "quote-safe-variables",
+            "var=hello; echo $var",
+            "var=hello; echo \"$var\"",
+        ),
+        (
+            "avoid-nullary-conditions",
+            "[ \"$var\" ]",
+            "[ -n \"$var\" ]",
+        ),
+        (
+            "avoid-negated-conditions",
+            "[ ! \"$var\" -eq 1 ]",
+            "[ \"$var\" -ne 1 ]",
+        ),
+        (
+            "add-default-case",
+            "case $? in 0) echo 'Success';; esac",
+            "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac",
+        ),
+        (
+            "require-variable-braces",
+            "var=hello; echo $var",
+            "var=hello; echo ${var}",
+        ),
+        (
+            "check-unassigned-uppercase",
+            "echo $VAR",
+            "VAR=hello; echo $VAR",
+        ),
+        (
+            "require-double-brackets",
+            "[ -e /etc/issue ]",
+            "[[ -e /etc/issue ]]",
+        ),
+        (
+            "require-double-equals",
+            "[[ \"$x\" = \"$y\" ]]",
+            "[[ \"$x\" == \"$y\" ]]",
+        ),
+        (
+            "check-set-e-suppressed",
+            "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
+            "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
+        ),
+        (
+            "check-extra-masked-returns",
+            "rm -r \"$(get_chroot_dir)/home\"",
+            "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
+        ),
+        ("useless-use-of-cat", "cat foo | grep bar", "grep bar foo"),
+    ];
+
+    fn optional_emits(name: &str, script: &str) -> bool {
+        let Some((_, register)) = OPTIONAL_CHECKS.iter().find(|(n, _)| *n == name) else {
+            panic!("{name} is not an optional check");
+        };
+        let mut c = Checker::new();
+        register(&mut c);
+        !run_checker(&params_for(script), &c).is_empty()
+    }
+
+    #[test]
+    fn prop_verifyOptionalExamples() {
+        let tree_checks = OPTIONAL_CHECKS
+            .iter()
+            .filter(|(name, _)| *name != "deprecate-which")
+            .count();
+        assert_eq!(OPTIONAL_EXAMPLES.len(), tree_checks);
+        for (name, positive, negative) in OPTIONAL_EXAMPLES {
+            assert!(optional_emits(name, positive), "{name}: {positive}");
+            assert!(!optional_emits(name, negative), "{name}: {negative}");
+        }
+    }
+}

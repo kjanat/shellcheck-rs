@@ -490,7 +490,7 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
-    fn prop_checkArithmeticDeref1() {
+    fn prop_checkArithmeticDeref() {
         assert!(emits(check_arithmetic_deref, "echo $((3+$foo))"));
     }
 

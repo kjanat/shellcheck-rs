@@ -1459,3 +1459,333 @@ impl Parser {
         Ok(s)
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::super::tests::{is_not_ok, is_ok, is_warning};
+    use super::*;
+
+    #[test]
+    fn prop_readNormalWord8() {
+        assert!(is_warning("(foo\\ \nbar)", Parser::read_subshell));
+    }
+    #[test]
+    fn prop_readNormalWord9() {
+        assert!(is_ok("(foo\\ ;\nbar)", Parser::read_subshell));
+    }
+
+    #[test]
+    fn prop_readIfClause() {
+        assert!(is_ok(
+            "if false; then foo; elif true; then stuff; more stuff; else cows; fi",
+            Parser::read_if_clause
+        ));
+    }
+    #[test]
+    fn prop_readIfClause2() {
+        assert!(is_warning(
+            "if false; then; echo oo; fi",
+            Parser::read_if_clause
+        ));
+    }
+    #[test]
+    fn prop_readIfClause3() {
+        assert!(is_warning(
+            "if false; then true; else; echo lol; fi",
+            Parser::read_if_clause
+        ));
+    }
+    #[test]
+    fn prop_readIfClause4() {
+        assert!(is_warning(
+            "if false; then true; else if true; then echo lol; fi; fi",
+            Parser::read_if_clause
+        ));
+    }
+    #[test]
+    fn prop_readIfClause5() {
+        assert!(is_ok(
+            "if false; then true; else\nif true; then echo lol; fi; fi",
+            Parser::read_if_clause
+        ));
+    }
+    #[test]
+    fn prop_readIfClause6() {
+        assert!(is_warning(
+            "if true\nthen\nDo the thing\nfi",
+            Parser::read_if_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readSubshell() {
+        assert!(is_ok(
+            "( cd /foo; tar cf stuff.tar * )",
+            Parser::read_subshell
+        ));
+    }
+
+    #[test]
+    fn prop_readBraceGroup() {
+        assert!(is_ok("{ a; b | c | d; e; }", Parser::read_brace_group));
+    }
+    #[test]
+    fn prop_readBraceGroup2() {
+        assert!(is_warning("{foo;}", Parser::read_brace_group));
+    }
+    #[test]
+    fn prop_readBraceGroup3() {
+        assert!(is_ok("{(foo)}", Parser::read_brace_group));
+    }
+
+    #[test]
+    fn prop_readBatsTest1() {
+        assert!(is_ok(
+            "@test 'can parse' {\n  true\n}",
+            Parser::read_bats_test
+        ));
+    }
+    #[test]
+    fn prop_readBatsTest2() {
+        assert!(is_ok(
+            "@test random text !(@*$Y&! {\n  true\n}",
+            Parser::read_bats_test
+        ));
+    }
+    #[test]
+    fn prop_readBatsTest3() {
+        assert!(is_ok(
+            "@test foo { bar { baz {\n  true\n}",
+            Parser::read_bats_test
+        ));
+    }
+    #[test]
+    fn prop_readBatsTest4() {
+        assert!(is_not_ok("@test foo \n{\n true\n}", Parser::read_bats_test));
+    }
+
+    #[test]
+    fn prop_readWhileClause() {
+        assert!(is_ok(
+            "while [[ -e foo ]]; do sleep 1; done",
+            Parser::read_while_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readUntilClause() {
+        assert!(is_ok(
+            "until kill -0 $PID; do sleep 1; done",
+            Parser::read_until_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readForClause() {
+        assert!(is_ok(
+            "for f in *; do rm \"$f\"; done",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause1() {
+        assert!(is_ok("for f in *; { rm \"$f\"; }", Parser::read_for_clause));
+    }
+    #[test]
+    fn prop_readForClause3() {
+        assert!(is_ok("for f; do foo; done", Parser::read_for_clause));
+    }
+    #[test]
+    fn prop_readForClause4() {
+        assert!(is_ok(
+            "for((i=0; i<10; i++)); do echo $i; done",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause5() {
+        assert!(is_ok(
+            "for ((i=0;i<10 && n>x;i++,--n))\ndo \necho $i\ndone",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause6() {
+        assert!(is_ok(
+            "for ((;;))\ndo echo $i\ndone",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause7() {
+        assert!(is_ok(
+            "for ((;;)) do echo $i\ndone",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause8() {
+        assert!(is_ok(
+            "for ((;;)) ; do echo $i\ndone",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause9() {
+        assert!(is_ok("for i do true; done", Parser::read_for_clause));
+    }
+    #[test]
+    fn prop_readForClause10() {
+        assert!(is_ok("for ((;;)) { true; }", Parser::read_for_clause));
+    }
+    #[test]
+    fn prop_readForClause12() {
+        assert!(is_warning(
+            "for $a in *; do echo \"$a\"; done",
+            Parser::read_for_clause
+        ));
+    }
+    #[test]
+    fn prop_readForClause13() {
+        assert!(is_ok(
+            "for foo\nin\\\n  bar\\\n  baz\ndo true; done",
+            Parser::read_for_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readSelectClause1() {
+        assert!(is_ok(
+            "select foo in *; do echo $foo; done",
+            Parser::read_select_clause
+        ));
+    }
+    #[test]
+    fn prop_readSelectClause2() {
+        assert!(is_ok(
+            "select foo; do echo $foo; done",
+            Parser::read_select_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readCaseClause() {
+        assert!(is_ok(
+            "case foo in a ) lol; cow;; b|d) fooo; esac",
+            Parser::read_case_clause
+        ));
+    }
+    #[test]
+    fn prop_readCaseClause2() {
+        assert!(is_ok(
+            "case foo\n in * ) echo bar;; esac",
+            Parser::read_case_clause
+        ));
+    }
+    #[test]
+    fn prop_readCaseClause3() {
+        assert!(is_ok(
+            "case foo\n in * ) echo bar & ;; esac",
+            Parser::read_case_clause
+        ));
+    }
+    #[test]
+    fn prop_readCaseClause4() {
+        assert!(is_ok(
+            "case foo\n in *) echo bar ;& bar) foo; esac",
+            Parser::read_case_clause
+        ));
+    }
+    #[test]
+    fn prop_readCaseClause5() {
+        assert!(is_ok(
+            "case foo\n in *) echo bar;;& foo) baz;; esac",
+            Parser::read_case_clause
+        ));
+    }
+    #[test]
+    fn prop_readCaseClause6() {
+        assert!(is_ok(
+            "case foo\n in if) :;; done) :;; esac",
+            Parser::read_case_clause
+        ));
+    }
+
+    #[test]
+    fn prop_readFunctionDefinition() {
+        assert!(is_ok(
+            "foo() { command foo --lol \"$@\"; }",
+            Parser::read_function_def
+        ));
+    }
+    #[test]
+    fn prop_readFunctionDefinition1() {
+        assert!(is_ok(
+            "foo   (){ command foo --lol \"$@\"; }",
+            Parser::read_function_def
+        ));
+    }
+    #[test]
+    fn prop_readFunctionDefinition4() {
+        assert!(is_warning("foo(a, b) { true; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition5() {
+        assert!(is_ok(":(){ :|:;}", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition6() {
+        assert!(is_ok("?(){ foo; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition7() {
+        assert!(is_ok("..(){ cd ..; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition8() {
+        assert!(is_ok("foo() (ls)", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition9() {
+        assert!(is_ok("function foo { true; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition10() {
+        assert!(is_ok(
+            "function foo () { true; }",
+            Parser::read_function_def
+        ));
+    }
+    #[test]
+    fn prop_readFunctionDefinition11() {
+        assert!(is_warning(
+            "function foo{\ntrue\n}",
+            Parser::read_function_def
+        ));
+    }
+    #[test]
+    fn prop_readFunctionDefinition12() {
+        assert!(is_ok("function []!() { true; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition13() {
+        assert!(is_ok("@require(){ true; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition14() {
+        assert!(is_ok("foo#bar(){ :; }", Parser::read_function_def));
+    }
+    #[test]
+    fn prop_readFunctionDefinition15() {
+        assert!(is_not_ok("#bar(){ :; }", Parser::read_function_def));
+    }
+
+    #[test]
+    fn prop_readCompoundCommand() {
+        assert!(is_ok(
+            "{ echo foo; }>/dev/null",
+            Parser::read_compound_command
+        ));
+    }
+}

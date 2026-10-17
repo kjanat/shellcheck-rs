@@ -955,6 +955,56 @@ mod tests {
     use super::*;
     use crate::test_support::*;
 
+    #[test]
+    fn prop_checkPS11() {
+        assert!(emits(check_ps1_assignments, "PS1='\\033[1;35m\\$ '"));
+    }
+
+    #[test]
+    fn prop_checkPS11a() {
+        assert!(emits(check_ps1_assignments, "export PS1='\\033[1;35m\\$ '"));
+    }
+
+    #[test]
+    fn prop_checkPSf2() {
+        assert!(emits(check_ps1_assignments, "PS1='\\h \\e[0m\\$ '"));
+    }
+
+    #[test]
+    fn prop_checkPS13() {
+        assert!(emits(check_ps1_assignments, "PS1=$'\\x1b[c '"));
+    }
+
+    #[test]
+    fn prop_checkPS14() {
+        assert!(emits(check_ps1_assignments, "PS1=$'\\e[3m; '"));
+    }
+
+    #[test]
+    fn prop_checkPS14a() {
+        assert!(emits(check_ps1_assignments, "export PS1=$'\\e[3m; '"));
+    }
+
+    #[test]
+    fn prop_checkPS15() {
+        assert!(!emits(check_ps1_assignments, "PS1='\\[\\033[1;35m\\]\\$ '"));
+    }
+
+    #[test]
+    fn prop_checkPS16() {
+        assert!(!emits(check_ps1_assignments, "PS1='\\[\\e1m\\e[1m\\]\\$ '"));
+    }
+
+    #[test]
+    fn prop_checkPS17() {
+        assert!(!emits(check_ps1_assignments, "PS1='e033x1B'"));
+    }
+
+    #[test]
+    fn prop_checkPS18() {
+        assert!(!emits(check_ps1_assignments, "PS1='\\[\\e\\]'"));
+    }
+
     /// `e4m` escapes the character that SC2296 quotes.
     #[test]
     fn sc2296_escapes_its_character() {

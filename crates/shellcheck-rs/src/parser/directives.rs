@@ -433,3 +433,78 @@ impl Parser {
         })
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::super::tests::{is_ok, is_warning};
+    use super::*;
+
+    #[test]
+    fn prop_readAnnotation1() {
+        assert!(is_ok(
+            "# shellcheck disable=1234,5678\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation2() {
+        assert!(is_ok(
+            "# shellcheck disable=SC1234 disable=SC5678\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation3() {
+        assert!(is_ok(
+            "# shellcheck disable=SC1234 source=/dev/null disable=SC5678\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation4() {
+        assert!(is_warning(
+            "# shellcheck cats=dogs disable=SC1234\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation5() {
+        assert!(is_ok(
+            "# shellcheck disable=SC2002 # All cats are precious\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation6() {
+        assert!(is_ok(
+            "# shellcheck disable=SC1234 # shellcheck foo=bar\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation7() {
+        assert!(is_ok(
+            "# shellcheck disable=SC1000,SC2000-SC3000,SC1001\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation8() {
+        assert!(is_ok("# shellcheck disable=all\n", Parser::read_annotation));
+    }
+    #[test]
+    fn prop_readAnnotation9() {
+        assert!(is_ok(
+            "# shellcheck source='foo bar' source-path=\"baz etc\"\n",
+            Parser::read_annotation
+        ));
+    }
+    #[test]
+    fn prop_readAnnotation10() {
+        assert!(is_ok(
+            "# shellcheck disable='SC1234,SC2345' enable=\"foo\" shell='bash'\n",
+            Parser::read_annotation
+        ));
+    }
+}

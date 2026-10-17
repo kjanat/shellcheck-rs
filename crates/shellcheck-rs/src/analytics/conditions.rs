@@ -2262,59 +2262,490 @@ mod tests {
     use crate::test_support::*;
 
     #[test]
-    fn prop_checkRequireDoubleBracket1_4() {
-        for s in ["[ -x foo ]", "[ foo -o bar ]"] {
-            assert!(tree_emits(check_require_double_bracket, s), "{s}");
-        }
-        for s in ["#!/bin/sh\n[ -x foo ]", "[[ -x foo ]]"] {
-            assert!(!tree_emits(check_require_double_bracket, s), "{s}");
-        }
+    fn prop_checkShorthandIf() {
+        assert!(emits(
+            check_shorthand_if,
+            "[[ ! -z file ]] && scp file host || rm file"
+        ));
     }
 
     #[test]
-    fn prop_checkRequireDoubleEquals1_5() {
-        for s in ["[[ \"$x\" = \"$y\" ]]", "[ \"$x\" = \"$y\" ]"] {
-            assert!(tree_emits(check_require_double_equals, s), "{s}");
-        }
-        for s in [
-            "[[ \"$x\" == \"$y\" ]]",
-            "#!/bin/sh\n[ \"$x\" = \"$y\" ]",
-            "#!/bin/ksh\n[[ \"$x\" = \"$y\" ]]",
-        ] {
-            assert!(!tree_emits(check_require_double_equals, s), "{s}");
-        }
+    fn prop_checkShorthandIf2() {
+        assert!(!emits(
+            check_shorthand_if,
+            "[[ ! -z file ]] && { scp file host || echo 'Eek'; }"
+        ));
     }
 
     #[test]
-    fn prop_checkNullaryExpansionTest1_6() {
-        for s in ["[[ $(a) ]]", "[[ $a ]]", "[[ \"$a$b\" ]]", "[[ `x` ]]"] {
-            assert!(emits(check_nullary_expansion_test, s), "{s}");
-        }
-        for s in ["[[ $a=1 ]]", "[[ -n $(a) ]]"] {
-            assert!(!emits(check_nullary_expansion_test, s), "{s}");
-        }
+    fn prop_checkShorthandIf3() {
+        assert!(!emits(check_shorthand_if, "foo && bar || echo baz"));
     }
 
     #[test]
-    fn prop_checkUnnecessarilyInvertedTest1_10() {
-        for s in [
-            "[ ! -z $var ]",
-            "! [[ -n $var ]]",
-            "! [ $var != foo ]",
-            "[[ ! $var == foo ]]",
-            "[ ! $var -eq 0 ]",
-            "! [[ $var -gt 3 ]]",
-        ] {
-            assert!(emits(check_unnecessarily_inverted_test, s), "{s}");
-        }
-        for s in [
-            "! [ -x $var ]",
-            "[[ ! -w $var ]]",
-            "[ -z $var ]",
-            "! [[ $var =~ .* ]]",
-        ] {
-            assert!(!emits(check_unnecessarily_inverted_test, s), "{s}");
-        }
+    fn prop_checkShorthandIf4() {
+        assert!(!emits(check_shorthand_if, "foo && a=b || a=c"));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf5() {
+        assert!(!emits(check_shorthand_if, "foo && rm || printf b"));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf6() {
+        assert!(!emits(
+            check_shorthand_if,
+            "if foo && bar || baz; then true; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf7() {
+        assert!(!emits(
+            check_shorthand_if,
+            "while foo && bar || baz; do true; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf8() {
+        assert!(emits(
+            check_shorthand_if,
+            "if true; then foo && bar || baz; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf9() {
+        assert!(!emits(check_shorthand_if, "foo && [ -x /file ] || bar"));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf10() {
+        assert!(!emits(check_shorthand_if, "foo && bar || true"));
+    }
+
+    #[test]
+    fn prop_checkShorthandIf11() {
+        assert!(emits(check_shorthand_if, "foo && bar || false"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex1() {
+        assert!(emits(check_quoted_cond_regex, "[[ $foo =~ \"bar.*\" ]]"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex2() {
+        assert!(emits(check_quoted_cond_regex, "[[ $foo =~ '(cow|bar)' ]]"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex3() {
+        assert!(!emits(check_quoted_cond_regex, "[[ $foo =~ $foo ]]"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex4() {
+        assert!(!emits(check_quoted_cond_regex, "[[ $foo =~ \"bar\" ]]"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex5() {
+        assert!(!emits(check_quoted_cond_regex, "[[ $foo =~ 'cow bar' ]]"));
+    }
+
+    #[test]
+    fn prop_checkQuotedCondRegex6() {
+        assert!(emits(check_quoted_cond_regex, "[[ $foo =~ 'cow|bar' ]]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest() {
+        assert!(emits(check_literal_breaking_test, "[[ a==$foo ]]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest2() {
+        assert!(emits(check_literal_breaking_test, "[ $foo=3 ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest3() {
+        assert!(emits(check_literal_breaking_test, "[ $foo!=3 ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest4() {
+        assert!(emits(check_literal_breaking_test, "[ \"$(ls) \" ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest5() {
+        assert!(emits(check_literal_breaking_test, "[ -n \"$(true) \" ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest6() {
+        assert!(emits(check_literal_breaking_test, "[ -z $(true)z ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest7() {
+        assert!(!emits(check_literal_breaking_test, "[ -z $(true) ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest8() {
+        assert!(!emits(check_literal_breaking_test, "[ $(true)$(true) ]"));
+    }
+
+    #[test]
+    fn prop_checkLiteralBreakingTest10() {
+        assert!(emits(check_literal_breaking_test, "[ -z foo ]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero1() {
+        assert!(emits(check_return_against_zero, "[ $? -eq 0 ]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero2() {
+        assert!(emits(check_return_against_zero, "[[ \"$?\" -gt 0 ]]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero3() {
+        assert!(emits(check_return_against_zero, "[[ 0 -ne $? ]]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero4() {
+        assert!(!emits(check_return_against_zero, "[[ $? -eq 4 ]]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero5() {
+        assert!(emits(check_return_against_zero, "[[ 0 -eq $? ]]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero6() {
+        assert!(!emits(check_return_against_zero, "[[ $R -eq 0 ]]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero7() {
+        assert!(emits(check_return_against_zero, "(( $? == 0 ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero8() {
+        assert!(emits(check_return_against_zero, "(( $? ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero9() {
+        assert!(emits(check_return_against_zero, "(( ! $? ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero10() {
+        assert!(!emits(check_return_against_zero, "x=$(( $? > 0 ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero11() {
+        assert!(emits(check_return_against_zero, "(( ! ! ! $? ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero12() {
+        assert!(emits(check_return_against_zero, "[ ! $? -eq 0 ]"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero13() {
+        assert!(!emits(check_return_against_zero, "(( ! $? && $? > 42))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero14() {
+        assert!(!emits(
+            check_return_against_zero,
+            "[[ -e foo || $? -eq 0 ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero15() {
+        assert!(!emits(check_return_against_zero, "(( $?, n=1 ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero16() {
+        assert!(!emits(check_return_against_zero, "(( $? || $? == 4 ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero17() {
+        assert!(!emits(check_return_against_zero, "(( $? + 0 ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero18() {
+        assert!(!emits(
+            check_return_against_zero,
+            "f() { if [ $? -eq 0 ]; then :; fi; }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero19() {
+        assert!(!emits(
+            check_return_against_zero,
+            "f() ( [ $? -eq 0 ] || exit 42; )"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero20() {
+        assert!(emits(
+            check_return_against_zero,
+            "f() { if :; then x; [ $? -eq 0 ] && exit; fi; }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero21() {
+        assert!(emits(check_return_against_zero, "(( ( $? ) ))"));
+    }
+
+    #[test]
+    fn prop_checkReturnAgainstZero22() {
+        assert!(emits(check_return_against_zero, "[[ ( $? -eq 0 ) ]]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest1() {
+        assert!(emits(check_unnecessarily_inverted_test, "[ ! -z $var ]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest2() {
+        assert!(emits(check_unnecessarily_inverted_test, "! [[ -n $var ]]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest3() {
+        assert!(!emits(check_unnecessarily_inverted_test, "! [ -x $var ]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest4() {
+        assert!(!emits(check_unnecessarily_inverted_test, "[[ ! -w $var ]]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest5() {
+        assert!(!emits(check_unnecessarily_inverted_test, "[ -z $var ]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest6() {
+        assert!(emits(
+            check_unnecessarily_inverted_test,
+            "! [ $var != foo ]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest7() {
+        assert!(emits(
+            check_unnecessarily_inverted_test,
+            "[[ ! $var == foo ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest8() {
+        assert!(!emits(
+            check_unnecessarily_inverted_test,
+            "! [[ $var =~ .* ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest9() {
+        assert!(emits(check_unnecessarily_inverted_test, "[ ! $var -eq 0 ]"));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest10() {
+        assert!(emits(
+            check_unnecessarily_inverted_test,
+            "! [[ $var -gt 3 ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest1() {
+        assert!(emits(check_nullary_expansion_test, "[[ $(a) ]]"));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest2() {
+        assert!(emits(check_nullary_expansion_test, "[[ $a ]]"));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest3() {
+        assert!(!emits(check_nullary_expansion_test, "[[ $a=1 ]]"));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest4() {
+        assert!(!emits(check_nullary_expansion_test, "[[ -n $(a) ]]"));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest5() {
+        assert!(emits(check_nullary_expansion_test, "[[ \"$a$b\" ]]"));
+    }
+
+    #[test]
+    fn prop_checkNullaryExpansionTest6() {
+        assert!(emits(check_nullary_expansion_test, "[[ `x` ]]"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang1() {
+        assert!(emits(check_useless_bang, "set -e; ! true; rest"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang2() {
+        assert!(!emits(check_useless_bang, "! true; rest"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang3() {
+        assert!(emits(
+            check_useless_bang,
+            "set -e; while true; do ! true; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUselessBang4() {
+        assert!(!emits(
+            check_useless_bang,
+            "set -e; if ! true; then true; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUselessBang5() {
+        assert!(!emits(check_useless_bang, "set -e; ( ! true )"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang6() {
+        assert!(emits(check_useless_bang, "set -e; { ! true; }"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang7() {
+        assert!(!emits(check_useless_bang, "set -e; x() { ! [ x ]; }"));
+    }
+
+    #[test]
+    fn prop_checkUselessBang8() {
+        assert!(!emits(
+            check_useless_bang,
+            "set -e; if { ! true; }; then true; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUselessBang9() {
+        assert!(!emits(
+            check_useless_bang,
+            "set -e; while ! true; do true; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUselessBang10() {
+        assert!(emits(
+            check_useless_bang,
+            "set -e\nshellcheck disable=SC0000\n! true\nrest"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleBracket1() {
+        assert!(tree_emits(check_require_double_bracket, "[ -x foo ]"));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleBracket2() {
+        assert!(tree_emits(check_require_double_bracket, "[ foo -o bar ]"));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleBracket3() {
+        assert!(!tree_emits(
+            check_require_double_bracket,
+            "#!/bin/sh\n[ -x foo ]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleBracket4() {
+        assert!(!tree_emits(check_require_double_bracket, "[[ -x foo ]]"));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleEquals1() {
+        assert!(tree_emits(
+            check_require_double_equals,
+            "[[ \"$x\" = \"$y\" ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleEquals2() {
+        assert!(tree_emits(
+            check_require_double_equals,
+            "[ \"$x\" = \"$y\" ]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleEquals3() {
+        assert!(!tree_emits(
+            check_require_double_equals,
+            "[[ \"$x\" == \"$y\" ]]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleEquals4() {
+        assert!(!tree_emits(
+            check_require_double_equals,
+            "#!/bin/sh\n[ \"$x\" = \"$y\" ]"
+        ));
+    }
+
+    #[test]
+    fn prop_checkRequireDoubleEquals5() {
+        assert!(!tree_emits(
+            check_require_double_equals,
+            "#!/bin/ksh\n[[ \"$x\" = \"$y\" ]]"
+        ));
     }
 
     #[test]
