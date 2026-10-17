@@ -19,6 +19,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use shellcheck_rs::Dialect;
+
 use crate::{Args, port_keys};
 
 /// The corpus a snapshot covers, as (label, script) pairs.
@@ -65,20 +67,15 @@ struct Entry {
 
 /// Run the port over every dialect it can be asked for, so a change that only
 /// shows in one of them cannot hide.
-const DIALECTS: [Option<&str>; 6] = [
-    None,
-    Some("bash"),
-    Some("sh"),
-    Some("dash"),
-    Some("ksh"),
-    Some("busybox"),
-];
+fn dialects() -> impl Iterator<Item = Option<&'static str>> {
+    std::iter::once(None).chain(Dialect::ALL.iter().map(|d| Some(d.name())))
+}
 
 fn record(script: &str) -> Result<Entry, String> {
     let mut payload = String::new();
     let mut messages = String::new();
     let mut codes: Vec<String> = Vec::new();
-    for shell in DIALECTS {
+    for shell in dialects() {
         let keys = port_keys(script, "-", shell)?;
         let _ = write!(payload, "[{}]", shell.unwrap_or("-"));
         for k in &keys {
