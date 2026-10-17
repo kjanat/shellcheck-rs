@@ -49,14 +49,16 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
             missing.len()
         ));
     }
-    let (failures, drift) = compare(
+    let baseline = Baseline::of(args.record);
+    let (mut failures, drift) = compare(
         &matrix,
         &recorded,
         &rows,
         &specs,
-        Coverage::of(&args.cell),
-        Baseline::of(args.record),
+        Coverage::of(&args.cell, &missing),
+        baseline,
     );
+    failures.extend(unrun_cells(&args.cell, &missing, baseline));
     for line in &drift {
         println!("DRIFT {line}");
     }
@@ -140,13 +142,18 @@ enum Coverage {
 }
 
 impl Coverage {
-    const fn of(cells: &[String]) -> Self {
-        if cells.is_empty() {
+    const fn of(cells: &[String], missing: &[String]) -> Self {
+        if cells.is_empty() && missing.is_empty() {
             Self::Matrix
         } else {
             Self::Cells
         }
     }
+}
+
+fn unrun_cells(cells: &[String], missing: &[String], baseline: Baseline) -> Option<String> {
+    (cells.is_empty() && !missing.is_empty() && baseline == Baseline::Verify)
+        .then(|| format!("full matrix ran without {}", missing.join(", ")))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -612,6 +619,21 @@ mod tests {
                 "{shell}"
             );
         }
+    #[test]
+    fn a_full_verification_with_missing_images_fails() {
+        let missing = ["zsh:5.9".to_string(), "tcsh:6.24.16".to_string()];
+        assert_eq!(
+            unrun_cells(&[], &missing, Baseline::Verify),
+            Some("full matrix ran without zsh:5.9, tcsh:6.24.16".to_string())
+        );
+        assert_eq!(unrun_cells(&[], &missing, Baseline::Record), None);
+        assert_eq!(
+            unrun_cells(&["zsh".to_string()], &missing, Baseline::Verify),
+            None
+        );
+        assert_eq!(unrun_cells(&[], &[], Baseline::Verify), None);
+    }
+
         assert!(speaks("sh", "sh"));
         assert!(speaks("posh", "sh"));
         assert!(speaks("zsh", "bash"));
@@ -633,8 +655,10 @@ mod tests {
         let none = Outcomes::default();
         let absent = [row(Outcome::Absent)];
         let reproduces = [row(Outcome::Reproduces)];
-        assert_eq!(Coverage::of(&[]), Coverage::Matrix);
-        assert_eq!(Coverage::of(&["dash:1".to_string()]), Coverage::Cells);
+        let dash = ["dash:1".to_string()];
+        assert_eq!(Coverage::of(&[], &[]), Coverage::Matrix);
+        assert_eq!(Coverage::of(&dash, &[]), Coverage::Cells);
+        assert_eq!(Coverage::of(&[], &dash), Coverage::Cells);
         let record = Baseline::Record;
         let (failures, _) = compare(&m, &none, &absent, &specs, Coverage::Cells, record);
         assert_eq!(failures, Vec::<String>::new());
