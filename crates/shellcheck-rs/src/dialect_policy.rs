@@ -115,7 +115,7 @@ fn sets_options(words: &[String]) -> bool {
         Some((name, _))
             if matches!(
                 name.as_str(),
-                "setopt" | "unsetopt" | "emulate" | "eval" | "." | "source"
+                "setopt" | "unsetopt" | "emulate" | "eval" | "." | "source" | "alias"
             ) =>
         {
             true
@@ -313,6 +313,24 @@ mod tests {
             assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
         }
         for script in ["echo source $x\n", "builtin printf '%s' . $x\n"] {
+            assert_eq!(
+                policy(Dialect::Zsh, script),
+                Policy::Measured(Dialect::Zsh),
+                "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_may_change_options_in_the_current_shell() {
+        for script in [
+            "alias split='setopt SH_WORD_SPLIT'\nsplit\necho $x\n",
+            "builtin alias split='set -y'\nsplit\necho $x\n",
+            "noglob alias \"$definition\"\nsplit\necho $x\n",
+        ] {
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
+        }
+        for script in ["echo alias $x\n", "builtin printf '%s' alias $x\n"] {
             assert_eq!(
                 policy(Dialect::Zsh, script),
                 Policy::Measured(Dialect::Zsh),
