@@ -167,6 +167,8 @@ then updates those outcomes and `dialect_rules.rs`. Verification checks the
 port against the generated rules; recording does not depend on the old rules.
 Recording also removes rows for retired specs or cells. A partial recording
 preserves other current rows and regenerates the report for all current specs.
+Without `--cell`, every matrix image must be available, including when recording.
+Missing images fail the run before outcomes, reports or rules are written.
 
 ## Gate
 
@@ -244,7 +246,8 @@ and have a five-second limit. Nothing is mounted; the network and Linux
 capabilities are disabled; the filesystem is read-only except for a temporary
 directory. The runner uses the image digest recorded in `matrix.toml`, then a
 local build of the cell's tag if that digest is unavailable. A cell with
-neither is recorded as `missing` and the run continues.
+neither is reported as `missing`. Explicit `--cell` runs can continue partially;
+an unfiltered run fails without writing generated files.
 
 Parsing happens with the shell's `-n` first where the shell has one. For
 `emulate-sh` cells the parse step runs the same argv with `-n` appended.

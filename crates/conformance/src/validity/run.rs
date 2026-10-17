@@ -50,7 +50,10 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
             missing.len()
         ));
     }
-    let (mut failures, drift) = compare(
+    if let Some(error) = unrun_cells(&args.cell, &missing) {
+        return Err(error);
+    }
+    let (failures, drift) = compare(
         &matrix,
         &recorded,
         &rows,
@@ -58,7 +61,6 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
         Coverage::of(&args.cell, &missing),
         baseline,
     );
-    failures.extend(unrun_cells(&args.cell, &missing, baseline));
     for line in &drift {
         println!("DRIFT {line}");
     }
@@ -155,8 +157,8 @@ impl Coverage {
     }
 }
 
-fn unrun_cells(cells: &[String], missing: &[String], baseline: Baseline) -> Option<String> {
-    (cells.is_empty() && !missing.is_empty() && baseline == Baseline::Verify)
+fn unrun_cells(cells: &[String], missing: &[String]) -> Option<String> {
+    (cells.is_empty() && !missing.is_empty())
         .then(|| format!("full matrix ran without {}", missing.join(", ")))
 }
 
@@ -1020,18 +1022,14 @@ mod tests {
     }
 
     #[test]
-    fn a_full_verification_with_missing_images_fails() {
+    fn any_full_run_with_missing_images_fails() {
         let missing = ["zsh:5.9".to_string(), "tcsh:6.24.16".to_string()];
         assert_eq!(
-            unrun_cells(&[], &missing, Baseline::Verify),
+            unrun_cells(&[], &missing),
             Some("full matrix ran without zsh:5.9, tcsh:6.24.16".to_string())
         );
-        assert_eq!(unrun_cells(&[], &missing, Baseline::Record), None);
-        assert_eq!(
-            unrun_cells(&["zsh".to_string()], &missing, Baseline::Verify),
-            None
-        );
-        assert_eq!(unrun_cells(&[], &[], Baseline::Verify), None);
+        assert_eq!(unrun_cells(&["zsh".to_string()], &missing), None);
+        assert_eq!(unrun_cells(&[], &[]), None);
     }
 
     #[test]
