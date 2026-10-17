@@ -113,7 +113,12 @@ fn sets_options(words: &[String]) -> bool {
         .take_while(|w| PRECOMMAND_MODIFIERS.contains(&w.as_str()))
         .count();
     match words[start..].split_first() {
-        Some((name, _)) if matches!(name.as_str(), "setopt" | "unsetopt" | "emulate" | "eval") => {
+        Some((name, _))
+            if matches!(
+                name.as_str(),
+                "setopt" | "unsetopt" | "emulate" | "eval" | "." | "source"
+            ) =>
+        {
             true
         }
         Some((name, args)) if name == "set" => has_option_flag(args),
@@ -283,6 +288,25 @@ mod tests {
             assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
         }
         for script in ["echo eval $x\n", "builtin printf '%s' eval $x\n"] {
+            assert_eq!(
+                policy(Dialect::Zsh, script),
+                Policy::Measured(Dialect::Zsh),
+                "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_may_change_options_in_the_current_shell() {
+        for script in [
+            ". <(printf 'setopt SH_WORD_SPLIT\\n'); echo $x\n",
+            "source \"$path\"; echo $x\n",
+            "builtin source \"$path\"; echo $x\n",
+            "noglob . \"$path\"; echo $x\n",
+        ] {
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
+        }
+        for script in ["echo source $x\n", "builtin printf '%s' . $x\n"] {
             assert_eq!(
                 policy(Dialect::Zsh, script),
                 Policy::Measured(Dialect::Zsh),

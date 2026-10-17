@@ -1218,6 +1218,19 @@ mod source_tests {
     }
 
     #[test]
+    fn a_zsh_source_that_enables_word_splitting_keeps_sc2086() {
+        for setup in [
+            ". <(printf 'setopt SH_WORD_SPLIT\\n')",
+            "source <(printf 'setopt SH_WORD_SPLIT\\n')",
+            "builtin source \"$path\"",
+        ] {
+            let script = format!("#!/bin/zsh\n{setup}; x='a b'; printf '<%s>\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{script}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{script}");
+        }
+    }
+
+    #[test]
     fn prop_optionDisablesBadShebang() {
         assert_eq!(
             check_with_spec(

@@ -122,7 +122,7 @@ dialect, version and outcome. A code applies to a dialect when the table has no
 entry for it, or when any version records `reproduces`; it is dropped when every
 version records `absent`. Other outcomes carry no weight. The matrix runs each
 shell with its default options. A script that runs `setopt`, `unsetopt`,
-`emulate`, `eval`, or `set` with an option flag keeps every code of its floor, also
+`emulate`, `eval`, `.`, `source`, or `set` with an option flag keeps every code of its floor, also
 behind a zsh precommand modifier such as `builtin`. So does a script whose
 shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `#!/usr/bin/env -S zsh -y`, or a zsh script that assigns to the special
