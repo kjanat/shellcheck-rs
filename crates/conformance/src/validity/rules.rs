@@ -6,7 +6,10 @@ use super::matrix::{self, Matrix, version_cmp};
 use super::outcomes::{self, Outcome, Outcomes};
 
 pub fn run() -> Result<(), String> {
-    let text = render(&outcomes::load()?, &matrix::load()?)?;
+    save(&render(&outcomes::load()?, &matrix::load()?)?)
+}
+
+pub fn save(text: &str) -> Result<(), String> {
     std::fs::write(super::RULES, text).map_err(|e| format!("{}: {e}", super::RULES))
 }
 

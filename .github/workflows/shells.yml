@@ -197,7 +197,7 @@ jobs:
           github-token: ${{ github.token }}
           retries: 3
           script: |
-            const paths = ['validity/matrix.toml', 'validity/outcomes.toml', 'validity/REPORT.md'];
+            const paths = ['validity/matrix.toml', 'validity/outcomes.toml', 'validity/REPORT.md', 'crates/shellcheck-rs/src/dialect_rules.rs'];
             const changed = (await exec.getExecOutput('git', ['diff', '--name-only', '--', ...paths], { silent: true })).stdout.trim().split('\n').filter(Boolean);
             if (!changed.length) return core.info('No validity drift.');
 
@@ -209,6 +209,7 @@ jobs:
               'validity/matrix.toml': '**Image matrix:** resolved OCI digests or pinned build inputs changed.',
               'validity/outcomes.toml': '**Observed behavior:** at least one diagnostic/shell outcome changed.',
               'validity/REPORT.md': '**Rendered report:** the human-readable validity matrix was regenerated.',
+              'crates/shellcheck-rs/src/dialect_rules.rs': '**Dialect rules:** the codes an added dialect keeps changed.',
             };
             const root = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`;
             const body = [

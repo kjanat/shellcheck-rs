@@ -79,7 +79,9 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     if args.record {
         let mut all = recorded;
         all.merge(&rows);
+        let rules = super::rules::render(&all, &matrix)?;
         outcomes::save(&all, &specs)?;
+        super::rules::save(&rules)?;
     }
     Ok(failures.is_empty())
 }
