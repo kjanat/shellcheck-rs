@@ -129,8 +129,8 @@ shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `options` array. A zsh script with `options[shwordsplit]=on` keeps
 SC2086. Writes to zsh's `functions`, `aliases`, `galiases`, `saliases` or their
 `dis_` variants also keep floor codes: their values can define commands that change options.
-GNU `env -S` quoting, escapes and comments are decoded before checking
-interpreter flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
+GNU `env -S` quoting, escapes and comments are decoded when identifying the
+interpreter and checking its flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
 Upstream dialects
 never consult the table. `tcsh` is not a dialect: its grammar is unrelated and
 its shebang still draws SC1071.

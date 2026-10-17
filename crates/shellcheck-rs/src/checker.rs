@@ -1259,6 +1259,20 @@ mod source_tests {
     }
 
     #[test]
+    fn quoted_env_interpreters_use_the_zsh_policy() {
+        for interpreter in ["'zsh'", "\"zsh\"", "z's'h", "'/bin/zsh'"] {
+            for options in ["", " -y"] {
+                let script = format!(
+                    "#!/usr/bin/env -S {interpreter}{options}\nx='a b'; printf '<%s>\\n' $x\n"
+                );
+                let codes = check(&script);
+                assert!(!codes.contains(&1008), "{script}");
+                assert_eq!(codes.contains(&2086), !options.is_empty(), "{script}");
+            }
+        }
+    }
+
+    #[test]
     fn quoted_env_split_flags_keep_zsh_floor_diagnostics() {
         for shebang in [
             "#!/usr/bin/env -S zsh '-y'",

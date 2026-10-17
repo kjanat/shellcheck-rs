@@ -1,4 +1,4 @@
-//! Decode the static subset of GNU `env -S` argument syntax.
+//! Decode the static subset of GNU `env -S` argument syntax for shebangs.
 //!
 //! See <https://www.gnu.org/software/coreutils/manual/html_node/env-invocation.html>.
 //! Environment expansion is deliberately unknown: checking a script must not
@@ -15,7 +15,19 @@ enum Quote {
 ///
 /// Return `None` for dynamic expansions or malformed input. The caller must
 /// retain the floor diagnostics when the interpreter arguments are unknown.
-pub(super) fn split(input: &str) -> Option<Vec<String>> {
+pub fn split(input: &str) -> Option<Vec<String>> {
+    decode(input).ok()
+}
+
+/// The complete static arguments before any unknown or malformed argument.
+///
+/// A literal interpreter can still be identified when its later arguments
+/// depend on the environment. Never return a partially decoded argument.
+pub fn split_prefix(input: &str) -> Vec<String> {
+    decode(input).unwrap_or_else(std::convert::identity)
+}
+
+fn decode(input: &str) -> Result<Vec<String>, Vec<String>> {
     let mut words = Vec::new();
     // None means the next character starts a token; Some("") is an empty token.
     let mut word: Option<String> = None;
@@ -45,13 +57,15 @@ pub(super) fn split(input: &str) -> Option<Vec<String>> {
                 }
             }
             '#' if word.is_none() => break,
-            '$' if quote != Quote::Single => return None,
+            '$' if quote != Quote::Single => return Err(words),
             '\\' => {
                 if quote == Quote::Single && !matches!(chars.peek(), Some('\\' | '\'')) {
                     word.get_or_insert_default().push(ch);
                     continue;
                 }
-                let escaped = chars.next()?;
+                let Some(escaped) = chars.next() else {
+                    return Err(words);
+                };
                 match escaped {
                     '_' if quote == Quote::Unquoted => {
                         if let Some(word) = word.take() {
@@ -59,19 +73,24 @@ pub(super) fn split(input: &str) -> Option<Vec<String>> {
                         }
                     }
                     'c' if quote == Quote::Unquoted => break,
-                    _ => word.get_or_insert_default().push(decode_escape(escaped)?),
+                    _ => {
+                        let Some(decoded) = decode_escape(escaped) else {
+                            return Err(words);
+                        };
+                        word.get_or_insert_default().push(decoded);
+                    }
                 }
             }
             _ => word.get_or_insert_default().push(ch),
         }
     }
     if quote != Quote::Unquoted {
-        return None;
+        return Err(words);
     }
     if let Some(word) = word {
         words.push(word);
     }
-    Some(words)
+    Ok(words)
 }
 
 const fn decode_escape(ch: char) -> Option<char> {
@@ -89,7 +108,7 @@ const fn decode_escape(ch: char) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{split, split_prefix};
 
     fn assert_words(input: &str, expected: &[&str]) {
         assert_eq!(
@@ -184,5 +203,17 @@ mod tests {
             assert_eq!(split(input), None, "{input:?}");
         }
         assert_words(r"zsh \${FLAGS}", &["zsh", "${FLAGS}"]);
+    }
+
+    #[test]
+    fn a_static_prefix_never_contains_a_partial_argument() {
+        for input in ["'zsh' ${FLAGS}", "'zsh' -${FLAG}", "'zsh' '\\", "'zsh' \\"] {
+            assert_eq!(split_prefix(input), vec!["zsh"], "{input:?}");
+            assert_eq!(split(input), None, "{input:?}");
+        }
+        for input in ["z${SHELL}", "'zsh", "zsh\\q"] {
+            assert!(split_prefix(input).is_empty(), "{input:?}");
+        }
+        assert_eq!(split_prefix("'zsh' '-y'"), vec!["zsh", "-y"]);
     }
 }

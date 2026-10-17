@@ -206,8 +206,8 @@ shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `options` array, as in `options[shwordsplit]=on`.
 Writes to zsh's `functions`, `aliases`, `galiases`, `saliases` or their `dis_`
 variants also keep floor codes: their values can define commands that change options.
-GNU `env -S` quoting, escapes and comments are decoded before checking interpreter
-flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
+GNU `env -S` quoting, escapes and comments are decoded when identifying the
+interpreter and checking its flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
 `Policy::of(dialect, root)` returns `Measured` for an added dialect whose
 script keeps the default options, else `Floor`. The checker drops the analysis
 findings whose code `Policy::keeps` rejects, after analysis and alongside the

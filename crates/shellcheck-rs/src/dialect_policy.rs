@@ -6,8 +6,6 @@ use crate::ast_lib::{basename, oversimplify};
 use crate::dialect::Dialect;
 use crate::dialect_rules::RULES;
 
-mod env_split;
-
 /// What the validity matrix recorded for one diagnostic in one cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -120,7 +118,8 @@ fn env_shebang_sets_options(mut rest: &str) -> bool {
             .or_else(|| rest.strip_prefix("--split-string="))
             .or_else(|| (word == "--split-string").then_some(tail));
         if let Some(payload) = split {
-            return env_split::split(payload).is_none_or(|words| env_words_set_options(&words));
+            return crate::env_split::split(payload)
+                .is_none_or(|words| env_words_set_options(&words));
         }
         if !env_prefix_word(word) {
             return word.starts_with('-')

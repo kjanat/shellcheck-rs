@@ -39,6 +39,7 @@ pub mod dialect;
 pub mod dialect_policy;
 mod dialect_rules;
 pub mod editor_config;
+mod env_split;
 pub mod idhash;
 pub mod parser;
 pub mod regex_lib;

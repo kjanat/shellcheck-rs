@@ -2569,6 +2569,21 @@ mod tests {
     }
 
     #[test]
+    fn a_quoted_env_interpreter_sets_the_parser_and_analyzer_dialect() {
+        for (interpreter, dialect) in [("'zsh'", Dialect::Zsh), ("\"dash\"", Dialect::Dash)] {
+            let script = format!("#!/usr/bin/env -S {interpreter}\necho hi\n");
+            let parsed = crate::parser::parse_script("script", &script);
+            assert!(
+                parsed.notes.iter().all(|note| note.code != 1008),
+                "{script}"
+            );
+            let root = parsed.root.expect("quoted interpreter script parses");
+            assert_eq!(super::named_dialect(&root), Some(dialect), "{script}");
+            assert_eq!(super::determine_shell(None, &root), dialect.floor());
+        }
+    }
+
+    #[test]
     fn parameters_check_a_dialect_as_its_floor() {
         let parsed = crate::parser::parse_script("script", "#!/bin/yash\necho hi\n");
         let params =
