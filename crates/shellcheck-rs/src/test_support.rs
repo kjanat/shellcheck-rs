@@ -33,7 +33,7 @@ pub fn params_for(script: &str) -> Parameters {
 pub fn params_for_shell(script: &str, shell: Shell) -> Parameters {
     let p = parse_script("test", script);
     let root = p.root.expect("parse produced no root");
-    make_parameters(root, p.positions, Some(shell.into()), None)
+    make_parameters(root, p.positions, Some(shell), None)
 }
 
 /// `filterByAnnotation`: drop comments a `# shellcheck disable=` covers.

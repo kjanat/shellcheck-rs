@@ -26,13 +26,22 @@ pub fn check_script(spec: &CheckSpec) -> CheckResult {
 /// supplies a default so that an embedder that never sources anything does not
 /// have to.
 pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
+    check_script_as(sys, spec, spec.shell_type_override.map(Dialect::from))
+}
+
+/// [`check_script_with`], checked as `dialect` in place of
+/// `spec.shell_type_override`.
+pub fn check_script_as(
+    sys: Rc<dyn System>,
+    spec: &CheckSpec,
+    dialect: Option<Dialect>,
+) -> CheckResult {
     let mut parse = parser::parse_script_spec(&parser::ParseSpec {
         filename: spec.filename.clone(),
         script: spec.script.clone(),
         check_sourced: spec.check_sourced,
-        shell_flag_specified: spec.shell_type_override.is_some(),
-        shell_hint: spec
-            .shell_type_override
+        shell_flag_specified: dialect.is_some(),
+        shell_hint: dialect
             .map(Dialect::floor)
             .or_else(|| shell_from_filename(&spec.filename)),
         rc_annotations: spec
@@ -72,15 +81,18 @@ pub fn check_script_with(sys: Rc<dyn System>, spec: &CheckSpec) -> CheckResult {
         // `asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec`
         let mut optional = analyzer_lib::get_enable_directives(&root);
         optional.extend(spec.optional_checks.iter().cloned());
-        let params = analyzer_lib::make_parameters_ext(
+        let fallback = shell_from_filename(&spec.filename);
+        let checked_as =
+            dialect.unwrap_or_else(|| analyzer_lib::determine_dialect(fallback, &root));
+        let params = analyzer_lib::make_parameters_as(
             root,
             parse.positions,
-            spec.shell_type_override,
-            shell_from_filename(&spec.filename),
+            dialect,
+            fallback,
             spec.extended_analysis,
         );
         let analysis = analytics::analyze_with(&params, &optional);
-        let policy = dialect_policy::Policy::of(params.dialect, &params.root);
+        let policy = dialect_policy::Policy::of(checked_as, &params.root);
         for tc in analysis {
             if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced)
                 || !policy.keeps(tc.comment.code)
@@ -295,13 +307,25 @@ mod source_tests {
 
     /// `getErrors`: the codes, sorted.
     fn errors(sys: Rc<dyn System>, spec: &CheckSpec) -> Vec<i64> {
-        let mut codes: Vec<i64> = check_script_with(sys, spec)
-            .comments
-            .iter()
-            .map(|c| c.comment.code)
-            .collect();
+        codes_of(&check_script_with(sys, spec))
+    }
+
+    fn codes_of(result: &CheckResult) -> Vec<i64> {
+        let mut codes: Vec<i64> = result.comments.iter().map(|c| c.comment.code).collect();
         codes.sort_unstable();
         codes
+    }
+
+    fn check_as(script: &str, dialect: Dialect) -> Vec<i64> {
+        let spec = CheckSpec {
+            script: script.to_string(),
+            ..CheckSpec::default()
+        };
+        codes_of(&check_script_as(
+            Rc::new(MockSystem::new(&[])),
+            &spec,
+            Some(dialect),
+        ))
     }
 
     /// `checkWithIncludes`: SC2148 excluded, sources read from the mock.
@@ -1040,7 +1064,7 @@ mod source_tests {
             Rc::new(MockSystem::new(&[])),
             &CheckSpec {
                 script: "source /dev/null".to_string(),
-                shell_type_override: Some(Dialect::Sh),
+                shell_type_override: Some(Shell::Sh),
                 ..CheckSpec::default()
             },
         );
@@ -1132,14 +1156,7 @@ mod source_tests {
         assert_eq!(check("#!/bin/mksh\n[[ -n $1 ]]\n"), Vec::<i64>::new());
         assert_eq!(check("#!/bin/tcsh\necho $x\n"), vec![1071]);
         assert_eq!(
-            check_with_spec(
-                &[],
-                &CheckSpec {
-                    script: "#!/bin/zsh\n[[ -n $1 ]]\n".to_string(),
-                    shell_type_override: Some(Dialect::Posh),
-                    ..CheckSpec::default()
-                }
-            ),
+            check_as("#!/bin/zsh\n[[ -n $1 ]]\n", Dialect::Posh),
             vec![3010]
         );
     }
@@ -1149,23 +1166,14 @@ mod source_tests {
         let script = "#!/bin/zsh\nx=\"a b\"; echo $x\n";
         assert_eq!(check(script), Vec::<i64>::new());
         assert_eq!(check("#!/bin/bash\nx=\"a b\"; echo $x\n"), vec![2086]);
+        assert_eq!(check_as(script, Dialect::Zsh), Vec::<i64>::new());
+        assert_eq!(check_as(script, Dialect::Bash), vec![2086]);
         assert_eq!(
             check_with_spec(
                 &[],
                 &CheckSpec {
                     script: script.to_string(),
-                    shell_type_override: Some(Dialect::Zsh),
-                    ..CheckSpec::default()
-                }
-            ),
-            Vec::<i64>::new()
-        );
-        assert_eq!(
-            check_with_spec(
-                &[],
-                &CheckSpec {
-                    script: script.to_string(),
-                    shell_type_override: Some(Dialect::Bash),
+                    shell_type_override: Some(Shell::Bash),
                     ..CheckSpec::default()
                 }
             ),
@@ -1192,7 +1200,7 @@ mod source_tests {
                 &[],
                 &CheckSpec {
                     script: "#!/usr/bin/python\ntrue\n".to_string(),
-                    shell_type_override: Some(Dialect::Sh),
+                    shell_type_override: Some(Shell::Sh),
                     ..CheckSpec::default()
                 }
             ),

@@ -22,9 +22,7 @@ use crate::regex_lib::mk_regex;
 /// Grown as checks require more fields. The linear `variableFlow` and CFG are
 /// added when their dependent checks are ported.
 pub struct Parameters {
-    /// The dialect the script is checked as.
-    pub dialect: Dialect,
-    /// `shellType`: the shell type, such as Bash or Ksh; the floor of `dialect`.
+    /// `shellType`: the shell type, such as Bash or Ksh.
     pub shell: Shell,
     /// `shellTypeSpecified`: true if the shell type was forced via flags.
     pub shell_type_specified: bool,
@@ -671,7 +669,7 @@ fn contains_short_option(root: &Token, long: &str, short: &str, shebang_re: &reg
 pub fn make_parameters(
     root: Token,
     token_positions: PositionMap,
-    shell_override: Option<Dialect>,
+    shell_override: Option<Shell>,
     fallback_shell: Option<Shell>,
 ) -> Parameters {
     make_parameters_ext(root, token_positions, shell_override, fallback_shell, None)
@@ -686,13 +684,32 @@ pub fn make_parameters(
 pub fn make_parameters_ext(
     root: Token,
     token_positions: PositionMap,
-    shell_override: Option<Dialect>,
+    shell_override: Option<Shell>,
     fallback_shell: Option<Shell>,
     extended_analysis_override: Option<bool>,
 ) -> Parameters {
-    let dialect = shell_override.unwrap_or_else(|| determine_dialect(fallback_shell, &root));
-    let shell = dialect.floor();
-    let shell_type_specified = shell_override.is_some() || fallback_shell.is_some();
+    make_parameters_as(
+        root,
+        token_positions,
+        shell_override.map(Dialect::from),
+        fallback_shell,
+        extended_analysis_override,
+    )
+}
+
+/// [`make_parameters_ext`] with the script checked as `dialect_override`.
+#[must_use]
+pub fn make_parameters_as(
+    root: Token,
+    token_positions: PositionMap,
+    dialect_override: Option<Dialect>,
+    fallback_shell: Option<Shell>,
+    extended_analysis_override: Option<bool>,
+) -> Parameters {
+    let shell = dialect_override
+        .unwrap_or_else(|| determine_dialect(fallback_shell, &root))
+        .floor();
+    let shell_type_specified = dialect_override.is_some() || fallback_shell.is_some();
     let (parent_map, id_map) = build_maps(&root);
     let has_set_e = contains_set_e(&root);
     let has_allexport = contains_allexport(&root);
@@ -738,7 +755,6 @@ pub fn make_parameters_ext(
     };
 
     Parameters {
-        dialect,
         shell,
         shell_type_specified,
         root,
@@ -2553,22 +2569,30 @@ mod tests {
     }
 
     #[test]
-    fn parameters_carry_the_dialect_and_check_as_its_floor() {
+    fn parameters_check_a_dialect_as_its_floor() {
         let parsed = crate::parser::parse_script("script", "#!/bin/yash\necho hi\n");
         let params =
             super::make_parameters(parsed.root.expect("parses"), parsed.positions, None, None);
-        assert_eq!(params.dialect, Dialect::Yash);
         assert_eq!(params.shell, Shell::Sh);
         assert!(!params.shell_type_specified);
         let parsed = crate::parser::parse_script("script", "echo hi\n");
-        let params = super::make_parameters(
+        let params = super::make_parameters_as(
             parsed.root.expect("parses"),
             parsed.positions,
             Some(Dialect::Zsh),
             None,
+            None,
         );
-        assert_eq!(params.dialect, Dialect::Zsh);
         assert_eq!(params.shell, Shell::Bash);
+        assert!(params.shell_type_specified);
+        let parsed = crate::parser::parse_script("script", "echo hi\n");
+        let params = super::make_parameters(
+            parsed.root.expect("parses"),
+            parsed.positions,
+            Some(Shell::Dash),
+            None,
+        );
+        assert_eq!(params.shell, Shell::Dash);
         assert!(params.shell_type_specified);
     }
 

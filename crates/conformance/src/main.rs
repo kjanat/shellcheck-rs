@@ -34,13 +34,14 @@ mod snapshot;
 mod validity;
 
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use actions_rs::{Annotation, Cell, Summary, log, output};
 use clap::{ArgAction, Parser, ValueEnum};
 use serde_json::Value;
 use shellcheck_cli::formatter::{fixer, json1};
-use shellcheck_cli::options::parse_shell;
-use shellcheck_rs::interface::{CheckSpec, PositionedComment};
+use shellcheck_cli::options::parse_dialect;
+use shellcheck_rs::interface::{CheckSpec, NoExternalSources, PositionedComment};
 
 // ---------------------------------------------------------------------------
 // Comparison keys
@@ -196,15 +197,15 @@ pub fn port_keys_with(
     let spec = CheckSpec {
         filename: filename.to_string(),
         script: script.to_string(),
-        shell_type_override: shell.and_then(parse_shell),
         optional_checks: optional.to_vec(),
         ..CheckSpec::default()
     };
-    json1_keys(
-        &shellcheck_rs::check_script(&spec).comments,
-        script,
-        filename,
-    )
+    let result = shellcheck_rs::checker::check_script_as(
+        Rc::new(NoExternalSources),
+        &spec,
+        shell.and_then(parse_dialect),
+    );
+    json1_keys(&result.comments, script, filename)
 }
 
 fn json1_keys(

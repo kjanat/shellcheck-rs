@@ -87,7 +87,6 @@ fn analyze(input: &[u8]) -> Result<Value, String> {
     let spec = CheckSpec {
         script: req.script,
         filename: req.filename,
-        shell_type_override: shell,
         check_sourced: req.check_sourced,
         ignore_rc: true,
         excluded_warnings: req.exclude,
@@ -97,7 +96,7 @@ fn analyze(input: &[u8]) -> Result<Value, String> {
         min_severity: severity,
         ..CheckSpec::default()
     };
-    let result = shellcheck_rs::checker::check_script_with(Rc::new(system), &spec);
+    let result = shellcheck_rs::checker::check_script_as(Rc::new(system), &spec, shell);
     let comments: Vec<_> = result.comments.iter().map(|c| {
         let fix = c.fix.as_ref().map(|f| json!({"replacements": f.replacements.iter().map(|r| json!({
             "file": r.start.file, "line": r.start.line, "column": r.start.column,

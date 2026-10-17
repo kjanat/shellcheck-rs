@@ -820,8 +820,9 @@ fn default_paths() -> Vec<String> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
-    use crate::options::parse_shell;
+    use crate::options::parse_dialect;
     use shellcheck_rs::Dialect;
+    use shellcheck_rs::interface::Shell;
 
     impl Config {
         fn disabled(&self) -> Vec<(i64, i64)> {
@@ -852,7 +853,7 @@ mod tests {
                     Annotation::ShellOverride(s) => Some(s),
                     _ => None,
                 })
-                .and_then(|s| parse_shell(s))
+                .and_then(|s| parse_dialect(s))
         }
 
         /// `getExtendedAnalysisDirective`: the first one.
@@ -988,7 +989,7 @@ mod tests {
         assert_eq!(parse("shell=sh").shell(), Some(Dialect::Sh));
         // Unknown dialect: SC1103 is discarded and there is no usable override.
         assert_eq!(parse("shell=fish").shell(), None);
-        // Aliases route through parse_shell (shellForExecutable).
+        // Aliases route through parse_dialect (shellForExecutable).
         assert_eq!(parse("shell=ksh93").shell(), Some(Dialect::Ksh));
     }
 
@@ -1163,7 +1164,7 @@ mod tests {
     fn merge_into_hands_over_the_annotations_in_order() {
         let rc = parse("disable=SC2086 enable=foo shell=sh extended-analysis=false");
         let mut spec = CheckSpec {
-            shell_type_override: Some(Dialect::Bash),
+            shell_type_override: Some(Shell::Bash),
             extended_analysis: Some(true),
             ..CheckSpec::default()
         };
@@ -1179,7 +1180,7 @@ mod tests {
             ]
         );
         assert!(directives.parse_problem.is_none());
-        assert_eq!(spec.shell_type_override, Some(Dialect::Bash));
+        assert_eq!(spec.shell_type_override, Some(Shell::Bash));
         assert_eq!(spec.extended_analysis, Some(true));
         assert_eq!(spec.optional_checks, [] as [String; 0]);
     }

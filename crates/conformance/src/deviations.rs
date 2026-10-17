@@ -185,7 +185,7 @@ fn completed_statement_notes(
                 "-",
                 prefix,
                 shell.is_some(),
-                shell.and_then(crate::parse_shell).map(Dialect::floor),
+                shell.and_then(crate::parse_dialect).map(Dialect::floor),
             );
             if parsed.root.is_none()
                 || parsed
@@ -288,7 +288,7 @@ fn function_tail_cd(
         "-",
         script,
         shell.is_some(),
-        shell.and_then(crate::parse_shell).map(Dialect::floor),
+        shell.and_then(crate::parse_dialect).map(Dialect::floor),
     );
     let Some(root) = parsed.root else {
         return false;
@@ -377,17 +377,18 @@ fn port_parameters(
     script: &str,
     shell: Option<&str>,
 ) -> Option<shellcheck_rs::analyzer_lib::Parameters> {
-    let dialect = shell.and_then(crate::parse_shell);
+    let dialect = shell.and_then(crate::parse_dialect);
     let parsed = shellcheck_rs::parser::parse_script_with(
         "-",
         script,
         shell.is_some(),
         dialect.map(Dialect::floor),
     );
-    Some(shellcheck_rs::analyzer_lib::make_parameters(
+    Some(shellcheck_rs::analyzer_lib::make_parameters_as(
         parsed.root?,
         parsed.positions,
         dialect,
+        None,
         None,
     ))
 }
