@@ -283,7 +283,7 @@ fn port_check(
     snippet: &str,
     fixed: &str,
 ) -> Result<(Outcome, String), String> {
-    let Some(dialect) = cell.dialect.as_deref() else {
+    let Some(dialect) = cell.port_shell() else {
         return Ok((Outcome::Reproduces, String::new()));
     };
     if spec.shell.as_deref().is_some_and(|s| s != dialect) {
@@ -508,6 +508,64 @@ mod tests {
         }
         assert_eq!(Baseline::of(true), Baseline::Record);
         assert_eq!(Baseline::of(false), Baseline::Verify);
+    }
+
+    fn cell(shell: &str, dialect: Option<&str>) -> Cell {
+        Cell {
+            shell: shell.to_string(),
+            version: "1".to_string(),
+            image: String::new(),
+            digest: String::new(),
+            base: String::new(),
+            dockerfile: shell.to_string(),
+            argv: vec![],
+            parse: vec![],
+            shipped: true,
+            vm: false,
+            dialect: dialect.map(str::to_string),
+            source: matrix::SourcePin::Crate {
+                version: "1".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn the_port_checks_a_cell_as_its_stand_in_else_as_its_own_shell() {
+        assert_eq!(cell("dash", Some("sh")).port_shell(), Some("sh"));
+        assert_eq!(cell("zsh-sh", Some("sh")).port_shell(), Some("sh"));
+        assert_eq!(cell("zsh", None).port_shell(), Some("zsh"));
+        assert_eq!(cell("freebsd-sh", None).port_shell(), Some("freebsd-sh"));
+        assert_eq!(cell("tcsh", None).port_shell(), None);
+    }
+
+    #[test]
+    fn an_added_dialect_cell_runs_the_port_assertions() {
+        let spec = Spec {
+            code: 2086,
+            claim: String::new(),
+            shell: None,
+            snippet: spec::Script {
+                script: String::new(),
+            },
+            fixed: spec::Script {
+                script: String::new(),
+            },
+            observe: vec![],
+        };
+        let snippet = "x=\"a b\"; printf '<%s>' $x\n";
+        let fixed = "x=\"a b\"; printf '<%s>' \"$x\"\n";
+        assert_eq!(
+            port_check(&cell("mksh", None), &spec, snippet, fixed),
+            Ok((Outcome::Reproduces, String::new()))
+        );
+        assert!(matches!(
+            port_check(&cell("zsh", None), &spec, snippet, fixed),
+            Ok((Outcome::PortMiss, _))
+        ));
+        assert_eq!(
+            port_check(&cell("tcsh", None), &spec, snippet, fixed),
+            Ok((Outcome::Reproduces, String::new()))
+        );
     }
 
     #[test]

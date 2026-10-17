@@ -146,7 +146,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "bosh"
 argv = ["bosh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "git"
@@ -163,7 +163,7 @@ base = "rust@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1
 dockerfile = "brush"
 argv = ["brush"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "crate"
@@ -416,7 +416,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "freebsd-sh"
 argv = ["sh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 vm = true
 
 [cell.source]
@@ -433,7 +433,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "freebsd-sh"
 argv = ["sh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 vm = true
 
 [cell.source]
@@ -522,7 +522,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "loksh"
 argv = ["loksh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "git"
@@ -539,7 +539,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "mksh"
 argv = ["mksh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "tarball"
@@ -555,7 +555,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "netbsd-sh"
 argv = ["sh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 vm = true
 
 [cell.source]
@@ -572,7 +572,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "netbsd-sh"
 argv = ["sh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 vm = true
 
 [cell.source]
@@ -589,7 +589,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "oksh"
 argv = ["oksh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "git"
@@ -606,7 +606,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "osh"
 argv = ["osh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "tarball"
@@ -622,7 +622,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "posh"
 argv = ["posh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "tarball"
@@ -654,7 +654,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "yash"
 argv = ["yash"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "git"
@@ -671,7 +671,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "zsh"
 argv = ["zsh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "tarball"
@@ -687,7 +687,7 @@ base = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06
 dockerfile = "zsh"
 argv = ["zsh"]
 parse = ["-n"]
-shipped = false
+shipped = true
 
 [cell.source]
 kind = "tarball"

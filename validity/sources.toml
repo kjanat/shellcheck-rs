@@ -44,6 +44,7 @@ kind     = "tarball"
 url      = "https://www.zsh.org/pub/old/zsh-{version}.tar.xz"
 versions = ["5.8.1", "5.9"]
 argv     = ["zsh"]
+shipped  = true
 
 [shell.zsh-sh]
 image    = "zsh"
@@ -58,6 +59,7 @@ kind     = "tarball"
 url      = "https://mbsd.evolvis.org/MirOS/dist/mir/mksh/mksh-{version}.tgz"
 versions = ["R59c"]
 argv     = ["mksh"]
+shipped  = true
 
 [shell.oksh]
 kind     = "git"
@@ -65,6 +67,7 @@ repo     = "https://github.com/ibara/oksh"
 tag      = "oksh-{version}"
 versions = ["7.9"]
 argv     = ["oksh"]
+shipped  = true
 
 [shell.loksh]
 kind     = "git"
@@ -72,6 +75,7 @@ repo     = "https://github.com/dimkr/loksh"
 tag      = "{version}"
 versions = ["7.9"]
 argv     = ["loksh"]
+shipped  = true
 
 [shell.yash]
 kind     = "git"
@@ -79,24 +83,28 @@ repo     = "https://github.com/magicant/yash"
 tag      = "{version}"
 versions = ["2.59"]
 argv     = ["yash"]
+shipped  = true
 
 [shell.posh]
 kind     = "tarball"
 url      = "https://deb.debian.org/debian/pool/main/p/posh/posh_{version}.tar.xz"
 versions = ["0.14.1"]
 argv     = ["posh"]
+shipped  = true
 
 [shell.osh]
 kind     = "tarball"
 url      = "https://oils.pub/download/oils-for-unix-{version}.tar.gz"
 versions = ["0.38.0"]
 argv     = ["osh"]
+shipped  = true
 
 [shell.brush]
 kind     = "crate"
 base     = "rust:1-slim-bookworm"
 versions = ["0.4.0"]
 argv     = ["brush"]
+shipped  = true
 
 [shell.bosh]
 kind     = "git"
@@ -104,6 +112,7 @@ repo     = "https://codeberg.org/schilytools/schilytools"
 tag      = "{version}"
 versions = ["2024-03-21"]
 argv     = ["bosh"]
+shipped  = true
 
 [shell.freebsd-sh]
 kind     = "image"
@@ -111,6 +120,7 @@ url      = "https://download.freebsd.org/releases/VM-IMAGES/{version}-RELEASE/am
 versions = ["14.5", "15.1"]
 argv     = ["sh"]
 vm       = true
+shipped  = true
 
 [shell.netbsd-sh]
 kind     = "image"
@@ -118,6 +128,7 @@ url      = "https://cdn.netbsd.org/pub/NetBSD/NetBSD-{version}/images/NetBSD-{ve
 versions = ["10.2", "11.0"]
 argv     = ["sh"]
 vm       = true
+shipped  = true
 
 [shell.tcsh]
 kind     = "tarball"

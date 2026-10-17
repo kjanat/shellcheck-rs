@@ -3,6 +3,7 @@ use std::path::Path;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use shellcheck_rs::Dialect;
 
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 pub struct Matrix {
@@ -75,6 +76,12 @@ impl SourcePin {
 impl Cell {
     pub fn id(&self) -> String {
         format!("{}:{}", self.shell, self.version)
+    }
+
+    pub fn port_shell(&self) -> Option<&str> {
+        self.dialect
+            .as_deref()
+            .or_else(|| Dialect::from_name(&self.shell).map(Dialect::name))
     }
 
     pub fn matches(&self, filters: &[String]) -> bool {

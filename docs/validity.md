@@ -86,11 +86,11 @@ sha256 = "…"
 ```
 
 `shipped` says whether the port has a `--shell` value for this cell. `dialect`
-names the port shell the cell stands in for when checking the snippet. An
-unshipped cell with no stand-in leaves `dialect` out and skips the port
-assertions. `vm = true` marks a cell whose shell runs inside a guest
-operating system under QEMU; its source is `kind = "image"`, a disk image
-URL with its SHA-256.
+names the port shell the cell stands in for when checking the snippet. A cell
+without `dialect` is checked as its own shell when the port has that `--shell`
+value, and any other cell skips the port assertions. `vm = true` marks a cell
+whose shell runs inside a guest operating system under QEMU; its source is
+`kind = "image"`, a disk image URL with its SHA-256.
 
 The generated report is the current inventory of shells and versions. Some
 BSD shells run in guest operating systems because their native binaries do
@@ -198,8 +198,8 @@ snapshot and the oracle gate do not move for them. The `added-dialect`
 deviation class expects the port's findings to equal the oracle's run as the
 floor shell minus the codes the policy drops.
 
-A dialect ships when its cells show no `port-miss`: flip `shipped = true` in
-`sources.toml` and the gate treats changes to its cells as fatal.
+Every dialect with a `--shell` value has `shipped = true` in `sources.toml`,
+and the gate treats changes to its cells as fatal.
 
 ## Report
 
