@@ -1219,6 +1219,25 @@ mod source_tests {
     }
 
     #[test]
+    fn autoloaded_zsh_functions_keep_sc2086() {
+        for setup in [
+            "autoload split",
+            "autoload -Uz split",
+            "builtin autoload split",
+            "functions -u split",
+            "functions -U split",
+            "typeset -fu split",
+            "typeset -f -u split",
+            "typeset -u -f split",
+            "declare -fU split",
+        ] {
+            let script = format!("#!/bin/zsh\n{setup}; split; x='a b'; printf '%s\\n' $x\n");
+            assert!(check(&script).contains(&2086), "{setup}");
+            assert!(check_as(&script, Dialect::Zsh).contains(&2086), "{setup}");
+        }
+    }
+
+    #[test]
     fn a_zsh_eval_that_enables_word_splitting_keeps_sc2086() {
         for setup in [
             "eval 'setopt SH_WORD_SPLIT'",

@@ -73,7 +73,7 @@ fn keeps_default_options(dialect: Dialect, root: &Token) -> bool {
             InnerToken::T_Script { shebang, .. } => {
                 matches!(&*shebang.inner, InnerToken::T_Literal(s) if shebang_sets_options(s))
             }
-            InnerToken::T_SimpleCommand { .. } => sets_options(&oversimplify(t)),
+            InnerToken::T_SimpleCommand { .. } => sets_options(dialect, &oversimplify(t)),
             InnerToken::T_Assignment { var, .. } => {
                 dialect == Dialect::Zsh
                     && matches!(
@@ -152,7 +152,7 @@ fn env_prefix_word(word: &str) -> bool {
 
 const PRECOMMAND_MODIFIERS: [&str; 6] = ["-", "builtin", "command", "exec", "nocorrect", "noglob"];
 
-fn sets_options(words: &[String]) -> bool {
+fn sets_options(dialect: Dialect, words: &[String]) -> bool {
     let start = words
         .iter()
         .take_while(|w| PRECOMMAND_MODIFIERS.contains(&w.as_str()))
@@ -167,8 +167,74 @@ fn sets_options(words: &[String]) -> bool {
             true
         }
         Some((name, args)) if name == "set" => has_option_flag(args),
+        Some((name, args)) if dialect == Dialect::Zsh => autoloads(name, args),
         _ => false,
     }
+}
+
+fn autoloads(name: &str, args: &[String]) -> bool {
+    if name == "autoload" {
+        return true;
+    }
+    let mut function = name == "functions";
+    if !function && !matches!(name, "typeset" | "declare" | "readonly") {
+        return false;
+    }
+    let mut lower_u = false;
+    let mut upper_u = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "--" | "-" | "+") {
+            return function && (lower_u || upper_u) && !args.as_slice().is_empty();
+        }
+        let enabled = arg.starts_with('-');
+        if !enabled && !arg.starts_with('+') {
+            return arg.starts_with("${VAR}") || (function && (lower_u || upper_u));
+        }
+        // An expansion in an option word can supply unknown flags.
+        if arg.contains("${VAR}") {
+            return true;
+        }
+        let mut flags = arg[1..].chars();
+        while let Some(flag) = flags.next() {
+            match flag {
+                'f' => function = true,
+                'u' => lower_u = enabled,
+                'U' => upper_u = enabled,
+                'x' if name == "functions" => {
+                    if flags.as_str().is_empty()
+                        && args.next().is_some_and(|value| value.contains("${VAR}"))
+                    {
+                        return true;
+                    }
+                    break;
+                }
+                'E' | 'F' | 'L' | 'R' | 'Z' | 'i' | 'p'
+                    if name != "functions" && (flag != 'p' || name != "readonly") =>
+                {
+                    // zsh consumes the entire attached value, or a following
+                    // word beginning with a digit, even with flags remaining.
+                    if starts_with_digit(flags.as_str()) {
+                        break;
+                    }
+                    if args
+                        .as_slice()
+                        .first()
+                        .is_some_and(|value| starts_with_digit(value))
+                    {
+                        args.next();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+fn starts_with_digit(value: &str) -> bool {
+    value.as_bytes().first().is_some_and(u8::is_ascii_digit)
 }
 
 fn has_option_flag<S: AsRef<str>>(args: &[S]) -> bool {
@@ -431,6 +497,74 @@ mod tests {
                 "{script:?}"
             );
         }
+    }
+
+    #[test]
+    fn autoloads_may_change_zsh_options() {
+        for command in [
+            "autoload split",
+            "builtin autoload -Uz split",
+            "functions -u split",
+            "functions -U split",
+            "functions --u split",
+            "functions -x4 -u split",
+            "functions -x 4 -u split",
+            "functions -ux4 split",
+            "typeset -fu split",
+            "typeset -f -U split",
+            "typeset -u -f split",
+            "typeset +f -u split",
+            "declare -fu split",
+            "readonly -fU split",
+            "typeset --fu split",
+            "functions -u -- split",
+            "typeset \"$flags\" split",
+            "functions -x $width split",
+            "typeset -L 4 -fu split",
+            "typeset -L4 -fu split",
+            "typeset +L 4 -fu split",
+            "declare -p 4 -fu split",
+            "readonly -Z 4 -fU split",
+            "typeset -Lfu split",
+        ] {
+            let script = format!("{command}; split; echo $x\n");
+            assert_eq!(policy(Dialect::Zsh, &script), Policy::Floor, "{command}");
+        }
+        for command in [
+            "functions",
+            "functions -u",
+            "functions +u split",
+            "functions +U split",
+            "functions -U +U split",
+            "functions -- -u",
+            "functions -x4 split",
+            "functions -x 4 split",
+            "functions split -u",
+            "typeset -u value",
+            "typeset value=$x",
+            "typeset -u value=$x",
+            "functions named${suffix}",
+            "typeset -f split",
+            "typeset +f split",
+            "typeset -f -- -u",
+            "typeset -f - -u",
+            "typeset -f + -u",
+            "echo autoload split",
+            "typeset -L4fu split",
+            "typeset -Lfu 4 split",
+            "readonly -p 4 -fu split",
+        ] {
+            let script = format!("{command}; echo $x\n");
+            assert_eq!(
+                policy(Dialect::Zsh, &script),
+                Policy::Measured(Dialect::Zsh),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            policy(Dialect::Yash, "typeset -fu split; echo $x\n"),
+            Policy::Measured(Dialect::Yash)
+        );
     }
 
     #[test]

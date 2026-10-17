@@ -277,6 +277,6 @@ mod tests {
             }
         }
         assert_eq!(lost_codes, BTreeSet::from([2086]));
-        assert_eq!(scripts_losing, 16);
+        assert_eq!(scripts_losing, 13);
     }
 }

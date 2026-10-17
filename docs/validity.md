@@ -208,6 +208,9 @@ shebang passes the interpreter an option flag, as in `#!/bin/zsh -y` or
 `options` array, as in `options[shwordsplit]=on`.
 Writes to zsh's `functions`, `aliases`, `galiases`, `saliases` or their `dis_`
 variants also keep floor codes: their values can define commands that change options.
+Zsh `autoload` and its function-attribute equivalents (`functions -u`/`-U`,
+or `typeset`, `declare` and `readonly` with `-f` and `-u`/`-U`) also keep floor
+codes. Plain `functions`/`typeset` listings and ordinary variable attributes do not trigger this guard.
 GNU `env -S` quoting, escapes and comments are decoded when identifying the
 interpreter and checking its flags. Dynamic expansions or unsupported `env` arguments keep floor codes.
 `Policy::of(dialect, root)` returns `Measured` for an added dialect whose
