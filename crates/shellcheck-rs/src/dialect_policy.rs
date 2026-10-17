@@ -80,7 +80,10 @@ fn keeps_default_options(root: &Token) -> bool {
 fn sets_options(words: &[String]) -> bool {
     match words.split_first() {
         Some((name, _)) if matches!(name.as_str(), "setopt" | "unsetopt" | "emulate") => true,
-        Some((name, args)) if name == "set" => args.iter().any(|a| a == "-o" || a == "+o"),
+        Some((name, args)) if name == "set" => args
+            .iter()
+            .take_while(|a| *a != "--" && *a != "-")
+            .any(|a| a.len() > 1 && (a.starts_with('-') || a.starts_with('+'))),
         _ => false,
     }
 }
@@ -177,6 +180,10 @@ mod tests {
             "emulate sh\necho $x\n",
             "set -o shwordsplit\necho $x\n",
             "set +o shwordsplit\necho $x\n",
+            "set -y\necho $x\n",
+            "set -ey\necho $x\n",
+            "set +y\necho $x\n",
+            "set -e\necho $x\n",
             "f() { setopt localoptions shwordsplit; echo $x; }\n",
         ] {
             assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
@@ -185,10 +192,12 @@ mod tests {
     }
 
     #[test]
-    fn single_letter_set_flags_keep_the_measured_codes() {
+    fn setting_positional_parameters_keeps_the_measured_codes() {
         for script in [
-            "set -e\necho $x\n",
-            "set -eu\necho $x\n",
+            "set -- a b\necho $x\n",
+            "set a b\necho $x\n",
+            "set - a\necho $x\n",
+            "set -- -e\necho $x\n",
             "echo setopt $x\n",
         ] {
             assert_eq!(
