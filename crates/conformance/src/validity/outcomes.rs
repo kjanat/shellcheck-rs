@@ -5,7 +5,7 @@ use std::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::matrix::version_cmp;
+use super::matrix::{Matrix, version_cmp};
 use super::spec::Spec;
 
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
@@ -64,6 +64,13 @@ impl Row {
 }
 
 impl Outcomes {
+    pub fn retain_current(&mut self, specs: &[Spec], matrix: &Matrix) {
+        self.row.retain(|row| {
+            specs.iter().any(|spec| spec.code == row.code)
+                && matrix.find(&row.shell, &row.version).is_some()
+        });
+    }
+
     pub fn merge(&mut self, rows: &[Row]) {
         for row in rows {
             match self.row.iter_mut().find(|r| r.same_cell(row)) {

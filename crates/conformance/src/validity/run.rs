@@ -79,8 +79,10 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     if args.record {
         let mut all = recorded;
         all.merge(&rows);
+        let all_specs = spec::load(&[])?;
+        all.retain_current(&all_specs, &matrix);
         let rules = super::rules::render(&all, &matrix)?;
-        outcomes::save(&all, &specs)?;
+        outcomes::save(&all, &all_specs)?;
         super::rules::save(&rules)?;
     }
     Ok(failures.is_empty())
@@ -595,6 +597,58 @@ mod tests {
             port_check(&cell("tcsh", None), &spec, snippet, fixed),
             Ok((Outcome::Reproduces, String::new()))
         );
+    }
+
+    #[test]
+    fn partial_recording_prunes_retired_rows_and_preserves_other_current_rows() {
+        let matrix = matrix::Matrix {
+            cell: vec![cell("bash", None), cell("zsh", None)],
+        };
+        let mut other_spec = parse_spec();
+        other_spec.code = 3010;
+        let specs = [parse_spec(), other_spec];
+        let row = |code, shell: &str, version: &str| Row {
+            code,
+            shell: shell.to_string(),
+            version: version.to_string(),
+            outcome: Outcome::Reproduces,
+            observed: String::new(),
+        };
+        let mut all = Outcomes::default();
+        all.merge(&[
+            row(3001, "bash", "1"),
+            row(3001, "zsh", "1"),
+            row(3010, "zsh", "1"),
+            row(3001, "zsh", "retired-version"),
+            row(3001, "retired-shell", "1"),
+            row(9999, "zsh", "1"),
+        ]);
+        all.merge(&[Row {
+            outcome: Outcome::Absent,
+            ..row(3001, "bash", "1")
+        }]);
+        all.retain_current(&specs, &matrix);
+        assert_eq!(all.row.len(), 3);
+        assert_eq!(
+            all.find(&row(3001, "bash", "1")).unwrap().outcome,
+            Outcome::Absent
+        );
+        assert_eq!(
+            all.find(&row(3001, "zsh", "1")).unwrap().outcome,
+            Outcome::Reproduces
+        );
+        assert_eq!(
+            all.find(&row(3010, "zsh", "1")).unwrap().outcome,
+            Outcome::Reproduces
+        );
+        let rules = super::super::rules::render(&all, &matrix).unwrap();
+        assert!(rules.contains("code: 3001,"));
+        assert!(rules.contains("code: 3010,"));
+        assert!(!rules.contains("9999"));
+        assert!(!rules.contains("retired"));
+        let report = outcomes::report(&all, &specs);
+        assert!(report.contains("## SC3001"));
+        assert!(report.contains("## SC3010"));
     }
 
     #[test]

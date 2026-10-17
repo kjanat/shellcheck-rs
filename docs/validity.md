@@ -159,6 +159,8 @@ the directory is discarded after the run.
 
 `cargo validity` verifies current results against the committed outcomes.\
 `cargo validity --record` updates those outcomes and `dialect_rules.rs`.
+Recording also removes rows for retired specs or cells. A partial recording
+preserves other current rows and regenerates the report for all current specs.
 
 ## Gate
 
