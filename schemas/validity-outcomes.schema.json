@@ -1,0 +1,55 @@
+{
+  "$id": "https://raw.githubusercontent.com/kjanat/shellcheck-rs/master/schemas/validity-outcomes.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Outcome": {
+      "type": "string",
+      "enum": [
+        "reproduces",
+        "absent",
+        "differs",
+        "unparsable",
+        "timeout",
+        "port-miss"
+      ]
+    },
+    "Row": {
+      "type": "object",
+      "required": [
+        "code",
+        "outcome",
+        "shell",
+        "version"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "observed": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "title": "Validity matrix outcomes",
+  "type": "object",
+  "properties": {
+    "row": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Row"
+      }
+    }
+  }
+}

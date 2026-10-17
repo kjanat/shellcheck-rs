@@ -203,8 +203,6 @@ and npm provenance; it does not need a permanent npm token. Existing versions
 are skipped only when their registry integrity matches the release archive.
 A partial npm publication can be resumed by rerunning its failed job.
 Prerelease versions use the `next` dist-tag; stable versions use `latest`.
-Also enable **Allow npm dist-tag** in each package's trusted publisher settings;
-upstream alias promotion needs this permission in addition to direct publishing.
 
 ## Follow an upstream version
 
@@ -227,6 +225,20 @@ the resulting npm versions, OCI digests and Git target.
 PyPI has no distribution-tag equivalent. Install a specific version with
 `pip install rshellcheck-wasm==1.0.0`; the package description and upstream
 project link identify its upstream version and exact source revision.
+
+## Resume registry publication
+
+When a registry or alias job fails after the GitHub release is published,
+dispatch the workflow from a ref whose package version matches the release.
+The planner skips builds and every publication the registries already hold,
+then runs the remaining jobs with the payload of the original run:
+
+```sh
+gh workflow run release.yml --ref master -f publish_existing=rshellcheck-v1.0.0 -f registry=all -f artifact_run_id=38732195034
+```
+
+The release must be published and immutable, and its commit signature
+verified. `registry` limits the dispatch to `npm` or `pypi`.
 
 ## Docker
 

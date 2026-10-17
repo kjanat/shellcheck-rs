@@ -9,15 +9,18 @@ repository   = "https://github.com/kjanat/shellcheck-rs"
 license      = "GPL-3.0-or-later"
 
 [workspace.dependencies]  # workspace
-shellcheck-cli = { path = "crates/shellcheck-cli" }
-shellcheck-rs  = { path = "crates/shellcheck-rs" }
+shellcheck-cli  = { path = "crates/shellcheck-cli" }
+shellcheck-rs   = { path = "crates/shellcheck-rs" }
+shellcheck-wasm = { path = "crates/shellcheck-wasm" }
 
 # own shit
-actions-rs = "0.1.2"
+actions-rs       = "0.1.2"
+json-schema-sort = { version = "0.1", default-features = false }
 
 # external
 im-rc      = "15"
 regex      = "1"
+schemars   = "1"
 serde_json = "1"
 toml       = "1"
 

@@ -1670,6 +1670,13 @@ impl Parser {
     }
 }
 
+/// `isValidShell`: upstream's verdict on a shebang's interpreter. `Some(false)`
+/// is SC1071 and an unparsed body, `None` is SC1008 and a body checked as bash.
+#[must_use]
+pub fn is_valid_shell(executable: &str) -> Option<bool> {
+    Parser::is_valid_shell(executable)
+}
+
 /// Public entry point mirroring `ShellCheck.Parser.parseScript`.
 #[must_use]
 pub fn parse_script(filename: &str, script: &str) -> ParseOutput {

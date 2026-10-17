@@ -822,6 +822,43 @@ mod coproc_glob_dollar_tests {
         ));
     }
 
+    #[test]
+    fn an_added_dialect_shebang_is_supported_and_its_body_parsed() {
+        for script in [
+            "#!/bin/zsh\necho hi\n",
+            "#!/usr/bin/env zsh\necho hi\n",
+            "#!/bin/mksh\necho hi\n",
+            "#!/bin/yash\necho hi\n",
+        ] {
+            assert!(!has_note(script, 1071), "{script}");
+            assert!(!has_note(script, 1008), "{script}");
+            let root = parse_script("-", script).root.expect("the body is parsed");
+            assert_eq!(
+                count_nodes(script, |t| matches!(t, InnerToken::T_SimpleCommand { .. })),
+                1,
+                "{script}"
+            );
+            assert!(matches!(&*root.inner, InnerToken::T_Annotation { .. }));
+        }
+        assert!(has_note("#!/bin/tcsh\necho hi\n", 1071));
+        assert!(has_note("#!/bin/zsh5\necho hi\n", 1071));
+    }
+
+    #[test]
+    fn an_added_dialect_in_a_shell_directive_is_known() {
+        assert!(!has_note("# shellcheck shell=mksh\necho hi\n", 1103));
+        assert!(!has_note("# shellcheck shell=freebsd-sh\necho hi\n", 1103));
+        assert!(has_note("# shellcheck shell=fish\necho hi\n", 1103));
+    }
+
+    #[test]
+    fn an_added_dialect_shebang_hints_the_parser_with_its_floor() {
+        let parses = |script: &str| parse_script("-", script).root.is_some();
+        assert!(parses("#!/bin/zsh\n! # negate nothing\n"));
+        assert!(!parses("#!/bin/yash\n! # negate nothing\n"));
+        assert!(!parses("# shellcheck shell=mksh\n! # negate nothing\n"));
+    }
+
     // ---- modifier suffix: an unterminated array assignment ----------------
 
     #[test]

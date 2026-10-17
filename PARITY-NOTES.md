@@ -7,11 +7,12 @@ Most items here are reproduced by the port **on purpose**; an entry's **Port**
 line says when it is not. A fix that makes the port better than the oracle needs
 a *sanctioned deviation* — a class the conformance harness can justify from
 evidence it gathers while comparing, not a blessed list of scripts. Today there
-are five classes: `upstream-false-parse-error` (the oracle rejects the file, the
+are eight classes: `upstream-false-parse-error` (the oracle rejects the file, the
 port does not, and `<shell> -n` agrees with the port), `interpreter-path-typo`,
-`upstream-function-tail-cd`, `completed-statement-notes` and
-`unclosed-test-quote`. See `crates/conformance/src/deviations.rs`; missing
-evidence means the difference counts as a divergence, so each class fails closed.
+`upstream-function-tail-cd`, `completed-statement-notes`, `unclosed-test-quote`,
+`added-dialect`, `stable-trap-variables` and `signal-only-cleanup-trap`. See
+`crates/conformance/src/deviations.rs`; missing evidence means the difference
+counts as a divergence, so each class fails closed.
 
 Everything else is inherited on purpose, so a reader who spots one of these in
 the port's output and files it as a port bug would be wrong — and "fixing" it
@@ -503,10 +504,32 @@ unrelated lines.
 The entries above were found one at a time. `conformance shells` measures the
 same question in bulk: for every script in the corpus plus generated shell, it
 compares each tool's idea of "this parses" (no SC1073/SC1009/SC1072) against the
-real interpreter's (`<shell> -n`), per dialect — bash, dash for `sh`, **AT&T
-ksh93** for `ksh` (not mksh, which is a different shell), and `busybox sh`.
+real interpreter's (`<shell> -n`).
 
-2326 scripts per dialect, port vs oracle:
+The interpreters are the validity matrix cells in `validity/matrix.toml`, each
+run in the same isolated container as `cargo validity` (no network, read-only
+root, five-second limit). `--cell <shell>[:<version>]` selects cells the way it
+does for `cargo validity`. Per cell the shell's verdict is the cell's `argv`
+plus `parse`; the port checks the script as the cell's shell, or as the cell's
+`dialect` for an emulation cell such as `zsh --emulate sh`. The oracle's
+verdict exists only for cells with a `dialect`; the line for any other cell
+says `no upstream dialect`. A `vm = true` cell
+prints `vm cell, skipped`; a cell with no image prints `no image`; tcsh prints
+`no port dialect`. One line per cell, sorted by shell then version. With
+`--cell dash:0.5.12 --cell zsh:5.9 --cell mksh:R59c --iterations 50`:
+
+```
+cell                  scripts       rejects-valid     accepts-invalid
+dash:0.5.12              2117        28 / o:28         213 / o:213
+mksh:R59c                2117        30 / -            112 / -        no upstream dialect
+zsh:5.9                  2117        31 / -            141 / -        no upstream dialect
+```
+
+After the cells, the same numbers for the host's own interpreters where they
+are installed, per upstream dialect: bash, dash for `sh`, **AT&T ksh93** for
+`ksh` (not mksh, which is a different shell), and `busybox sh`.
+
+2326 scripts per dialect on the host, port vs oracle:
 
 | dialect | rejects-valid (port / oracle) | accepts-invalid (port / oracle) |
 | ------- | ----------------------------- | ------------------------------- |
@@ -603,3 +626,187 @@ Seven snapshot inputs change: six retain earlier source-resolution notes and one
 identifies the actual unterminated quote at EOF. Zero-width insertion-point spans
 remain unchanged. Haskell crashes and valid-Bash negation handling still require
 upstream follow-up; no upstream source is patched here.
+
+## SC2064: stable trap variables
+
+Upstream warns on every expansion inside a double-quoted `trap` action:
+
+```sh
+printf '%s\n' 'ENGINE=podman; trap "$ENGINE rm -f x" EXIT' | shellcheck -f json1 -
+printf '%s\n' 'trap "$x" INT; x=1' | shellcheck -f json1 -
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":22,"endColumn":29,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":7,"endColumn":9,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+**What the shell does**
+
+Early and late expansion print the same action when the variable keeps its
+value, and differ once it is reassigned after the trap:
+
+```
+$ bash --version
+GNU bash, version 5.3.15(1)-release (x86_64-pc-linux-gnu)
+$ bash -c 'ENGINE=podman; trap "echo $ENGINE rm -f x" EXIT'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap '\''echo $ENGINE rm -f x'\'' EXIT'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap "echo $ENGINE rm -f x" EXIT; ENGINE=docker'
+podman rm -f x
+$ bash -c 'ENGINE=podman; trap '\''echo $ENGINE rm -f x'\'' EXIT; ENGINE=docker'
+docker rm -f x
+```
+
+INT traps fired with `kill -INT $$` give the same four lines.
+
+**Port: diverges.** Deviation `stable-trap-variables`. The port withholds SC2064
+for a plain `$name` or `${name}` whose every write precedes the trap
+([Trap expansion timing](docs/diagnostics.md)). The first script gives only
+SC2148. The second keeps SC2064 at 1:7-1:9.
+
+The harness removes an SC2064 from the oracle's findings when the port lacks it
+and `withheld_trap_warnings` in `crates/shellcheck-rs/src/checks/commands/mod.rs`
+reports a warning with the same span and message for the script. That
+function runs the port's own stability analysis. The rest must equal the port's
+findings, or satisfy another class. An unparsable script counts as a
+divergence.
+
+## SC9002: signal-only cleanup traps
+
+SC9002 is an additive diagnostic ([SC9002](docs/diagnostics.md)). Upstream has
+no counterpart:
+
+```sh
+printf '%s\n' "trap 'cleanup' INT" | shellcheck -f json1 -
+printf '%s\n' 'ENGINE=podman; trap "$ENGINE rm -f x" INT' | shellcheck -f json1 -
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null}]}
+```
+
+```
+{"comments":[{"file":"-","line":1,"endLine":1,"column":1,"endColumn":1,"level":"error","code":2148,"message":"Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.","fix":null},{"file":"-","line":1,"endLine":1,"column":22,"endColumn":29,"level":"warning","code":2064,"message":"Use single quotes, otherwise this expands now rather than when signalled.","fix":null}]}
+```
+
+**What the shell does**
+
+An INT-only handler runs on the signal and stays silent on normal exit and on
+`set -e` failure. Adding EXIT runs it on every path:
+
+```
+$ bash -c "trap 'echo cleanup' INT; exit 0"; echo "exit $?"
+exit 0
+$ bash -c "set -e; trap 'echo cleanup' INT; false"; echo "exit $?"
+exit 1
+$ bash -c "trap 'echo cleanup' INT; kill -INT \$\$"; echo "exit $?"
+cleanup
+exit 0
+$ bash -c "trap 'echo cleanup' EXIT INT; exit 0"; echo "exit $?"
+cleanup
+exit 0
+$ bash -c "set -e; trap 'echo cleanup' EXIT INT; false"; echo "exit $?"
+cleanup
+exit 1
+```
+
+**Port: diverges.** Deviation `signal-only-cleanup-trap`. The first script adds
+
+```
+-:1:1: warning: This cleanup trap only handles signals. Consider EXIT to also clean up after errors, end of input, and normal exit. [SC9002]
+```
+
+The second adds the same warning at 1:16-1:42 and withholds SC2064, so it needs
+this class and `stable-trap-variables` together.
+
+The harness removes an SC9002 from the port's findings when the oracle lacks it
+and `cleanup_trap_warnings` in `crates/shellcheck-rs/src/analytics/mod.rs`
+reports a warning with the same span and message for the script. That
+function runs the port's own SC9002 check over the AST. The rest must equal the
+oracle's findings, or satisfy another class. An unparsable script counts as a
+divergence.
+
+## Dialects beyond upstream
+
+Upstream knows five shells. A shebang or `shell=` directive naming any other
+interpreter is refused or ignored:
+
+```sh
+printf '#!/bin/zsh\necho $x\n' | shellcheck -
+printf '#!/bin/mksh\n[[ -n $1 ]]\n' | shellcheck -
+printf '# shellcheck shell=mksh\n[[ -n $1 ]]\n' | shellcheck -
+```
+
+```
+-:1:1: error: ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry! [SC1071]
+```
+
+```
+-:1:1: error: This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify. [SC1008]
+```
+
+```
+-:1:20: error: This shell type is unknown. Use e.g. sh or bash. [SC1103]
+```
+
+After SC1071 the body is not parsed at all. After SC1008 and SC1103 the body is
+checked as bash, whatever the interpreter was.
+
+**What the shell does**
+
+```
+$ zsh --version
+zsh 5.9.2 (x86_64-pc-linux-gnu)
+$ printf '#!/bin/zsh\necho $x\n' > z.sh; zsh z.sh; echo "exit $?"
+
+exit 0
+```
+
+**Port: diverges.** Deviation `added-dialect`. `zsh`, `mksh`, `oksh`, `loksh`,
+`yash`, `posh`, `bosh`, `osh`, `brush`, `freebsd-sh` and `netbsd-sh` are
+dialects (`crates/shellcheck-rs/src/dialect.rs`), accepted by `--shell`, rc
+`shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell` and the
+shebang. Each is checked with the rules of its upstream floor: bash for zsh,
+osh and brush; ksh for mksh, oksh and loksh; sh for the rest. The three inputs
+above give
+
+```
+-:2:6: warning: x is referenced but not assigned. [SC2154]
+```
+
+for zsh, nothing for mksh, and nothing for the mksh directive. Bash would add
+SC2086 on the same line; `crates/shellcheck-rs/src/dialect_rules.rs`, generated
+from `validity/outcomes.toml` by `cargo validity rules`, records SC2086 absent
+in every tested zsh version, so the checker drops it for zsh. `tcsh` stays
+refused with SC1071: its grammar is unrelated.
+
+The harness sanctions the difference only when the harness passed no `--shell`,
+the first `shell=` directive or else the shebang names an added dialect, the
+port reported none of SC1071, SC1008 and SC1103, the oracle reported at most one
+of them and that one matches upstream's own verdict on the interpreter (SC1071
+at 1:1 for a shell on `isValidShell`'s refusal list, and then nothing else at
+all, since the body was never parsed; SC1008 at 1:1 for an interpreter it does
+not know; SC1103 for a directive), and the port's findings equal the oracle's
+own output for the same script under `--shell=<floor>`, minus the SC1103 the
+directive still draws there and minus the codes `dialect_rules.rs` drops for the
+dialect. A suppressed SC1071 leaves the oracle silent and
+the sanction standing: upstream's `prop_readScript7` disables it on
+`#!/bin/zsh` and expects no diagnostics, where the port parses
+`for f (a b); echo $f` as bash and reports SC1073. No oracle to re-run means no
+sanction.
+
+The other classes then apply to that floor comparison. For
+`#!/bin/zsh\nENGINE=podman; trap "$ENGINE rm -f x" INT` the oracle reports only
+SC1071, its bash run reports SC2064 at 2:22-2:29, and the port reports SC9002.
+The gate prints every class that took part:
+`signal-only-cleanup-trap, added-dialect, stable-trap-variables`. Any two of
+them leave a difference.
+
+zsh 5.9.2 runs `x="a b"; printf "<%s>" $x` as `<a b>`. The validity matrix
+records this run and drops SC2086 for zsh. Per-dialect rules come from the
+validity matrix (`docs/validity.md`).

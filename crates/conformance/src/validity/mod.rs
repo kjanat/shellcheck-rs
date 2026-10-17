@@ -1,13 +1,14 @@
 //! The validity matrix: each diagnostic's reproducer and its fix run in real
 //! shells, one container per shell and version. See `docs/validity.md`.
 
-mod docker;
-mod matrix;
-mod outcomes;
+pub mod docker;
+pub mod matrix;
+pub mod outcomes;
 mod pin;
+mod rules;
 mod run;
-mod sources;
-mod spec;
+pub mod sources;
+pub mod spec;
 
 use clap::ValueEnum;
 
@@ -16,6 +17,7 @@ pub const MATRIX: &str = "validity/matrix.toml";
 pub const SPECS: &str = "validity/specs";
 pub const OUTCOMES: &str = "validity/outcomes.toml";
 pub const REPORT: &str = "validity/REPORT.md";
+pub const RULES: &str = "crates/shellcheck-rs/src/dialect_rules.rs";
 pub const DOCKERFILES: &str = "docker/shells";
 pub const REGISTRY: &str = "ghcr.io/kjanat/shellcheck-rs";
 pub const SOURCE_URL: &str = "https://github.com/kjanat/shellcheck-rs";
@@ -32,6 +34,8 @@ pub enum Step {
     Build,
     /// Print the cell ids as a JSON array.
     Cells,
+    /// Write the added dialects' outcomes to `dialect_rules.rs`.
+    Rules,
 }
 
 /// The options under the "Validity" heading.
@@ -73,5 +77,6 @@ pub fn run(step: Step, args: &ValidityArgs) -> Result<bool, String> {
             Ok(true)
         }
         Step::Run => run::run(args),
+        Step::Rules => rules::run().map(|()| true),
     }
 }

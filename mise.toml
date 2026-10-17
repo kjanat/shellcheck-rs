@@ -11,27 +11,23 @@
 min_version = "2026.10.7"
 
 [tools]
-dprint         = "latest"                                           # formatter
-go             = { prefix = "1.27" }
-node           = { prefix = "26" }
-python         = "latest"                                           # conformance harness (rust/harness/*.py)
-tombi          = { prefix = "1.8" }                                 # Exact version avoids release-age range resolution failures.
-uv             = { prefix = "0.13" }
-cargo-binstall = { prefix = "1.23" }
-cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
-droast         = { prefix = "1", depends = ["shellcheck"] }
-shellcheck     = { version = "latest", rename_exe = "shellcheck" }
+"github:kjanat/dprint"               = "latest"
+go                                   = { prefix = "1.27" }
+node                                 = { prefix = "26" }
+python                               = "latest"                                                     # conformance harness (rust/harness/*.py)
+"github:tombi-toml/tombi"            = { prefix = "1.8" }                                           # Exact version avoids release-age range resolution failures.
+uv                                   = { prefix = "0.13" }
+cargo-binstall                       = { prefix = "1.23" }
+"cargo:cargo-mutants"                = { prefix = "27", depends = ["cargo-binstall"] }
+"github:immanuwell/dockerfile-roast" = { prefix = "1", depends = ["github:kjanat/shellcheck-rs"] }
+"github:kjanat/shellcheck-rs"        = { version = "latest", rename_exe = "shellcheck" }
 
 [tools.rust]
 version    = "latest"
 components = ["rustfmt", "clippy", "rust-src"]
 
-[tool_alias]
-dprint        = { backend = "github:kjanat/dprint" }
-cargo-mutants = { backend = "cargo:cargo-mutants" }
-tombi         = { backend = "github:tombi-toml/tombi" }
-droast        = { backend = "github:immanuwell/dockerfile-roast" }
-shellcheck    = { backend = "github:kjanat/shellcheck-rs" }
+[deps.uv]
+auto = true
 
 [settings]
 # Backend plugins are experimental, so they must be enabled explicitly.
@@ -45,7 +41,7 @@ uv_venv_auto = "source"
 [tasks]
 [tasks.format]
 alias = ["f", "fmt"]
-tools = { tombi = { prefix = "1.8" } }
+tools = { "github:tombi-toml/tombi" = { prefix = "1.8" } }
 run   = "dprint fmt"
 
 # --- Refactor safety net -----------------------------------------------------

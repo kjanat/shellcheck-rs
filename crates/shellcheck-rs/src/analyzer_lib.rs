@@ -12,6 +12,7 @@ use crate::ast_lib::is_annotation_ignoring_code;
 use crate::ast_lib::{get_literal_string_def, oversimplify_concat};
 use crate::cfg::{CFGParameters, InternalError};
 use crate::cfg_analysis::{self, CFGAnalysis};
+use crate::dialect::Dialect;
 use crate::idhash::IdMap;
 use crate::interface::{Code, Comment, Fix, PositionMap, Severity, Shell, TokenComment};
 use crate::regex_lib::mk_regex;
@@ -460,10 +461,22 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
 /// the fallback, else Bash.
 #[must_use]
 pub fn determine_shell(fallback: Option<Shell>, root: &Token) -> Shell {
-    let candidate = get_candidate(root);
-    crate::data::shell_for_executable(&candidate)
-        .or(fallback)
-        .unwrap_or(Shell::Bash)
+    determine_dialect(fallback, root).floor()
+}
+
+/// `determineShell` over every [`Dialect`]: the `shell=` directive or shebang
+/// names one, else the fallback, else Bash.
+#[must_use]
+pub fn determine_dialect(fallback: Option<Shell>, root: &Token) -> Dialect {
+    named_dialect(root)
+        .or_else(|| fallback.map(Dialect::from))
+        .unwrap_or(Dialect::Bash)
+}
+
+/// The dialect the script's first `shell=` directive, else its shebang, names.
+#[must_use]
+pub fn named_dialect(root: &Token) -> Option<Dialect> {
+    Dialect::from_name(&get_candidate(root))
 }
 
 fn get_candidate(t: &Token) -> String {
@@ -675,8 +688,28 @@ pub fn make_parameters_ext(
     fallback_shell: Option<Shell>,
     extended_analysis_override: Option<bool>,
 ) -> Parameters {
-    let shell = shell_override.unwrap_or_else(|| determine_shell(fallback_shell, &root));
-    let shell_type_specified = shell_override.is_some() || fallback_shell.is_some();
+    make_parameters_as(
+        root,
+        token_positions,
+        shell_override.map(Dialect::from),
+        fallback_shell,
+        extended_analysis_override,
+    )
+}
+
+/// [`make_parameters_ext`] with the script checked as `dialect_override`.
+#[must_use]
+pub fn make_parameters_as(
+    root: Token,
+    token_positions: PositionMap,
+    dialect_override: Option<Dialect>,
+    fallback_shell: Option<Shell>,
+    extended_analysis_override: Option<bool>,
+) -> Parameters {
+    let shell = dialect_override
+        .unwrap_or_else(|| determine_dialect(fallback_shell, &root))
+        .floor();
+    let shell_type_specified = dialect_override.is_some() || fallback_shell.is_some();
     let (parent_map, id_map) = build_maps(&root);
     let has_set_e = contains_set_e(&root);
     let has_allexport = contains_allexport(&root);
@@ -2371,6 +2404,7 @@ mod printf_format_tests {
 #[allow(non_snake_case)]
 mod tests {
     use super::{determine_shell, get_variables_from_literal};
+    use crate::dialect::Dialect;
     use crate::interface::Shell;
 
     #[test]
@@ -2494,6 +2528,87 @@ mod tests {
     #[test]
     fn prop_determineShell12() {
         assert_eq!(determine_shell_test("#!/bin/busybox ash"), Shell::BusyboxSh);
+    }
+
+    fn determine_dialect_test_with(fallback: Option<Shell>, script: &str) -> Dialect {
+        let root = crate::parser::parse_script("script", script)
+            .root
+            .expect("test script parses");
+        super::determine_dialect(fallback, &root)
+    }
+
+    #[test]
+    fn determine_dialect_names_an_added_dialect_and_determine_shell_its_floor() {
+        assert_eq!(
+            determine_dialect_test_with(None, "#!/bin/zsh"),
+            Dialect::Zsh
+        );
+        assert_eq!(determine_shell_test("#!/bin/zsh"), Shell::Bash);
+        assert_eq!(
+            determine_dialect_test_with(None, "#shellcheck shell=mksh\nfoo"),
+            Dialect::Mksh
+        );
+        assert_eq!(
+            determine_shell_test("#shellcheck shell=mksh\nfoo"),
+            Shell::Ksh
+        );
+        assert_eq!(
+            determine_dialect_test_with(None, "#!/bin/zsh\n#shellcheck shell=yash\nfoo"),
+            Dialect::Yash
+        );
+        assert_eq!(determine_dialect_test_with(None, "#!/bin/sh"), Dialect::Sh);
+        assert_eq!(
+            determine_dialect_test_with(None, "#!/bin/oksh"),
+            Dialect::Oksh
+        );
+        assert_eq!(
+            determine_dialect_test_with(Some(Shell::Ksh), ""),
+            Dialect::Ksh
+        );
+        assert_eq!(determine_dialect_test_with(None, ""), Dialect::Bash);
+    }
+
+    #[test]
+    fn a_quoted_env_interpreter_sets_the_parser_and_analyzer_dialect() {
+        for (interpreter, dialect) in [("'zsh'", Dialect::Zsh), ("\"dash\"", Dialect::Dash)] {
+            let script = format!("#!/usr/bin/env -S {interpreter}\necho hi\n");
+            let parsed = crate::parser::parse_script("script", &script);
+            assert!(
+                parsed.notes.iter().all(|note| note.code != 1008),
+                "{script}"
+            );
+            let root = parsed.root.expect("quoted interpreter script parses");
+            assert_eq!(super::named_dialect(&root), Some(dialect), "{script}");
+            assert_eq!(super::determine_shell(None, &root), dialect.floor());
+        }
+    }
+
+    #[test]
+    fn parameters_check_a_dialect_as_its_floor() {
+        let parsed = crate::parser::parse_script("script", "#!/bin/yash\necho hi\n");
+        let params =
+            super::make_parameters(parsed.root.expect("parses"), parsed.positions, None, None);
+        assert_eq!(params.shell, Shell::Sh);
+        assert!(!params.shell_type_specified);
+        let parsed = crate::parser::parse_script("script", "echo hi\n");
+        let params = super::make_parameters_as(
+            parsed.root.expect("parses"),
+            parsed.positions,
+            Some(Dialect::Zsh),
+            None,
+            None,
+        );
+        assert_eq!(params.shell, Shell::Bash);
+        assert!(params.shell_type_specified);
+        let parsed = crate::parser::parse_script("script", "echo hi\n");
+        let params = super::make_parameters(
+            parsed.root.expect("parses"),
+            parsed.positions,
+            Some(Shell::Dash),
+            None,
+        );
+        assert_eq!(params.shell, Shell::Dash);
+        assert!(params.shell_type_specified);
     }
 
     #[test]
