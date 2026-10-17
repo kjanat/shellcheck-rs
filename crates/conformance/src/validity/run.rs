@@ -202,10 +202,14 @@ fn observe(
     if let Some(outcome) = parse_verdict(spec, &parsed) {
         return Ok(outcome);
     }
-    let ran = [
-        container.exec(&dirs[0], &cell.argv, &snippet)?,
-        container.exec(&dirs[1], &cell.argv, &fixed)?,
-    ];
+    let ran = if spec.observes_runtime() {
+        [
+            container.exec(&dirs[0], &cell.argv, &snippet)?,
+            container.exec(&dirs[1], &cell.argv, &fixed)?,
+        ]
+    } else {
+        parsed.clone()
+    };
     match verdict(spec, &parsed, &ran) {
         Verdict::Snippet => port_check(cell, spec, &snippet, &fixed),
         Verdict::Outcome(outcome, observed) => Ok((outcome, observed)),
@@ -619,6 +623,13 @@ mod tests {
                 "{shell}"
             );
         }
+        assert!(speaks("sh", "sh"));
+        assert!(speaks("posh", "sh"));
+        assert!(speaks("zsh", "bash"));
+        assert!(!speaks("zsh", "sh"));
+        assert!(!speaks("bash", "sh"));
+    }
+
     #[test]
     fn a_full_verification_with_missing_images_fails() {
         let missing = ["zsh:5.9".to_string(), "tcsh:6.24.16".to_string()];
@@ -634,11 +645,14 @@ mod tests {
         assert_eq!(unrun_cells(&[], &[], Baseline::Verify), None);
     }
 
-        assert!(speaks("sh", "sh"));
-        assert!(speaks("posh", "sh"));
-        assert!(speaks("zsh", "bash"));
-        assert!(!speaks("zsh", "sh"));
-        assert!(!speaks("bash", "sh"));
+    #[test]
+    fn a_parse_only_spec_decides_from_the_parse_step() {
+        let spec = parse_spec();
+        assert!(!spec.observes_runtime());
+        assert!(spec_with(Kind::Stdout, "", "hi\n").observes_runtime());
+        let parsed = [run_with(2, "", "sh: 1: Syntax error"), run_with(0, "", "")];
+        assert_eq!(parse_verdict(&spec, &parsed), None);
+        assert_eq!(verdict(&spec, &parsed, &parsed.clone()), Verdict::Snippet);
     }
 
     #[test]

@@ -44,6 +44,10 @@ impl Spec {
     pub fn observes_parse(&self) -> bool {
         self.observe.iter().any(|o| o.kind == Kind::Parse)
     }
+
+    pub fn observes_runtime(&self) -> bool {
+        self.observe.iter().any(|o| o.kind != Kind::Parse)
+    }
 }
 
 pub fn load(codes: &[i64]) -> Result<Vec<Spec>, String> {
