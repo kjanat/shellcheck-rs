@@ -1068,3 +1068,158 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::super::tests::{is_ok, is_warning};
+    use super::*;
+
+    #[test]
+    fn prop_readCondition() {
+        assert!(is_ok(
+            "[ \\( a = b \\) -a \\( c = d \\) ]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition2() {
+        assert!(is_ok("[[ (a = b) || (c = d) ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition3() {
+        assert!(is_ok("[[ $c = [[:alpha:].~-] ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition4() {
+        assert!(is_ok("[[ $c =~ *foo* ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition5() {
+        assert!(is_ok("[[ $c =~ f( ]] )* ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition5a() {
+        assert!(is_ok("[[ $c =~ a(b) ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition5b() {
+        assert!(is_ok("[[ $c =~ f( ($var ]]) )* ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition6() {
+        assert!(is_ok("[[ $c =~ ^[yY]$ ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition7() {
+        assert!(is_ok(
+            "[[ ${line} =~ ^[[:space:]]*# ]]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition8() {
+        assert!(is_ok("[[ $l =~ ogg|flac ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition9() {
+        assert!(is_ok("[ foo -a -f bar ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition10() {
+        assert!(is_ok("[[\na == b\n||\nc == d ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition10a() {
+        assert!(is_ok("[[\na == b  ||\nc == d ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition10b() {
+        assert!(is_ok("[[ a == b\n||\nc == d ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition11() {
+        assert!(is_ok("[[ a == b ||\n c == d ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition12() {
+        assert!(is_warning(
+            "[ a == b \n -o c == d ]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition13() {
+        assert!(is_ok("[[ foo =~ ^fo{1,3}$ ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition14() {
+        assert!(is_ok("[ foo '>' bar ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition15() {
+        assert!(is_ok("[ foo \">=\" bar ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition16() {
+        assert!(is_ok("[ foo \\< bar ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition17() {
+        assert!(is_ok(
+            "[[ ${file::1} = [-.\\|/\\\\] ]]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition18() {
+        assert!(is_ok("[ ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition19() {
+        assert!(is_ok("[ '(' x \")\" ]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition20() {
+        assert!(is_ok("[[ echo_rc -eq 0 ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition21() {
+        assert!(is_ok("[[ $1 =~ ^(a\\ b)$ ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition22() {
+        assert!(is_ok(
+            "[[ $1 =~ \\.a\\.(\\.b\\.)\\.c\\. ]]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition23() {
+        assert!(is_ok("[[ -v arr[$var] ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition25() {
+        assert!(is_ok(
+            "[[ lex.yy.c -ot program.l ]]",
+            Parser::read_condition
+        ));
+    }
+    #[test]
+    fn prop_readCondition27() {
+        assert!(!is_ok("[[ x ]] foo", Parser::read_condition_command));
+    }
+    #[test]
+    fn prop_readCondition28() {
+        assert!(is_ok("[[ x = [\"$1\"] ]]", Parser::read_condition));
+    }
+    #[test]
+    fn prop_readCondition29() {
+        assert!(is_ok("[[ x = [*] ]]", Parser::read_condition));
+    }
+
+    #[test]
+    fn prop_readConditionCommand() {
+        assert!(is_ok("[[ x ]] > foo 2>&1", Parser::read_condition_command));
+    }
+}

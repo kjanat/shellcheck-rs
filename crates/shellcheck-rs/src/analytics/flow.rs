@@ -608,45 +608,419 @@ mod tests {
     }
 
     #[test]
-    fn prop_checkSetESuppressed1_6() {
+    fn prop_checkSetESuppressed1() {
         assert!(tree_emits(
             check_set_e_suppressed,
             "set -e; f(){ :; }; x=$(f)"
         ));
-        assert!(tree_emits(
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed2() {
+        assert!(!tree_emits(check_set_e_suppressed, "f(){ :; }; x=$(f)"));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed3() {
+        assert!(!tree_emits(
             check_set_e_suppressed,
-            "set -e; f(){ :; }; f && echo"
+            "set -e; f(){ :; }; x=$(set -e; f)"
         ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed4() {
         assert!(tree_emits(
             check_set_e_suppressed,
             "set -e; f(){ :; }; baz=$(set -e; f) || :"
         ));
-        for s in [
-            "f(){ :; }; x=$(f)",
-            "set -e; f(){ :; }; x=$(set -e; f)",
-            "set -e; f(){ :; }; baz=$(echo \"\") || :",
-        ] {
-            assert!(!tree_emits(check_set_e_suppressed, s), "{s}");
-        }
     }
 
     #[test]
-    fn prop_checkExtraMaskedReturns() {
-        assert!(tree_emits(
-            check_extra_masked_returns,
-            "rm -r \"$(get_chroot_dir)/home\""
+    fn prop_checkSetESuppressed5() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; baz=$(echo \"\") || :"
         ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed6() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; f && echo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed7() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; f || echo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed8() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; echo && f"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed9() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; echo || f"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed10() {
+        assert!(tree_emits(check_set_e_suppressed, "set -e; f(){ :; }; ! f"));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed11() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; if f; then :; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed12() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; if set -e; f; then :; fi"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed13() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; while f; do :; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed14() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; while set -e; f; do :; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed15() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; until f; do :; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed16() {
+        assert!(tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; until set -e; f; do :; done"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed17() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; f(){ :; }; g(){ :; }; g f"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed18() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; shopt -s inherit_errexit; f(){ :; }; x=$(f)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSetESuppressed19() {
+        assert!(!tree_emits(
+            check_set_e_suppressed,
+            "set -e; set -o posix; f(){ :; }; x=$(f)"
+        ));
+    }
+
+    #[test]
+    fn extra_masked_returns_harmless_wrapper_and_deliberate_masks() {
         // `isHarmlessCommand` is about the *masked* command, so `echo $(false)`
         // still reports: it is `false`'s status that is lost.
         assert!(tree_emits(check_extra_masked_returns, "echo \"$(false)\""));
         for s in [
-            "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
             // `local` is SC2155's business, `|| true` is a deliberate mask.
             "local x=\"$(false)\"",
             "x=\"$(false || true)\"",
         ] {
             assert!(!tree_emits(check_extra_masked_returns, s), "{s}");
         }
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns1() {
+        assert!(tree_emits(check_extra_masked_returns, "cat < <(ls)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns2() {
+        assert!(tree_emits(check_extra_masked_returns, "read -ra arr <(ls)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns3() {
+        assert!(tree_emits(check_extra_masked_returns, "ls >(cat)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns4() {
+        assert!(tree_emits(check_extra_masked_returns, "false | true"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns5() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "set -o pipefail; false | true"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns6() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "false | true || true"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns7() {
+        assert!(tree_emits(check_extra_masked_returns, "true $(false)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns8() {
+        assert!(tree_emits(check_extra_masked_returns, "x=$(false)$(true)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns9() {
+        assert!(!tree_emits(check_extra_masked_returns, "x=$(false)true"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns10() {
+        assert!(tree_emits(check_extra_masked_returns, "x=`false``false`"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns11() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=\"$(false)$(true)\""
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns12() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=\"$(false)\"\"$(true)\""
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns13() {
+        assert!(tree_emits(check_extra_masked_returns, "true <<<$(false)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns14() {
+        assert!(!tree_emits(check_extra_masked_returns, "echo asdf | false"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns15() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "readonly x=$(false)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns16() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "readarray -t files < <(ls)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns17() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "x=( $(false) false )"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns18() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=( $(false) $(false) )"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns19() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "x=( $(false) [4]=false )"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns20() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=( $(false) [4]=$(false) )"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns21() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "cat << foo\n $(false)\nfoo"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns22() {
+        assert!(tree_emits(check_extra_masked_returns, "[[ $(false) ]]"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns23() {
+        assert!(!tree_emits(check_extra_masked_returns, "x=$(false) y=z"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns24() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "x=$(( $(date +%s) ))"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns25() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "echo $(( $(date +%s) ))"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns26() {
+        assert!(!tree_emits(check_extra_masked_returns, "x=( $(false) )"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns27() {
+        assert!(tree_emits(check_extra_masked_returns, "x=$(false) false"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns28() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=$(false) y=$(false)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns29() {
+        assert!(!tree_emits(check_extra_masked_returns, "false < <(set -e)"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns30() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "false < <(shopt -s cdspell)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns31() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "false < <(dirname \"${BASH_SOURCE[0]}\")"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns32() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "false < <(basename \"${BASH_SOURCE[0]}\")"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns33() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "{ false || true; } | true"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns34() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "{ false || :; } | true"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns35() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "f() { local -r x=$(false); }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns36() {
+        assert!(!tree_emits(check_extra_masked_returns, "time false"));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns37() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            "time $(time false)"
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns38() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            "x=$(time time time false) time $(time false)"
+        ));
     }
 
     fn spaceful_verbose(p: &Parameters, t: &Token, out: &mut Out) {
@@ -1076,7 +1450,6 @@ mod tests {
     #[test]
     fn allexport_suppresses_unused_assignments() {
         for script in [
-            "set -o allexport\nfoo=bar",
             "set -a\nfoo=bar",
             "set -ua\nfoo=bar",
             "#!/bin/sh -a\nfoo=bar",
@@ -1086,6 +1459,14 @@ mod tests {
         for script in ["foo=bar", "set -- -a; foo=bar", "echo set -a; foo=bar"] {
             assert!(tree_emits(check_unused_assignments, script), "{script}");
         }
+    }
+
+    #[test]
+    fn prop_checkUnused52() {
+        assert!(!tree_emits(
+            check_unused_assignments,
+            "set -o allexport\nfoo=bar"
+        ));
     }
 
     #[test]

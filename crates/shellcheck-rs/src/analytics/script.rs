@@ -1032,6 +1032,120 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn prop_checkShebang1() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/usr/bin/env bash -x\necho cow"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang2() {
+        assert!(!tree_emits(check_shebang, "#! /bin/sh  -l "));
+    }
+
+    #[test]
+    fn prop_checkShebang3() {
+        assert!(tree_emits(check_shebang, "ls -l"));
+    }
+
+    #[test]
+    fn prop_checkShebang4() {
+        assert!(!tree_emits(check_shebang, "#shellcheck shell=sh\nfoo"));
+    }
+
+    #[test]
+    fn prop_checkShebang5() {
+        assert!(tree_emits(check_shebang, "#!/usr/bin/env ash"));
+    }
+
+    #[test]
+    fn prop_checkShebang6() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/usr/bin/env ash\n# shellcheck shell=dash\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang7() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/usr/bin/env ash\n# shellcheck shell=sh\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang8() {
+        assert!(tree_emits(check_shebang, "#!bin/sh\ntrue"));
+    }
+
+    #[test]
+    fn prop_checkShebang9() {
+        assert!(!tree_emits(check_shebang, "# shellcheck shell=sh\ntrue"));
+    }
+
+    #[test]
+    fn prop_checkShebang10() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!foo\n# shellcheck shell=sh ignore=SC2239\ntrue"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang11() {
+        assert!(tree_emits(check_shebang, "#!/bin/sh/\ntrue"));
+    }
+
+    #[test]
+    fn prop_checkShebang12() {
+        assert!(tree_emits(check_shebang, "#!/bin/sh/ -xe\ntrue"));
+    }
+
+    #[test]
+    fn prop_checkShebang13() {
+        assert!(!tree_emits(check_shebang, "#!/bin/busybox sh"));
+    }
+
+    #[test]
+    fn prop_checkShebang14() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/bin/busybox sh\n# shellcheck shell=sh\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang15() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/bin/busybox sh\n# shellcheck shell=dash\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang16() {
+        assert!(!tree_emits(check_shebang, "#!/bin/busybox ash"));
+    }
+
+    #[test]
+    fn prop_checkShebang17() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/bin/busybox ash\n# shellcheck shell=dash\n"
+        ));
+    }
+
+    #[test]
+    fn prop_checkShebang18() {
+        assert!(!tree_emits(
+            check_shebang,
+            "#!/bin/busybox ash\n# shellcheck shell=sh\n"
+        ));
+    }
+
     // ---- checkForInQuoted ----
 
     #[test]

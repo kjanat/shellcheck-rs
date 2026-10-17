@@ -1150,6 +1150,29 @@ $ENGINE stop "$CONTAINER_ID""#,
     }
 
     #[test]
+    fn prop_checkTrapQuotes1() {
+        assert!(emits(check_trap_quotes(), "trap \"echo $num\" INT"));
+    }
+
+    #[test]
+    fn prop_checkTrapQuotes1a() {
+        assert!(emits(check_trap_quotes(), "trap \"echo `ls`\" INT"));
+    }
+
+    #[test]
+    fn prop_checkTrapQuotes2() {
+        assert!(!emits(check_trap_quotes(), "trap 'echo $num' INT"));
+    }
+
+    #[test]
+    fn prop_checkTrapQuotes3() {
+        assert!(emits(
+            check_trap_quotes(),
+            "trap \"echo $((1+num))\" EXIT DEBUG"
+        ));
+    }
+
+    #[test]
     fn prop_checkLetUsage1() {
         assert!(emits_code_shell(
             check_let_usage(),

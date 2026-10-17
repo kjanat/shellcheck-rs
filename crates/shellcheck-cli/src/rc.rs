@@ -887,6 +887,38 @@ mod tests {
     }
 
     #[test]
+    fn prop_readAnnotation11() {
+        let mut p = ConfigParser::new("external-sources='true'");
+        assert!(p.read_annotation_without_prefix().is_ok() && p.eof());
+    }
+
+    #[test]
+    fn prop_readConfigKVs1() {
+        assert!(read_config_kvs("disable=1234").is_ok());
+    }
+    #[test]
+    fn prop_readConfigKVs2() {
+        assert!(read_config_kvs("# Comment\ndisable=1234 # Comment\n").is_ok());
+    }
+    #[test]
+    fn prop_readConfigKVs3() {
+        assert!(read_config_kvs("").is_ok());
+    }
+    #[test]
+    fn prop_readConfigKVs4() {
+        assert!(read_config_kvs("\n\n\n\n\t \n").is_ok());
+    }
+    #[test]
+    fn prop_readConfigKVs5() {
+        assert!(
+            read_config_kvs(
+                "# shellcheck accepts annotation-like comments in rc files\ndisable=1234"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn an_rc_file_that_is_not_valid_utf8_still_applies() {
         // `readConfig` reads the rc file through `inputFile` like any script,
         // so a stray byte in a comment does not discard the directives.
