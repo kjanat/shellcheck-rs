@@ -188,6 +188,9 @@ jobs:
       - name: Record outcomes
         run: cargo validity --record
 
+      - name: Refresh behaviour snapshot
+        run: cargo conformance-snapshot --write
+
       - name: Record validity drift
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -197,7 +200,7 @@ jobs:
           github-token: ${{ github.token }}
           retries: 3
           script: |
-            const paths = ['validity/matrix.toml', 'validity/outcomes.toml', 'validity/REPORT.md', 'crates/shellcheck-rs/src/dialect_rules.rs'];
+            const paths = ['validity/matrix.toml', 'validity/outcomes.toml', 'validity/REPORT.md', 'crates/shellcheck-rs/src/dialect_rules.rs', 'rust/snapshot.txt'];
             const changed = (await exec.getExecOutput('git', ['diff', '--name-only', '--', ...paths], { silent: true })).stdout.trim().split('\n').filter(Boolean);
             if (!changed.length) return core.info('No validity drift.');
 
@@ -210,6 +213,7 @@ jobs:
               'validity/outcomes.toml': '**Observed behavior:** at least one diagnostic/shell outcome changed.',
               'validity/REPORT.md': '**Rendered report:** the human-readable validity matrix was regenerated.',
               'crates/shellcheck-rs/src/dialect_rules.rs': '**Dialect rules:** the codes an added dialect keeps changed.',
+              'rust/snapshot.txt': '**Behaviour snapshot:** the port output for an added dialect changed with its rules.',
             };
             const root = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`;
             const body = [
@@ -238,3 +242,6 @@ jobs:
               github.rest.issues.addAssignees({ ...common, issue_number: pull.number, assignees: [owner] }),
               github.rest.issues.addLabels({ ...common, issue_number: pull.number, labels: ['conformance'] }),
             ]);
+
+      - name: Test the recorded rules
+        run: cargo test --workspace --locked --lib --bins
