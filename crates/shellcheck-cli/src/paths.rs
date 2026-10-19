@@ -57,10 +57,13 @@ pub fn does_file_exist(path: &str) -> bool {
 #[must_use]
 pub fn xdg_config_home() -> Option<String> {
     match std::env::var("XDG_CONFIG_HOME") {
-        Ok(dir) if dir.starts_with('/') => Some(dir),
-        _ => std::env::var("HOME")
-            .ok()
-            .map(|home| combine(&home, ".config")),
+        Ok(dir) if Path::new(&dir).is_absolute() => Some(dir),
+        _ => std::env::var("HOME").ok().map(|home| {
+            Path::new(&home)
+                .join(".config")
+                .to_string_lossy()
+                .into_owned()
+        }),
     }
 }
 

@@ -30,9 +30,7 @@ use shellcheck_rs::editor_config::{
 };
 use shellcheck_rs::interface::{CheckSpec, RcDirectives, RcParseProblem, decode_bytes};
 
-use crate::paths::{
-    combine, does_file_exist, io_error_message, normalize, take_directory, xdg_config_home,
-};
+use crate::paths::{does_file_exist, io_error_message, normalize_path, xdg_config_home};
 
 /// The directives of one rc file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -639,7 +637,11 @@ impl ConfigLookup {
     fn rc_config(&self, filename: &str) -> Option<RawConfig> {
         let key = match self.rcfile {
             Some(_) => "/".to_string(),
-            None => take_directory(&normalize(filename)),
+            None => normalize_path(Path::new(filename))
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_string_lossy()
+                .into_owned(),
         };
         if let Some((cached, result)) = &*self.cache.borrow()
             && *cached == key
@@ -708,7 +710,12 @@ pub fn merge_configs(rc: Option<RawConfig>, ec: Option<RawConfig>) -> Option<Raw
 /// blobs are concatenated under the first contributing file's name.
 #[must_use]
 pub fn editor_config(filename: &str) -> Option<RawConfig> {
-    let global = xdg_config_home().map(|dir| combine(&dir, "editorconfig.ini"));
+    let global = xdg_config_home().map(|dir| {
+        Path::new(&dir)
+            .join("editorconfig.ini")
+            .to_string_lossy()
+            .into_owned()
+    });
     editor_config_with(filename, global.as_deref())
 }
 
@@ -794,15 +801,9 @@ fn dir_editor_configs(dir: &Path) -> Vec<RawConfig> {
 /// (`defaultPaths`).
 fn config_paths(dir: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    let mut dir = dir.to_string();
-    loop {
-        paths.push(combine(&dir, ".shellcheckrc"));
-        paths.push(combine(&dir, "shellcheckrc"));
-        let next = take_directory(&dir);
-        if next == dir {
-            break;
-        }
-        dir = next;
+    for dir in Path::new(dir).ancestors() {
+        paths.push(dir.join(".shellcheckrc").to_string_lossy().into_owned());
+        paths.push(dir.join("shellcheckrc").to_string_lossy().into_owned());
     }
     paths.extend(default_paths());
     paths
@@ -814,10 +815,18 @@ fn config_paths(dir: &str) -> Vec<String> {
 /// `$XDG_CONFIG_HOME/shellcheckrc` when that is absolute, or
 /// `$HOME/.config/shellcheckrc`).
 fn default_paths() -> Vec<String> {
-    let home = std::env::var("HOME")
-        .ok()
-        .map(|home| combine(&home, ".shellcheckrc"));
-    let xdg = xdg_config_home().map(|dir| combine(&dir, "shellcheckrc"));
+    let home = std::env::var("HOME").ok().map(|home| {
+        Path::new(&home)
+            .join(".shellcheckrc")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let xdg = xdg_config_home().map(|dir| {
+        Path::new(&dir)
+            .join("shellcheckrc")
+            .to_string_lossy()
+            .into_owned()
+    });
     home.into_iter().chain(xdg).collect()
 }
 
