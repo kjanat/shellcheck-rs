@@ -32,8 +32,8 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use shellcheck_rs::Dialect;
 use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
+use shellcheck_rs::{Dialect, optional_checks};
 
 /// Formats the port implements. `getOpt`'s format validation lists exactly
 /// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
@@ -324,89 +324,6 @@ pub fn usage() -> String {
     )
 }
 
-/// Optional checks, with Rust extensions followed by the upstream catalog.
-/// Each tuple is (name, description, example, fix).
-const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
-    (
-        "clarify-parse-errors",
-        "Clarify fatal parser context and empty error messages (Rust extension)",
-        "((())",
-        "((1))",
-    ),
-    (
-        "add-default-case",
-        "Suggest adding a default case in `case` statements",
-        "case $? in 0) echo 'Success';; esac",
-        "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac",
-    ),
-    (
-        "avoid-negated-conditions",
-        "Suggest removing unnecessary comparison negations",
-        "[ ! \"$var\" -eq 1 ]",
-        "[ \"$var\" -ne 1 ]",
-    ),
-    (
-        "avoid-nullary-conditions",
-        "Suggest explicitly using -n in `[ $var ]`",
-        "[ \"$var\" ]",
-        "[ -n \"$var\" ]",
-    ),
-    (
-        "check-extra-masked-returns",
-        "Check for additional cases where exit codes are masked",
-        "rm -r \"$(get_chroot_dir)/home\"",
-        "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
-    ),
-    (
-        "check-set-e-suppressed",
-        "Notify when set -e is suppressed during function invocation",
-        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
-        "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
-    ),
-    (
-        "check-unassigned-uppercase",
-        "Warn when uppercase variables are unassigned",
-        "echo $VAR",
-        "VAR=hello; echo $VAR",
-    ),
-    (
-        "deprecate-which",
-        "Suggest 'command -v' instead of 'which'",
-        "which javac",
-        "command -v javac",
-    ),
-    (
-        "quote-safe-variables",
-        "Suggest quoting variables without metacharacters",
-        "var=hello; echo $var",
-        "var=hello; echo \"$var\"",
-    ),
-    (
-        "require-double-brackets",
-        "Require [[ and warn about [ in Bash/Ksh",
-        "[ -e /etc/issue ]",
-        "[[ -e /etc/issue ]]",
-    ),
-    (
-        "require-double-equals",
-        "Require == and warn about = in Bash tests",
-        "[[ \"$x\" = \"$y\" ]]",
-        "[[ \"$x\" == \"$y\" ]]",
-    ),
-    (
-        "require-variable-braces",
-        "Suggest putting braces around all variable references",
-        "var=hello; echo $var",
-        "var=hello; echo ${var}",
-    ),
-    (
-        "useless-use-of-cat",
-        "Check for Useless Use Of Cat (UUOC)",
-        "cat foo | grep bar",
-        "grep bar foo",
-    ),
-];
-
 /// Renders the `--list-optional` catalog matching upstream `printOptional`.
 ///
 /// Outputs four `key: value` lines (`name`, `desc`, `example`, `fix`) per check,
@@ -414,10 +331,11 @@ const OPTIONAL_CHECKS: &[(&str, &str, &str, &str)] = &[
 #[must_use]
 pub fn list_optional_text() -> String {
     let mut s = String::new();
-    for (name, desc, example, fix) in OPTIONAL_CHECKS {
+    for check in optional_checks() {
         let _ = writeln!(
             s,
-            "name:    {name}\ndesc:    {desc}\nexample: {example}\nfix:     {fix}\n"
+            "name:    {}\ndesc:    {}\nexample: {}\nfix:     {}\n",
+            check.name, check.description, check.example, check.fix
         );
     }
     s
@@ -605,7 +523,7 @@ fn is_valid_opt(result: &OptResult) -> bool {
             .is_some_and(|f| SUPPORTED_FORMATS.contains(&f)),
         "enable" => {
             flag.value.as_deref().unwrap_or("").split(',').all(|name| {
-                name == "all" || OPTIONAL_CHECKS.iter().any(|(check, ..)| *check == name)
+                name == "all" || optional_checks().iter().any(|check| check.name == name)
             })
         }
         _ => !matches!(
