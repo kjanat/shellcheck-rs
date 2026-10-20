@@ -18,6 +18,15 @@ Claim: an unquoted command substitution word-splits.
 - unparsable: tcsh 6.24.16
   - tcsh 6.24.16: `Illegal variable name.`
 
+## SC2068
+
+Claim: unquoted $@ word-splits each parameter.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: zsh 5.8.1, zsh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
 ## SC2086
 
 Claim: an unquoted expansion word-splits.
@@ -27,6 +36,67 @@ Claim: an unquoted expansion word-splits.
 - differs: tcsh 6.24.16
   - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "x=a b: Command not found."] fixed [status 1 stdout "" stderr "x=a b: Command not found."]`
 
+## SC2128
+
+Claim: expanding an array without an index gives only the first element.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: yash 2.59, zsh 5.8.1, zsh 5.9
+- unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - busybox 1.30.1: `sh: syntax error: unexpected "("`
+  - busybox 1.31.1: `sh: syntax error: unexpected "("`
+  - busybox 1.32.1: `sh: syntax error: unexpected "("`
+  - busybox 1.33.2: `sh: syntax error: unexpected "("`
+  - busybox 1.34.1: `sh: syntax error: unexpected "("`
+  - busybox 1.35.0: `sh: syntax error: unexpected "("`
+  - busybox 1.36.1: `sh: syntax error: unexpected "("`
+  - busybox 1.37.0: `sh: syntax error: unexpected "("`
+  - dash 0.5.8: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.9.1: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.10.2: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.11.5: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.12: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
+  - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
+  - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
+  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC2145
+
+Claim: an array in a string splits into separate arguments after the string.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - busybox 1.30.1: `sh: syntax error: unexpected "("`
+  - busybox 1.31.1: `sh: syntax error: unexpected "("`
+  - busybox 1.32.1: `sh: syntax error: unexpected "("`
+  - busybox 1.33.2: `sh: syntax error: unexpected "("`
+  - busybox 1.34.1: `sh: syntax error: unexpected "("`
+  - busybox 1.35.0: `sh: syntax error: unexpected "("`
+  - busybox 1.36.1: `sh: syntax error: unexpected "("`
+  - busybox 1.37.0: `sh: syntax error: unexpected "("`
+  - dash 0.5.8: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.9.1: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.10.2: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.11.5: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.12: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
+  - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
+  - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
+  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
 ## SC2164
 
 Claim: the script continues after a failed cd.
@@ -35,11 +105,752 @@ Claim: the script continues after a failed cd.
 - differs: tcsh 6.24.16
   - tcsh 6.24.16: `snippet [status 0 stdout "after\n" stderr "cd: Too many arguments."] fixed [status 0 stdout "after\n" stderr "cd: Too many arguments."]`
 
+## SC2198
+
+Claim: an array in [ ] becomes several operands and the test errors.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - busybox 1.30.1: `sh: syntax error: unexpected "("`
+  - busybox 1.31.1: `sh: syntax error: unexpected "("`
+  - busybox 1.32.1: `sh: syntax error: unexpected "("`
+  - busybox 1.33.2: `sh: syntax error: unexpected "("`
+  - busybox 1.34.1: `sh: syntax error: unexpected "("`
+  - busybox 1.35.0: `sh: syntax error: unexpected "("`
+  - busybox 1.36.1: `sh: syntax error: unexpected "("`
+  - busybox 1.37.0: `sh: syntax error: unexpected "("`
+  - dash 0.5.8: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.9.1: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.10.2: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.11.5: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.12: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
+  - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
+  - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
+  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC2199
+
+Claim: an array in [[ ]] concatenates instead of matching any element.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - busybox 1.30.1: `sh: syntax error: unexpected "("`
+  - busybox 1.31.1: `sh: syntax error: unexpected "("`
+  - busybox 1.32.1: `sh: syntax error: unexpected "("`
+  - busybox 1.33.2: `sh: syntax error: unexpected "("`
+  - busybox 1.34.1: `sh: syntax error: unexpected "("`
+  - busybox 1.35.0: `sh: syntax error: unexpected "("`
+  - busybox 1.36.1: `sh: syntax error: unexpected "("`
+  - busybox 1.37.0: `sh: syntax error: unexpected "("`
+  - dash 0.5.8: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.9.1: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.10.2: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.11.5: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.12: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
+  - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
+  - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
+  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC2206
+
+Claim: an unquoted expansion in an array assignment word-splits.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: zsh 5.8.1, zsh 5.9
+- differs: yash 2.59
+- unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - busybox 1.30.1: `sh: syntax error: unexpected "("`
+  - busybox 1.31.1: `sh: syntax error: unexpected "("`
+  - busybox 1.32.1: `sh: syntax error: unexpected "("`
+  - busybox 1.33.2: `sh: syntax error: unexpected "("`
+  - busybox 1.34.1: `sh: syntax error: unexpected "("`
+  - busybox 1.35.0: `sh: syntax error: unexpected "("`
+  - busybox 1.36.1: `sh: syntax error: unexpected "("`
+  - busybox 1.37.0: `sh: syntax error: unexpected "("`
+  - dash 0.5.8: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.9.1: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.10.2: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.11.5: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.12: `dash: 1: Syntax error: "(" unexpected`
+  - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
+  - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
+  - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Word "�x=" unexpected (expecting ")")`
+  - netbsd-sh 11.0: `sh: 1: Syntax error: Word "�x=" unexpected (expecting ")")`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
+  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - tcsh 6.24.16: `Badly placed ()'s.`
+  - yash 2.59: `snippet [status 0 stdout "1 1\n" stderr ""] fixed [status 0 stdout "3\n" stderr ""]`
+
+## SC3001
+
+Claim: sh rejects process substitution as syntax.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3002
+
+Claim: sh rejects extglob patterns as syntax.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Too many )'s.`
+
+## SC3004
+
+Claim: sh has no $"..": the dollar sign is printed.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3005
+
+Claim: sh rejects arithmetic for loops as syntax.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3006
+
+Claim: sh has no ((..)): it runs nested subshells and the assignment is lost.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC3007
+
+Claim: sh has no $[..]: the text is printed literally.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3008
+
+Claim: sh rejects select loops as syntax.
+
+- reproduces: bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, osh 0.38.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, dash 0.5.8, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, tcsh 6.24.16, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3009
+
+Claim: sh has no brace expansion: the braces are printed literally.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, tcsh 6.24.16, zsh 5.8.1, zsh 5.9
+
 ## SC3010
 
 Claim: sh has no [[ ]]; the test is a missing command and the branch is skipped.
 
 - reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1
 - absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3011
+
+Claim: sh rejects here-strings as syntax.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3012
+
+Claim: sh's test has no lexicographic <: the test errors and the else branch runs.
+
+- reproduces: bosh 2024-03-21, posh 0.14.1, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3014
+
+Claim: sh's test has no ==: the test errors and the else branch runs.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, yash 2.59, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: zsh 5.8.1, zsh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+  - zsh 5.8.1: `snippet [status 1 stdout "" stderr "zsh: = not found"] fixed [status 0 stdout "y\n" stderr ""]`
+  - zsh 5.9: `snippet [status 1 stdout "" stderr "zsh: = not found"] fixed [status 0 stdout "y\n" stderr ""]`
+
+## SC3015
+
+Claim: sh has no =~: the [[ test is a missing command and the else branch runs.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: loksh 7.9, mksh R59c, oksh 7.9, tcsh 6.24.16
+  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `abc' missing expression operator`
+  - mksh R59c: `mksh: <stdin>[1]: syntax error: unexpected operator/operand '=~'`
+  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `abc' missing expression operator`
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3016
+
+Claim: sh's test has no -v: the test errors and the else branch runs.
+
+- reproduces: bash 3.2.57, bash 4.0, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3017
+
+Claim: sh's test has no unary -a: the test errors and the else branch runs.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3018
+
+Claim: sh arithmetic has no ++: the expansion is a fatal error.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3019
+
+Claim: sh arithmetic has no **: the expansion is a fatal error.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: 2**3: syntax error`
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3020
+
+Claim: sh has no &>: the command is backgrounded and the file stays empty.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Invalid null command.`
+
+## SC3021
+
+Claim: sh's >& takes a descriptor number: a file name is a fatal error.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Ambiguous output redirect.`
+
+## SC3022
+
+Claim: sh has no named descriptors: {fd} is a command name and exec fails.
+
+- reproduces: bash 3.2.57, bash 4.0, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, zsh 5.8.1, zsh 5.9
+- unparsable: tcsh 6.24.16, yash 2.59
+  - tcsh 6.24.16: `Ambiguous output redirect.`
+  - yash 2.59: `syntax error: specifying file descriptor in braces is not supported`
+
+## SC3023
+
+Claim: sh descriptors are one digit: 10> is an argument and a redirect of stdout.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, posh 0.14.1, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, netbsd-sh 10.2, netbsd-sh 11.0, osh 0.38.0, yash 2.59
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 0 stdout "" stderr ""] fixed [status 0 stdout "" stderr ""]`
+
+## SC3024
+
+Claim: sh has no +=: x+=b is a command name and x is unchanged.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "x=a: Command not found."] fixed [status 1 stdout "" stderr "x=a: Command not found."]`
+
+## SC3025
+
+Claim: sh has no /dev/udp: the redirect opens a missing path and fails.
+
+- reproduces: bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, tcsh 6.24.16, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, yash 2.59
+
+## SC3026
+
+Claim: sh takes ^ in a bracket expression literally: it does not negate.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, loksh 7.9, mksh R59c, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, netbsd-sh 10.2, netbsd-sh 11.0, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: syntax error at line 1: `^' unexpected`
+  - tcsh 6.24.16: `Too many )'s.`
+
+## SC3028
+
+Claim: sh does not set EUID.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Bad : modifier in $ '+'.`
+
+## SC3029
+
+Claim: sh rejects |& as syntax.
+
+- reproduces: bash 3.2.57, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Ambiguous output redirect.`
+
+## SC3030
+
+Claim: sh rejects array assignment as syntax.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3031
+
+Claim: sh does not glob a redirect target: the file name is taken literally.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0, zsh 5.8.1, zsh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3032
+
+Claim: sh has no coproc: it is a missing command.
+
+- reproduces: bash 3.2.57, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59
+- absent: bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 0 stdout "1\n" stderr "coproc: Command not found."] fixed [status 0 stdout "0\n" stderr ""]`
+
+## SC3033
+
+Claim: sh rejects a function name with a hyphen as syntax.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.37.0, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC3034
+
+Claim: sh runs $(<file) as an empty command: the result is empty.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3035
+
+Claim: sh runs `<file` as an empty command: the result is empty.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3036
+
+Claim: dash's echo takes only -n: another flag is printed.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, posh 0.14.1, tcsh 6.24.16, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3037
+
+Claim: sh's echo takes no flags: a flag is printed.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, posh 0.14.1, tcsh 6.24.16, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+
+## SC3038
+
+Claim: sh's exec takes no flags: -a is a command name and exec fails.
+
+- reproduces: busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: brush 0.4.0, netbsd-sh 11.0, tcsh 6.24.16
+  - brush 0.4.0: `snippet [status 0 stdout "99\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - netbsd-sh 11.0: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - tcsh 6.24.16: `snippet [status 0 stdout "1\n" stderr "-a: Command not found."] fixed [status 0 stdout "0\n" stderr ""]`
+
+## SC3039
+
+Claim: sh has no let: it is a missing command and x stays unset.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, osh 0.38.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0
+- unparsable: tcsh 6.24.16
+  - freebsd-sh 14.5: `snippet [status 0 stdout "2\n[2]\n" stderr ""] fixed [status 0 stdout "[2]\n" stderr ""]`
+  - freebsd-sh 15.1: `snippet [status 0 stdout "2\n[2]\n" stderr ""] fixed [status 0 stdout "[2]\n" stderr ""]`
+  - netbsd-sh 10.2: `snippet [status 0 stdout "2\n[2]\n" stderr ""] fixed [status 0 stdout "[2]\n" stderr ""]`
+  - netbsd-sh 11.0: `snippet [status 0 stdout "2\n[2]\n" stderr ""] fixed [status 0 stdout "[2]\n" stderr ""]`
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3040
+
+Claim: sh rejects set -o errtrace: the error is fatal.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, osh 0.38.0, tcsh 6.24.16, yash 2.59
+
+## SC3041
+
+Claim: sh rejects set -B: the error is fatal.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 0 stdout "ok\n" stderr "set: Variable name must begin with a letter."] fixed [status 0 stdout "addsuffix\t\nanyerror\t\nargv\t()\ncdtohome\t\ncsubstnonl\t\ncwd\t/tmp/run47b\ndirstack\t/tmp/run47b\necho_style\tboth\neuid\t65534\neuser\tnobody\ngid\t65534\ngroup\tnogroup\nhistory\t100\nhome\t/tmp\nkillring\t30\nnokanji\t\nowd\t\npath\t(/usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin)\nprompt\t%# \nprompt2\t%R? \nprompt3\tCORRECT>%R (y|n|e|a)? \nshell\t/usr/local/bin/tcsh\nshlvl\t1\nstatus\t0\ntcsh\t6.24.16\ntty\t\nuid\t65534\nuser\tnobody\nversion\ttcsh 6.24.16 (Astron) 2025-07-09 (x86_64-unknown-linux) options wide,nls,dl,al,kan,sm,rh,color,filec\nok\n" stderr ""]`
+
+## SC3042
+
+Claim: sh rejects set --option: the error is fatal.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, osh 0.38.0, tcsh 6.24.16
+  - bash 3.2.57: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 4.0: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 4.2.53: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 4.4.18: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 5.0: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 5.1.16: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 5.2.37: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - bash 5.3: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - osh 0.38.0: `snippet [status 0 stdout "2\n" stderr ""] fixed [status 0 stdout "0\n" stderr ""]`
+  - tcsh 6.24.16: `snippet [status 0 stdout "1\n" stderr "set: Variable name must begin with a letter."] fixed [status 0 stdout "addsuffix\t\nanyerror\t\nargv\t()\ncdtohome\t\ncsubstnonl\t\ncwd\t/tmp/run48b\ndirstack\t/tmp/run48b\necho_style\tboth\neuid\t65534\neuser\tnobody\ngid\t65534\ngroup\tnogroup\nhistory\t100\nhome\t/tmp\nkillring\t30\nnokanji\t\nowd\t\npath\t(/usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin)\nprompt\t%# \nprompt2\t%R? \nprompt3\tCORRECT>%R (y|n|e|a)? \nshell\t/usr/local/bin/tcsh\nshlvl\t1\nstatus\t0\ntcsh\t6.24.16\ntty\t\nuid\t65534\nuser\tnobody\nversion\ttcsh 6.24.16 (Astron) 2025-07-09 (x86_64-unknown-linux) options wide,nls,dl,al,kan,sm,rh,color,filec\n0\n" stderr ""]`
+
+## SC3043
+
+Claim: sh has no local: the assignment in the function leaks to the caller.
+
+- reproduces: ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC3044
+
+Claim: sh has no declare: it is a missing command and x stays unset.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "declare: Command not found."] fixed [status 1 stdout "" stderr "x=1: Command not found."]`
+
+## SC3045
+
+Claim: sh's printf has no -v: the command fails and x stays unset.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Ambiguous output redirect.`
+
+## SC3046
+
+Claim: sh has no source: it is a missing command and the file is not read.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "x=1: Command not found."] fixed [status 1 stdout "" stderr "/usr/local/sbin/.: Permission denied."]`
+
+## SC3047
+
+Claim: sh has no ERR trap: the trap is rejected and never runs.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `Badly placed ()'s.`
+
+## SC3048
+
+Claim: sh's trap rejects the SIG prefix: the signal keeps its default action and kills the shell.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: brush 0.4.0, posh 0.14.1, tcsh 6.24.16
+  - brush 0.4.0: `snippet [status 138 stdout "" stderr ""] fixed [status 138 stdout "" stderr ""]`
+  - posh 0.14.1: `snippet [status 0 stdout "done\n" stderr "posh: <stdin>:1: kill: not found"] fixed [status 0 stdout "done\n" stderr "posh: <stdin>:1: kill: not found"]`
+  - tcsh 6.24.16: `snippet [status 138 stdout "" stderr "trap: Command not found."] fixed [status 138 stdout "" stderr "trap: Command not found."]`
+
+## SC3049
+
+Claim: sh's trap rejects a lowercase signal name: the signal keeps its default action and kills the shell.
+
+- reproduces: bosh 2024-03-21, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59
+- differs: brush 0.4.0, posh 0.14.1, tcsh 6.24.16
+  - brush 0.4.0: `snippet [status 138 stdout "" stderr ""] fixed [status 138 stdout "" stderr ""]`
+  - posh 0.14.1: `snippet [status 0 stdout "done\n" stderr "posh: <stdin>:1: kill: not found"] fixed [status 0 stdout "done\n" stderr "posh: <stdin>:1: kill: not found"]`
+  - tcsh 6.24.16: `snippet [status 138 stdout "" stderr "trap: Command not found."] fixed [status 138 stdout "" stderr "trap: Command not found."]`
+
+## SC3050
+
+Claim: sh's printf has no %q: the directive is an error.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, tcsh 6.24.16, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, posh 0.14.1
+  - brush 0.4.0: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - ksh 1.0.0: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - ksh 1.0.4: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - ksh 1.0.8: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - ksh 1.0.10: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - loksh 7.9: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - mksh R59c: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - oksh 7.9: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - osh 0.38.0: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+  - posh 0.14.1: `snippet [status 0 stdout "'a b'\n" stderr ""] fixed [status 0 stdout "a\\ b\n" stderr ""]`
+
+## SC3051
+
+Claim: sh has no source: it is a missing command and the file is not read.
+
+- reproduces: bosh 2024-03-21, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "x=1: Command not found."] fixed [status 1 stdout "" stderr "/usr/local/sbin/.: Permission denied."]`
+
+## SC3052
+
+Claim: sh arithmetic has no base#digits: the expansion is a fatal error.
+
+- reproduces: busybox 1.30.1, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, posh 0.14.1, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: 16#ff: bad expression`
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3053
+
+Claim: sh has no ${!x}: the expansion is a fatal bad substitution.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0
+- differs: ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - ksh 1.0.0: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
+  - ksh 1.0.4: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
+  - ksh 1.0.8: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
+  - ksh 1.0.10: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
+  - mksh R59c: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `y: Event not found.`
+  - yash 2.59: `syntax error: invalid character `y' in parameter expansion`
+  - zsh 5.8.1: `zsh: bad substitution`
+  - zsh 5.9: `zsh: bad substitution`
+  - zsh-sh 5.8.1: `zsh: bad substitution`
+  - zsh-sh 5.9: `zsh: bad substitution`
+
+## SC3054
+
+Claim: sh has no ${a[0]}: the expansion is a fatal bad substitution.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 11.0, osh 0.38.0
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, posh 0.14.1, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "a=x: Command not found."] fixed [status 1 stdout "" stderr "a=x: Command not found."]`
+  - yash 2.59: `snippet [status 0 stdout "\n" stderr ""] fixed [status 0 stdout "x\n" stderr ""]`
+  - zsh 5.8.1: `snippet [status 0 stdout "\n" stderr ""] fixed [status 0 stdout "x\n" stderr ""]`
+  - zsh 5.9: `snippet [status 0 stdout "\n" stderr ""] fixed [status 0 stdout "x\n" stderr ""]`
+
+## SC3055
+
+Claim: sh has no ${!a[@]}: the expansion is a fatal bad substitution.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `a[@]: Event not found.`
+  - yash 2.59: `syntax error: invalid character `a' in parameter expansion`
+  - zsh 5.8.1: `zsh: bad substitution`
+  - zsh 5.9: `zsh: bad substitution`
+  - zsh-sh 5.8.1: `zsh: bad substitution`
+  - zsh-sh 5.9: `zsh: bad substitution`
+
+## SC3056
+
+Claim: sh has no ${!prefix@}: the expansion is a fatal bad substitution.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `a@: Event not found.`
+  - yash 2.59: `syntax error: invalid character `a' in parameter expansion`
+  - zsh 5.8.1: `zsh: bad substitution`
+  - zsh 5.9: `zsh: bad substitution`
+  - zsh-sh 5.8.1: `zsh: bad substitution`
+  - zsh-sh 5.9: `zsh: bad substitution`
+
+## SC3057
+
+Claim: sh has no ${x:0:1}: the expansion is a fatal bad substitution.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `Bad : modifier in $ '0'.`
+  - yash 2.59: `syntax error: invalid character `0' in parameter expansion`
+
+## SC3058
+
+Claim: sh applies ${*%pat} to the joined string instead of each parameter.
+
+- reproduces: busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, yash 2.59
+- differs: bosh 2024-03-21, loksh 7.9, mksh R59c, oksh 7.9, posh 0.14.1
+- unparsable: tcsh 6.24.16
+  - bosh 2024-03-21: `snippet [status 1 stdout "" stderr "bosh: bad substitution"] fixed [status 0 stdout "a c\n" stderr ""]`
+  - loksh 7.9: `snippet [status 1 stdout "" stderr "loksh: <stdin>[1]: ${*%b}\": bad substitution"] fixed [status 0 stdout "a c\n" stderr ""]`
+  - mksh R59c: `snippet [status 1 stdout "" stderr "mksh: <stdin>[1]: ${*%b}: bad substitution"] fixed [status 0 stdout "a c\n" stderr ""]`
+  - oksh 7.9: `snippet [status 1 stdout "" stderr "oksh: <stdin>[1]: ${*%b}\": bad substitution"] fixed [status 0 stdout "a c\n" stderr ""]`
+  - posh 0.14.1: `snippet [status 1 stdout "" stderr "posh: <stdin>:1: ${*%b}\": bad substitution"] fixed [status 0 stdout "a c\n" stderr ""]`
+  - tcsh 6.24.16: `Illegal variable name.`
+
+## SC3059
+
+Claim: sh has no ${x^^}: the expansion is a fatal bad substitution.
+
+- reproduces: bash 3.2.57, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0
+- unparsable: bosh 2024-03-21, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - ksh 1.0.0: `ksh: syntax error at line 1: `^' unexpected`
+  - ksh 1.0.4: `ksh: syntax error at line 1: `^' unexpected`
+  - ksh 1.0.8: `ksh: syntax error at line 1: `^' unexpected`
+  - ksh 1.0.10: `ksh: syntax error at line 1: `^' unexpected`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `Missing '}'.`
+  - yash 2.59: `syntax error: invalid character `^' in parameter expansion`
+  - zsh 5.8.1: `zsh: bad substitution`
+  - zsh 5.9: `zsh: bad substitution`
+  - zsh-sh 5.8.1: `zsh: bad substitution`
+  - zsh-sh 5.9: `zsh: bad substitution`
+
+## SC3060
+
+Claim: sh has no ${x/a/c}: the expansion is a fatal bad substitution.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: bosh 2024-03-21, netbsd-sh 10.2, tcsh 6.24.16
+  - bosh 2024-03-21: `bosh: bad substitution`
+  - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
+  - tcsh 6.24.16: `Missing '}'.`
+
+## SC3061
+
+Claim: sh's read needs a variable: it fails and REPLY stays unset.
+
+- reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, yash 2.59
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: tcsh 6.24.16
+  - tcsh 6.24.16: `snippet [status 1 stdout "" stderr "{: Command not found."] fixed [status 1 stdout "" stderr "{: Command not found."]`
+
+## SC3062
+
+Claim: sh's test has no -o: the test errors and the else branch runs.
+
+- reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, oksh 7.9, osh 0.38.0, yash 2.59
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3063
+
+Claim: sh has no namerefs and no test -R: the test errors and the else branch runs.
+
+- reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, posh 0.14.1, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- absent: bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3064
+
+Claim: sh's test has no -N: the test errors and the else branch runs.
+
+- reproduces: bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: osh 0.38.0
+- unparsable: tcsh 6.24.16
+  - osh 0.38.0: `snippet [status 134 stdout "" stderr "timeout: the monitored command dumped core"] fixed [status 0 stdout "new\n" stderr ""]`
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3065
+
+Claim: sh's test has no -k: the test errors and the else branch runs.
+
+- reproduces: posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- unparsable: tcsh 6.24.16
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3066
+
+Claim: sh's test has no -G: the test errors and the else branch runs.
+
+- reproduces: posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
+- differs: freebsd-sh 14.5, freebsd-sh 15.1
+- unparsable: tcsh 6.24.16
+  - freebsd-sh 14.5: `snippet [status 0 stdout "n\n" stderr ""] fixed [status 0 stdout "n\n" stderr ""]`
+  - freebsd-sh 15.1: `snippet [status 0 stdout "n\n" stderr ""] fixed [status 0 stdout "n\n" stderr ""]`
+  - tcsh 6.24.16: `: No such file or directory.`
+
+## SC3067
+
+Claim: sh's test has no -O: the test errors and the else branch runs.
+
+- reproduces: posh 0.14.1
+- absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, bosh 2024-03-21, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, loksh 7.9, mksh R59c, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: tcsh 6.24.16
   - tcsh 6.24.16: `: No such file or directory.`
