@@ -9,6 +9,10 @@ rshellcheck release that matches its own module version, verifies it and runs
 it. Every later run starts the native binary directly, with the same arguments,
 standard streams and exit code.
 
+The bundled `0.11.0` release requires GitHub CLI (`gh`) for its first-run
+signature verification. No GitHub token is required. Verified cache hits
+need neither `gh` nor network access.
+
 ## pre-commit
 
 ```yaml
@@ -26,15 +30,21 @@ this command inside the hook environment.
 ## What the first run does
 
 1. Reads the module version from the build info. `v1.0.0` selects the GitHub
-   release tagged `rshellcheck-v1.0.0`.
+   release tagged `rshellcheck-v1.0.0`. Source-pinned Go pseudo-versions select
+   the native version bundled with that wrapper source: currently `0.11.0`.
 2. Maps `GOOS/GOARCH` to a release target. Linux uses the static musl build.
    Supported: linux amd64, 386, arm64, arm; darwin amd64, arm64; windows
    amd64, 386, arm64; freebsd amd64, 386; android arm64, arm, amd64, 386.
-3. Downloads `SHA256SUMS` and the archive for that target from
-   `github.com/kjanat/shellcheck-rs/releases` and checks the archive's
-   SHA-256 against the checksum file.
-4. When `gh` is on `PATH` and signed in, verifies the archive's SLSA
-   provenance:
+3. For `0.11.0`, downloads only the archive from the exact release URL and
+   checks its SHA-256 against the reviewed pin embedded in the wrapper.
+   Other versions download `SHA256SUMS` and check the archive against it.
+4. For `0.11.0`, requires `gh` on `PATH` and verifies SLSA provenance using
+   the embedded attestation bundle and trusted roots. This verification needs
+   neither GitHub authentication nor network access. It checks the repository,
+   release workflow, tag, exact source and signer commits, predicate type and
+   GitHub-hosted runner identity. Verification has a one-minute deadline.
+
+   Other versions retain online verification when `gh` is on `PATH`:
 
    ```sh
    gh attestation verify <archive> --repo kjanat/shellcheck-rs \
@@ -42,23 +52,42 @@ this command inside the hook environment.
      --source-ref refs/tags/rshellcheck-v<version>
    ```
 
-   A failed verification aborts the install. Without `gh`, or with `gh`
-   signed out, the install goes on and prints one
+   A failed verification aborts the install. For these other versions only,
+   without `gh`, or with `gh` signed out, the install goes on and prints one
    `shellcheck: <archive>: provenance not verified, ...` line on stderr.
 5. Unpacks `rshellcheck` into `<user cache dir>/rshellcheck/<version>/<target>/`.
+   For `0.11.0`, checks the extracted binary against its independent embedded
+   SHA-256 pin before installation and on every cache hit. Corrupt cache files
+   fail closed; remove the indicated file and retry to install it again.
    The cache dir is `$XDG_CACHE_HOME` or `~/.cache` on Linux,
    `~/Library/Caches` on macOS, `%LocalAppData%` on Windows.
 6. Concurrent first runs share one download: one process holds a lock file,
    the others wait for the binary to appear.
 
-The first run needs network access to github.com. A CI runner without a
-persistent cache directory downloads once per job. The trust root is GitHub
-over TLS plus the release's checksum file, and the release's sigstore
-attestation wherever a signed-in `gh` is present. GitHub-hosted runners
-ship `gh` and the hook inherits `GH_TOKEN` when the job sets it.
+The first run needs network access to the release asset URL on github.com.
+For the bundled version, no GitHub API request is needed, even with an empty
+cache. A persistent cache avoids subsequent downloads. Go's module checksum
+verification protects the wrapper source, including its reviewed asset pins,
+attestation and trusted roots.
 
-A build from an untagged revision (`@master`, `@<commit>`, `go run .`) has no
-matching release and exits with a message asking for a tagged version.
+A Go build installed from `@<commit>` or `@master` receives a pseudo-version
+and runs the wrapper source's bundled native release. Pin the full source
+commit for repeatability. An unversioned build (`go run .`, `(devel)`) still
+fails; it has no module identity.
+
+### Updating bundled evidence
+
+`cmd/shellcheck/proofs/0.11.0/provenance.sigstore.json` is the published
+[`rshellcheck-v0.11.0` provenance bundle](https://github.com/kjanat/shellcheck-rs/releases/download/rshellcheck-v0.11.0/provenance.sigstore.json).
+It authenticates all 15 native archives. `trusted-root.jsonl` contains the
+reviewed GitHub/Sigstore trust roots. The exact release source is
+`e0f0d77845e0bccfccf7ef2e46b50e968e534328`.
+
+For a new bundled release, review the roots and workflow identity, verify
+every archive against the bundle offline, then record each archive's SHA-256
+and its extracted native binary's SHA-256 in `proof_assets.go`. Update the
+embedded version and source commit together. Archive pins must match the
+signed subjects; binary pins must come from those verified archives.
 
 ## Releasing
 
@@ -87,6 +116,17 @@ two failures.
 ```sh
 cd go && go vet ./... && go test -race ./...
 ```
+
+To verify every real release archive with network blocked for `gh`, first
+download all 15 native archives from the pinned release into one directory:
+
+```sh
+RSHELLCHECK_RELEASE_ARCHIVES=/path/to/archives go test -count=1 -run TestPublishedReleaseOfflineVerification ./cmd/shellcheck
+```
+
+This tests cold installation, actual offline signature verification, warm
+cache verification, corrupt archives and cache files, and execution of the
+native archive matching the host. No executable is added to `PATH`.
 
 Tests use a local HTTP server and the test binary itself in place of
 rshellcheck, so they run without network and on every supported OS.
