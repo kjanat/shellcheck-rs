@@ -140,7 +140,7 @@ jobs:
 
       - name: Attest image SBOM
         if: github.event_name != 'pull_request'
-        uses: actions/attest@7d8b1cacecb65f487779b3b98fd5296a018d1a1b # main
+        uses: actions/attest@4d7d407517fe0a9f57ab8ca277dfd2efb1188c7f # main
         with:
           subject-name: "${{ steps.push.outputs.repository }}"
           subject-digest: "${{ steps.push.outputs.digest }}"
