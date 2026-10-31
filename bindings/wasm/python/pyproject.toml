@@ -5,7 +5,7 @@ description     = "ShellCheck core WASM bindings for Python"
 readme          = "README.md"
 requires-python = ">=3.12"
 license         = "GPL-3.0-or-later"
-dependencies    = ["wasmtime==38.0.0"]
+dependencies    = ["wasmtime==50.0.1"]
 
 [project.urls]
 Documentation = "https://github.com/kjanat/shellcheck-rs/tree/master/bindings/wasm"
