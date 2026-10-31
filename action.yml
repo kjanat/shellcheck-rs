@@ -1,0 +1,96 @@
+name: Setup rshellcheck
+description: Install a released rshellcheck binary and add it to PATH.
+author: kjanat
+branding:
+  icon: terminal
+  color: orange
+inputs:
+  version:
+    description: Release version (1.0.0, v1.0.0, or rshellcheck-v1.0.0), or latest.
+    default: latest
+  token:
+    description: GitHub token used to download release assets.
+    default: ${{ github.token }}
+outputs:
+  version:
+    description: Installed release version.
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: Directory containing the installed executable.
+    value: ${{ steps.install.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - name: Install rshellcheck
+      id: install
+      shell: bash
+      env:
+        RSHELLCHECK_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+        GH_HOST: github.com
+      run: |
+        set -euo pipefail
+        case "${RUNNER_ARCH}" in
+          X64) arch=x86_64 ;;
+          X86) arch=i686 ;;
+          ARM64) arch=aarch64 ;;
+          ARM) arch=armv7 ;;
+          *) echo "::error::Unsupported runner architecture: ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+        binary=rshellcheck
+        extension=tar.gz
+        case "${RUNNER_OS}/${arch}" in
+          Linux/armv7) target=armv7-unknown-linux-musleabihf ;;
+          Linux/*) target="${arch}-unknown-linux-musl" ;;
+          macOS/x86_64|macOS/aarch64) target="${arch}-apple-darwin" ;;
+          Windows/x86_64|Windows/i686|Windows/aarch64)
+            target="${arch}-pc-windows-msvc"
+            binary=rshellcheck.exe
+            extension=zip
+            ;;
+          *) echo "::error::Unsupported runner platform: ${RUNNER_OS}/${RUNNER_ARCH}"; exit 1 ;;
+        esac
+
+        repo=kjanat/shellcheck-rs
+        version="${RSHELLCHECK_VERSION}"
+        if [[ "${version}" == latest ]]; then
+          tag="$(gh release view --repo "${repo}" --json tagName --jq .tagName)"
+          version="${tag#rshellcheck-v}"
+        else
+          version="${version#rshellcheck-v}"
+          version="${version#v}"
+        fi
+        if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          echo '::error::Expected latest or a release version such as 1.0.0.'
+          exit 1
+        fi
+        tag="rshellcheck-v${version}"
+        stem="rshellcheck-${version}-${target}"
+        archive="${stem}.${extension}"
+        download="$(mktemp -d "${RUNNER_TEMP}/rshellcheck-download.XXXXXX")"
+        trap 'rm -rf "${download}"' EXIT
+        gh release download "${tag}" --repo "${repo}" --dir "${download}" \
+          --pattern "${archive}" --pattern SHA256SUMS
+        (
+          cd "${download}"
+          awk -v name="${archive}" '$2 == name { print; found++ } END { if (found != 1) exit 1 }' \
+            SHA256SUMS > selected-checksum
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum --check selected-checksum
+          else
+            shasum -a 256 --check selected-checksum
+          fi
+        )
+        install_dir="$(mktemp -d "${RUNNER_TEMP}/rshellcheck-${version}.XXXXXX")"
+        if [[ "${extension}" == zip ]]; then
+          unzip -p "${download}/${archive}" "${stem}/${binary}" > "${install_dir}/${binary}"
+        else
+          tar -xzf "${download}/${archive}" --strip-components=1 -C "${install_dir}" "${stem}/${binary}"
+        fi
+        chmod +x "${install_dir}/${binary}"
+        "${install_dir}/${binary}" --version
+        if [[ "${RUNNER_OS}" == Windows ]]; then
+          install_dir="$(cygpath -w "${install_dir}")"
+        fi
+        printf '%s\n' "${install_dir}" >> "${GITHUB_PATH}"
+        printf 'version=%s\npath=%s\n' "${version}" "${install_dir}" >> "${GITHUB_OUTPUT}"

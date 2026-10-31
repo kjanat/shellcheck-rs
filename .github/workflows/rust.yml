@@ -40,7 +40,7 @@ jobs:
         uses: *CO
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5
+        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
 
       - name: Check formatting
         uses: kjanat/dprint-check@29c42153a7346f4d7315883ff7722cfe22cd510c # v3
@@ -60,7 +60,7 @@ jobs:
 
       - name: Install Rust stable
         id: rust
-        uses: &rust dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: &rust dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Cache cargo
         uses: &CA actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
