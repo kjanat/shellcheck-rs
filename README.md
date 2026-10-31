@@ -138,6 +138,26 @@ To install this Rust port from git:
 cargo install --locked --git 'https://github.com/kjanat/shellcheck-rs' 'shellcheck-cli' --bin 'rshellcheck'
 ```
 
+For GitHub Actions, use this repository's setup action to install `rshellcheck`:
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: kjanat/shellcheck-rs@master
+    with:
+      version: "1.0.0" # Omit to install the latest stable release.
+  - run: rshellcheck scripts/example.sh
+```
+
+The action downloads a native release binary, verifies its SHA-256 checksum, and
+adds it to `PATH`. It supports Linux (x64, x86, ARM64, ARMv7), macOS (x64, ARM64),
+and Windows (x64, x86, ARM64). No Rust toolchain is needed. Self-hosted runners
+need Bash, GitHub CLI (`gh`), `tar` (Unix) or `unzip` and `cygpath` (Windows), and
+`sha256sum` or `shasum`. The `token` input defaults to `${{ github.token }}`;
+the `version` and `path` outputs report the installed version and binary directory.
+The action reference selects the installer code; the `version` input selects the
+binary release. Pin the action to a commit SHA for reproducible workflows.
+
 The other installation methods below describe the original upstream ShellCheck.
 
 On Debian based distros:
