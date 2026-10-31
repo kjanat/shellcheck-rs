@@ -27,7 +27,7 @@
 		"test:browser": "playwright test browser.spec.mjs"
 	},
 	"devDependencies": {
-		"@playwright/test": "1.64.0"
+		"@playwright/test": "1.64.1"
 	},
 	"publishConfig": {
 		"access": "public"
