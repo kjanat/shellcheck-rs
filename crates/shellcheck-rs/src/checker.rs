@@ -54,7 +54,7 @@ pub fn check_script_as(
 
     // Keep upstream-compatible wording by default; callers can opt into more
     // useful fatal-error context without changing diagnostic codes or spans.
-    let clarify = |name: &str| matches!(name, "all" | "clarify-parse-errors");
+    let clarify = analytics::optional_checks::clarify_parse_errors_enabled;
     let clarify_enabled = spec.optional_checks.iter().any(|name| clarify(name))
         || spec.rc.as_ref().is_some_and(|rc| {
             rc.annotations

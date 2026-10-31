@@ -207,3 +207,25 @@ fn more_inputs_than_queue_slots_keep_their_order() {
     args.extend(names.iter().map(String::as_str));
     assert_eq!(f.compare(&args, "").status.code(), Some(1));
 }
+
+#[test]
+fn deeply_nested_single_inputs_work_in_serial_and_quiet_modes() {
+    let f = Fixture::new();
+    let script = format!(
+        "#!/bin/bash\n{}echo $nested\n{}",
+        "if true; then\n".repeat(800),
+        "fi\n".repeat(800)
+    );
+    f.write("deep.sh", &script);
+    for format in ["json1", "quiet"] {
+        for input in ["deep.sh", "-"] {
+            let output = f.run("1", &["--norc", "-f", format, input], &script);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{format}: {input}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}

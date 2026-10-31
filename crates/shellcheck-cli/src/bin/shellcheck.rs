@@ -23,6 +23,9 @@ use shellcheck_rs::interface::{
     CheckSpec, ErrorMessage, PositionedComment, RSC_DATAFLOW_SKIPPED, System, decode_bytes,
 };
 
+// Recursive parsing needs the same stack budget for serial and parallel work.
+const ANALYSIS_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 fn main() -> ExitCode {
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
     // argv before parsing, so env-configured defaults apply but explicit argv
@@ -54,7 +57,20 @@ fn main() -> ExitCode {
         }
     };
 
-    run(config)
+    match std::thread::Builder::new()
+        .name("shellcheck-main".to_string())
+        .stack_size(ANALYSIS_STACK_SIZE)
+        .spawn(move || run(config))
+    {
+        Ok(thread) => match thread.join() {
+            Ok(code) => code,
+            Err(panic) => std::panic::resume_unwind(panic),
+        },
+        Err(error) => {
+            eprintln!("Unable to start analysis thread: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 /// Port of `ioInterface` (shellcheck.hs): the real filesystem, as seen by the
@@ -374,7 +390,7 @@ fn load_parallel(
             let pending = &pending;
             let results = results.clone();
             let worker = std::thread::Builder::new()
-                .stack_size(8 * 1024 * 1024)
+                .stack_size(ANALYSIS_STACK_SIZE)
                 .spawn_scoped(scope, move || {
                     loop {
                         // Release the receiver lock before doing any analysis.

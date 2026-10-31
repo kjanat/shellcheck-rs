@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -22,16 +23,17 @@ import (
 )
 
 const (
-	repository     = "kjanat/shellcheck-rs"
-	releaseBase    = "https://github.com/" + repository + "/releases/download"
-	signerWorkflow = repository + "/.github/workflows/release.yml"
-	ghAuthRequired = 4
-	tagPrefix      = "rshellcheck-v"
-	maxArchive     = 256 << 20
-	installWait    = 2 * time.Minute
-	staleLock      = 10 * time.Minute
-	pollInterval   = 100 * time.Millisecond
-	wrapperFailure = 69
+	repository       = "kjanat/shellcheck-rs"
+	releaseBase      = "https://github.com/" + repository + "/releases/download"
+	signerWorkflow   = repository + "/.github/workflows/release.yml"
+	ghAuthRequired   = 4
+	tagPrefix        = "rshellcheck-v"
+	maxArchive       = 256 << 20
+	installWait      = 2 * time.Minute
+	staleLock        = 10 * time.Minute
+	pollInterval     = 100 * time.Millisecond
+	wrapperFailure   = 69
+	verificationWait = time.Minute
 )
 
 var targets = map[string]string{
@@ -54,7 +56,7 @@ var targets = map[string]string{
 
 var (
 	taggedVersion   = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
-	pseudoVersion   = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}$`)
+	pseudoVersion   = regexp.MustCompile(`(?:-|[.-]0\.)\d{14}-[0-9a-f]{12}$`)
 	wrapperRevision = regexp.MustCompile(`-wrapper\.\d+$`)
 )
 
@@ -66,6 +68,7 @@ type release struct {
 	dir     string
 	gh      string
 	log     io.Writer
+	proof   *assetProof
 }
 
 func main() {
@@ -102,7 +105,11 @@ func moduleVersion() string {
 }
 
 func resolve(version, goos, goarch, base, cache string) (*release, error) {
-	if !taggedVersion.MatchString(version) || pseudoVersion.MatchString(version) {
+	if taggedVersion.MatchString(version) && pseudoVersion.MatchString(version) {
+		// Source-pinned wrapper builds carry the reviewed native release too.
+		version = "v" + bundledVersion
+	}
+	if !taggedVersion.MatchString(version) {
 		return nil, fmt.Errorf("built from %q; install a tagged version, for example go install github.com/kjanat/shellcheck-rs/go/cmd/shellcheck@v1.0.0", version)
 	}
 	target, ok := targets[goos+"/"+goarch]
@@ -110,14 +117,22 @@ func resolve(version, goos, goarch, base, cache string) (*release, error) {
 		return nil, fmt.Errorf("no rshellcheck release for %s/%s", goos, goarch)
 	}
 	label := releaseLabel(version)
-	return &release{
+	rel := &release{
 		label:   label,
 		target:  target,
 		windows: goos == "windows",
 		base:    base + "/" + tagPrefix + label,
 		dir:     filepath.Join(cache, "rshellcheck", label, target),
 		log:     io.Discard,
-	}, nil
+	}
+	if label == bundledVersion {
+		proof, ok := reviewedAssets[target]
+		if !ok {
+			return nil, fmt.Errorf("no reviewed release proof for %s", target)
+		}
+		rel.proof = &proof
+	}
+	return rel, nil
 }
 
 func releaseLabel(version string) string {
@@ -145,7 +160,9 @@ func (r *release) binary() string {
 
 func (r *release) ensure(client *http.Client) (string, error) {
 	binary := r.binary()
-	if _, err := os.Stat(binary); err == nil {
+	if present, err := r.cachedBinary(); err != nil {
+		return "", err
+	} else if present {
 		return binary, nil
 	}
 	if err := os.MkdirAll(r.dir, 0o755); err != nil {
@@ -157,7 +174,10 @@ func (r *release) ensure(client *http.Client) (string, error) {
 		handle, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err == nil {
 			handle.Close()
-			if _, err := os.Stat(binary); err == nil {
+			if present, err := r.cachedBinary(); err != nil {
+				os.Remove(lock)
+				return "", err
+			} else if present {
 				os.Remove(lock)
 				return binary, nil
 			}
@@ -171,7 +191,9 @@ func (r *release) ensure(client *http.Client) (string, error) {
 		if !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
-		if _, err := os.Stat(binary); err == nil {
+		if present, err := r.cachedBinary(); err != nil {
+			return "", err
+		} else if present {
 			return binary, nil
 		}
 		if info, err := os.Stat(lock); err == nil && time.Since(info.ModTime()) > staleLock {
@@ -186,13 +208,18 @@ func (r *release) ensure(client *http.Client) (string, error) {
 }
 
 func (r *release) install(client *http.Client, binary string) error {
-	sums, err := fetch(client, r.base+"/SHA256SUMS")
-	if err != nil {
-		return err
-	}
-	want, err := checksum(sums, r.archive())
-	if err != nil {
-		return err
+	var want string
+	if r.proof != nil {
+		want = r.proof.archiveSHA256
+	} else {
+		sums, err := fetch(client, r.base+"/SHA256SUMS")
+		if err != nil {
+			return err
+		}
+		want, err = checksum(sums, r.archive())
+		if err != nil {
+			return err
+		}
 	}
 	data, err := fetch(client, r.base+"/"+r.archive())
 	if err != nil {
@@ -200,7 +227,7 @@ func (r *release) install(client *http.Client, binary string) error {
 	}
 	got := sha256.Sum256(data)
 	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("%s: SHA-256 %x does not match SHA256SUMS", r.archive(), got)
+		return fmt.Errorf("%s: SHA-256 %x does not match expected checksum", r.archive(), got)
 	}
 	if err := r.verify(data); err != nil {
 		return err
@@ -213,6 +240,9 @@ func (r *release) install(client *http.Client, binary string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", r.archive(), err)
+	}
+	if r.proof != nil && fmt.Sprintf("%x", sha256.Sum256(contents)) != r.proof.binarySHA256 {
+		return fmt.Errorf("%s: extracted binary does not match reviewed checksum", r.archive())
 	}
 	temp, err := os.CreateTemp(r.dir, ".rshellcheck-*")
 	if err != nil {
@@ -234,7 +264,7 @@ func (r *release) install(client *http.Client, binary string) error {
 	}
 	if err := os.Rename(name, binary); err != nil {
 		os.Remove(name)
-		if _, statErr := os.Stat(binary); statErr == nil {
+		if present, statErr := r.cachedBinary(); statErr == nil && present {
 			return nil
 		}
 		return err
@@ -245,6 +275,9 @@ func (r *release) install(client *http.Client, binary string) error {
 func (r *release) verify(data []byte) error {
 	name := r.archive()
 	if r.gh == "" {
+		if r.proof != nil {
+			return fmt.Errorf("%s: provenance verification requires gh", name)
+		}
 		fmt.Fprintf(r.log, "shellcheck: %s: provenance not verified, gh is not installed\n", name)
 		return nil
 	}
@@ -260,16 +293,30 @@ func (r *release) verify(data []byte) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	command := exec.Command(r.gh, "attestation", "verify", temp.Name(),
+	args := []string{"attestation", "verify", temp.Name(),
 		"--repo", repository,
 		"--signer-workflow", signerWorkflow,
-		"--source-ref", "refs/tags/"+tagPrefix+r.label)
+		"--source-ref", "refs/tags/" + tagPrefix + r.label}
+	if r.proof != nil {
+		proofDir, err := os.MkdirTemp(r.dir, ".provenance-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(proofDir)
+		args, err = offlineArguments(args, proofDir)
+		if err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), verificationWait)
+	defer cancel()
+	command := exec.CommandContext(ctx, r.gh, args...)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		return nil
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == ghAuthRequired {
+	if r.proof == nil && errors.As(err, &exit) && exit.ExitCode() == ghAuthRequired {
 		fmt.Fprintf(r.log, "shellcheck: %s: provenance not verified, gh is not signed in\n", name)
 		return nil
 	}

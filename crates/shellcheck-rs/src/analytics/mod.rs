@@ -13,6 +13,7 @@ pub(crate) mod conditions;
 mod extensions;
 pub(crate) mod flow;
 pub(crate) mod loops;
+pub(crate) mod optional_checks;
 pub(crate) mod quoting;
 pub(crate) mod redirections;
 pub(crate) mod script;
@@ -189,56 +190,18 @@ pub fn analyze(params: &Parameters) -> Out {
     analyze_with(params, &[])
 }
 
-/// `optionalTreeChecks` + `optionalCommandChecks`: checks that run only when
-/// named, by `--enable` or an `enable=` directive. The names are upstream's
-/// `cdName`s, which `--list-optional` prints.
-type Register = fn(&mut Checker);
-const OPTIONAL_CHECKS: &[(&str, Register)] = &[
-    ("quote-safe-variables", |c| {
-        c.node(flow::check_verbose_spacefulness_cfg);
-    }),
-    ("avoid-nullary-conditions", |c| {
-        c.node(conditions::check_nullary_expansion_test);
-    }),
-    ("avoid-negated-conditions", |c| {
-        c.node(conditions::check_unnecessarily_inverted_test);
-    }),
-    ("add-default-case", |c| c.node(loops::check_default_case)),
-    ("require-variable-braces", |c| {
-        c.node(quoting::check_variable_braces);
-    }),
-    ("check-unassigned-uppercase", |c| {
-        c.tree(flow::check_unassigned_references_uppercase);
-    }),
-    ("require-double-brackets", |c| {
-        c.tree(conditions::check_require_double_bracket);
-    }),
-    ("require-double-equals", |c| {
-        c.tree(conditions::check_require_double_equals);
-    }),
-    ("check-set-e-suppressed", |c| {
-        c.tree(flow::check_set_e_suppressed);
-    }),
-    ("check-extra-masked-returns", |c| {
-        c.tree(flow::check_extra_masked_returns);
-    }),
-    ("useless-use-of-cat", |c| c.node(redirections::check_uuoc)),
-    ("deprecate-which", |c| {
-        c.node(crate::checks::commands::coreutils::check_which());
-    }),
-];
-
 /// Run every check, plus the optional ones named in `optional`.
 ///
 /// `mkChecker`'s `optionals`: `"all"` turns on every one, and any other name is
 /// looked up and silently dropped when unknown, as its `mapMaybe` does.
 #[cfg_attr(test, allow(clippy::missing_panics_doc))] // Test-only differential assertion.
+#[must_use]
 pub fn analyze_with(params: &Parameters, optional: &[String]) -> Out {
     let mut c = checker();
     let all = optional.iter().any(|n| n == "all");
-    for (name, register) in OPTIONAL_CHECKS {
-        if all || optional.iter().any(|n| n == name) {
-            register(&mut c);
+    for check in crate::optional_checks() {
+        if all || optional.iter().any(|n| n == check.name) {
+            check.register(&mut c);
         }
     }
     let result = run_checker(params, &c);
@@ -255,9 +218,9 @@ pub fn analyze_with(params: &Parameters, optional: &[String]) -> Out {
             reference.node(check);
         }
         crate::checks::register_all(&mut reference);
-        for (name, register) in OPTIONAL_CHECKS {
-            if all || optional.iter().any(|n| n == name) {
-                register(&mut reference);
+        for check in crate::optional_checks() {
+            if all || optional.iter().any(|n| n == check.name) {
+                check.register(&mut reference);
             }
         }
         assert_eq!(
@@ -275,79 +238,36 @@ mod tests {
     use super::*;
     use crate::test_support::params_for;
 
-    const OPTIONAL_EXAMPLES: &[(&str, &str, &str)] = &[
-        (
-            "quote-safe-variables",
-            "var=hello; echo $var",
-            "var=hello; echo \"$var\"",
-        ),
-        (
-            "avoid-nullary-conditions",
-            "[ \"$var\" ]",
-            "[ -n \"$var\" ]",
-        ),
-        (
-            "avoid-negated-conditions",
-            "[ ! \"$var\" -eq 1 ]",
-            "[ \"$var\" -ne 1 ]",
-        ),
-        (
-            "add-default-case",
-            "case $? in 0) echo 'Success';; esac",
-            "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac",
-        ),
-        (
-            "require-variable-braces",
-            "var=hello; echo $var",
-            "var=hello; echo ${var}",
-        ),
-        (
-            "check-unassigned-uppercase",
-            "echo $VAR",
-            "VAR=hello; echo $VAR",
-        ),
-        (
-            "require-double-brackets",
-            "[ -e /etc/issue ]",
-            "[[ -e /etc/issue ]]",
-        ),
-        (
-            "require-double-equals",
-            "[[ \"$x\" = \"$y\" ]]",
-            "[[ \"$x\" == \"$y\" ]]",
-        ),
-        (
-            "check-set-e-suppressed",
-            "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
-            "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
-        ),
-        (
-            "check-extra-masked-returns",
-            "rm -r \"$(get_chroot_dir)/home\"",
-            "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
-        ),
-        ("useless-use-of-cat", "cat foo | grep bar", "grep bar foo"),
-    ];
-
     fn optional_emits(name: &str, script: &str) -> bool {
-        let Some((_, register)) = OPTIONAL_CHECKS.iter().find(|(n, _)| *n == name) else {
+        let Some(check) = crate::optional_checks()
+            .iter()
+            .find(|check| check.name == name)
+        else {
             panic!("{name} is not an optional check");
         };
         let mut c = Checker::new();
-        register(&mut c);
+        check.register(&mut c);
         !run_checker(&params_for(script), &c).is_empty()
     }
 
     #[test]
     fn prop_verifyOptionalExamples() {
-        let tree_checks = OPTIONAL_CHECKS
-            .iter()
-            .filter(|(name, _)| *name != "deprecate-which")
-            .count();
-        assert_eq!(OPTIONAL_EXAMPLES.len(), tree_checks);
-        for (name, positive, negative) in OPTIONAL_EXAMPLES {
-            assert!(optional_emits(name, positive), "{name}: {positive}");
-            assert!(!optional_emits(name, negative), "{name}: {negative}");
+        for check in crate::optional_checks() {
+            if check.clarifies_parse_errors() {
+                continue;
+            }
+            assert!(
+                optional_emits(check.name, check.example),
+                "{}: {}",
+                check.name,
+                check.example
+            );
+            assert!(
+                !optional_emits(check.name, check.fix),
+                "{}: {}",
+                check.name,
+                check.fix
+            );
         }
     }
 }

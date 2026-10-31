@@ -142,7 +142,7 @@ func TestWrapperRevisionsShareTheirRelease(t *testing.T) {
 }
 
 func TestResolveRejectsUntaggedBuildsAndUnknownPlatforms(t *testing.T) {
-	for _, version := range []string{"", "(devel)", "v0.0.0-20261013094512-67f912e61b5a", "v0.11.0+dirty", "0.11.0"} {
+	for _, version := range []string{"", "(devel)", "v0.11.0+dirty", "0.11.0"} {
 		if _, err := resolve(version, "linux", "amd64", "b", "c"); err == nil {
 			t.Fatalf("%q resolved", version)
 		}
@@ -240,8 +240,18 @@ func sumsFor(archive string, data []byte) []byte {
 	return fmt.Appendf(nil, "%x  other.tar.gz\n%x  %s\n", sha256.Sum256([]byte("other")), sum, archive)
 }
 
+// Synthetic archives exercise the existing online path for releases without
+// embedded evidence. Reviewed real archives have separate verification tests.
+func fixtureRelease(version, goos, goarch, base, cache string) (*release, error) {
+	rel, err := resolve(version, goos, goarch, base, cache)
+	if err == nil {
+		rel.proof = nil
+	}
+	return rel, err
+}
+
 func TestEnsureDownloadsVerifiesAndCaches(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	var log bytes.Buffer
 	rel.log = &log
 	defer func() {
@@ -290,7 +300,7 @@ func TestEnsureDownloadsVerifiesAndCaches(t *testing.T) {
 
 func ghRelease(t *testing.T, mode string) (*release, *fakeRelease, string) {
 	t.Helper()
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	archive := tarGz(t, rel.member(), []byte("native"))
 	fake := serve(t, map[string][]byte{
 		"/rshellcheck-v0.11.0/SHA256SUMS":                                          sumsFor(rel.archive(), archive),
@@ -378,7 +388,7 @@ func TestInstallSkipsVerificationWhenGhIsSignedOut(t *testing.T) {
 }
 
 func TestEnsureUnpacksZipReleases(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "windows", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "windows", "amd64", "", t.TempDir())
 	payload := []byte("MZ fake")
 	archive := zipped(t, rel.member(), payload)
 	fake := serve(t, map[string][]byte{
@@ -400,7 +410,7 @@ func TestEnsureUnpacksZipReleases(t *testing.T) {
 }
 
 func TestEnsureRejectsAChecksumMismatch(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	archive := tarGz(t, rel.member(), []byte("real"))
 	fake := serve(t, map[string][]byte{
 		"/rshellcheck-v0.11.0/SHA256SUMS":                                          sumsFor(rel.archive(), []byte("something else")),
@@ -408,7 +418,7 @@ func TestEnsureRejectsAChecksumMismatch(t *testing.T) {
 	})
 	rel.base = fake.server.URL + "/rshellcheck-v0.11.0"
 	_, err := rel.ensure(fake.server.Client())
-	if err == nil || !strings.Contains(err.Error(), "does not match SHA256SUMS") {
+	if err == nil || !strings.Contains(err.Error(), "does not match expected checksum") {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(rel.binary()); !os.IsNotExist(err) {
@@ -420,7 +430,7 @@ func TestEnsureRejectsAChecksumMismatch(t *testing.T) {
 }
 
 func TestEnsureRejectsAMissingChecksumEntryBeforeDownloading(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	fake := serve(t, map[string][]byte{
 		"/rshellcheck-v0.11.0/SHA256SUMS": sumsFor("rshellcheck-0.11.0-other.tar.gz", []byte("x")),
 	})
@@ -435,7 +445,7 @@ func TestEnsureRejectsAMissingChecksumEntryBeforeDownloading(t *testing.T) {
 }
 
 func TestEnsureRejectsAnArchiveWithoutTheBinary(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	archive := tarGz(t, "rshellcheck-0.11.0-x86_64-unknown-linux-musl/README.md", []byte("docs"))
 	fake := serve(t, map[string][]byte{
 		"/rshellcheck-v0.11.0/SHA256SUMS":                                          sumsFor(rel.archive(), archive),
@@ -449,7 +459,7 @@ func TestEnsureRejectsAnArchiveWithoutTheBinary(t *testing.T) {
 }
 
 func TestEnsureWaitsForAnotherInstaller(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	fake := serve(t, map[string][]byte{})
 	rel.base = fake.server.URL + "/rshellcheck-v0.11.0"
 	if err := os.MkdirAll(rel.dir, 0o755); err != nil {
@@ -478,7 +488,7 @@ func TestEnsureWaitsForAnotherInstaller(t *testing.T) {
 }
 
 func TestEnsureBreaksAStaleLock(t *testing.T) {
-	rel, _ := resolve("v0.11.0", "linux", "amd64", "", t.TempDir())
+	rel, _ := fixtureRelease("v0.11.0", "linux", "amd64", "", t.TempDir())
 	payload := []byte("fresh")
 	archive := tarGz(t, rel.member(), payload)
 	fake := serve(t, map[string][]byte{

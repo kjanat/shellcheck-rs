@@ -2,7 +2,8 @@
 //! and exit codes, against output captured from the oracle (v0.11.0).
 //!
 //! Expected output names the fixture's root as `{T}`, its checkstyle escape as
-//! `{TX}`, and the first 15 characters of it as `{T15}`.
+//! `{TX}`, message-escaped paths as `{TM}`/`{TMX}`, and the first 15
+//! characters of the message-escaped root as `{T15}`.
 
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -72,8 +73,9 @@ const X_2086: &str = r#"{"file":"X","line":2,"endLine":2,"column":6,"endColumn":
 
 /// The json comment for an SC1134 at `line:column` of `file`.
 fn sc1134(file: &str, line: u32, column: u32) -> String {
+    let message_file = file.replace("{T}", "{TM}");
     format!(
-        r#"{{"file":"{file}","line":{line},"endLine":{line},"column":{column},"endColumn":{column},"level":"error","code":1134,"message":"Failed to process {file}, line {line}: Expected '=' after directive key. Fix any mentioned problems and try again.","fix":null}}"#
+        r#"{{"file":"{file}","line":{line},"endLine":{line},"column":{column},"endColumn":{column},"level":"error","code":1134,"message":"Failed to process {message_file}, line {line}: Expected '=' after directive key. Fix any mentioned problems and try again.","fix":null}}"#
     )
 }
 
@@ -135,13 +137,44 @@ impl Fixture {
         std::fs::write(self.0.join(path), contents)
     }
 
-    fn expand(&self, template: &str) -> String {
-        let root = self.root();
-        let first: String = root.chars().take(15).collect();
-        template
-            .replace("{T15}", &first)
-            .replace("{TX}", &checkstyle_escape(&root))
-            .replace("{T}", &root)
+    fn expand(&self, template: &str, json: bool) -> String {
+        let first: String = self.root().replace('\\', "\\\\").chars().take(15).collect();
+        let mut expanded = template.replace("{T15}", &first);
+        for (token, message, xml) in [
+            ("{T}", false, false),
+            ("{TM}", true, false),
+            ("{TX}", false, true),
+            ("{TMX}", true, true),
+        ] {
+            let mut pieces = expanded.split(token);
+            let mut result = pieces.next().unwrap_or_default().to_string();
+            for piece in pieces {
+                let end = piece
+                    .find(|c: char| {
+                        !c.is_ascii_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_')
+                    })
+                    .unwrap_or(piece.len());
+                let (suffix, rest) = piece.split_at(end);
+                let mut path = self
+                    .0
+                    .join(suffix.trim_start_matches('/'))
+                    .display()
+                    .to_string();
+                if message {
+                    path = path.replace('\\', "\\\\");
+                }
+                if xml {
+                    path = checkstyle_escape(&path);
+                } else if json {
+                    let encoded = serde_json::Value::String(path).to_string();
+                    path = encoded[1..encoded.len() - 1].to_string();
+                }
+                result.push_str(&path);
+                result.push_str(rest);
+            }
+            expanded = result;
+        }
+        expanded
     }
 
     fn run(&self, args: &[&str]) -> io::Result<Run> {
@@ -188,12 +221,12 @@ impl Fixture {
     fn assert(&self, run: &Run, stdout: &str, stderr: &str, code: i32) {
         assert_eq!(
             run.stdout.trim_end_matches('\n'),
-            self.expand(stdout),
+            self.expand(stdout, stdout.starts_with("{\"") || stdout.starts_with('[')),
             "stdout"
         );
         assert_eq!(
             run.stderr.trim_end_matches('\n'),
-            self.expand(stderr),
+            self.expand(stderr, false),
             "stderr"
         );
         assert_eq!(run.code, code, "exit code");
@@ -217,7 +250,7 @@ fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() -> io::Result
         ("json", format!("[{ec}]"), 4),
         (
             "gcc",
-            "{T}/z/.editorconfig:3:8: error: Failed to process {T}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]".to_string(),
+            "{T}/z/.editorconfig:3:8: error: Failed to process {TM}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]".to_string(),
             4,
         ),
         (
@@ -226,7 +259,7 @@ fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() -> io::Result
                 "\n",
                 "In {T}/z/.editorconfig line 3:\n",
                 "shellcheck.shell=fish\n",
-                "       ^-- SC1134 (error): Failed to process {T}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
+                "       ^-- SC1134 (error): Failed to process {TM}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
                 "\n",
                 "For more information:\n",
                 "  https://www.shellcheck.net/wiki/SC1134 -- Failed to process {T15}...",
@@ -240,7 +273,7 @@ fn an_unknown_shell_is_an_sc1134_in_the_editorconfig_and_exits_4() -> io::Result
                 "<?xml version='1.0' encoding='UTF-8'?>\n",
                 "<checkstyle version='4.3'>\n",
                 "<file name='{TX}/z/.editorconfig' >\n",
-                "<error line='3' column='8' severity='error' message='Failed to process {TX}/z/.editorconfig&#44; line 3&#58; Expected &#39;&#61;&#39; after directive key. Fix any mentioned problems and try again.' source='ShellCheck.SC1134' />\n",
+                "<error line='3' column='8' severity='error' message='Failed to process {TMX}/z/.editorconfig&#44; line 3&#58; Expected &#39;&#61;&#39; after directive key. Fix any mentioned problems and try again.' source='ShellCheck.SC1134' />\n",
                 "</file>\n",
                 "</checkstyle>",
             )
@@ -267,7 +300,7 @@ fn an_invalid_root_rejects_the_editorconfig_and_its_parents() -> io::Result<()> 
         (
             "gcc",
             concat!(
-                "{T}/r/b/.editorconfig:2:8: error: Failed to process {T}/r/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]\n",
+                "{T}/r/b/.editorconfig:2:8: error: Failed to process {TM}/r/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]\n",
                 "r/b/x.sh:2:6: warning: x is referenced but not assigned. [SC2154]\n",
                 "r/b/x.sh:2:6: note: Double quote to prevent globbing and word splitting. [SC2086]",
             )
@@ -280,7 +313,7 @@ fn an_invalid_root_rejects_the_editorconfig_and_its_parents() -> io::Result<()> 
                 "\n",
                 "In {T}/r/b/.editorconfig line 2:\n",
                 "root = maybe\n",
-                "       ^-- SC1134 (error): Failed to process {T}/r/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
+                "       ^-- SC1134 (error): Failed to process {TM}/r/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
                 "\n",
                 "\n",
                 "In r/b/x.sh line 2:\n",
@@ -305,7 +338,7 @@ fn an_invalid_root_rejects_the_editorconfig_and_its_parents() -> io::Result<()> 
                 "<?xml version='1.0' encoding='UTF-8'?>\n",
                 "<checkstyle version='4.3'>\n",
                 "<file name='{TX}/r/b/.editorconfig' >\n",
-                "<error line='2' column='8' severity='error' message='Failed to process {TX}/r/b/.editorconfig&#44; line 2&#58; Expected &#39;&#61;&#39; after directive key. Fix any mentioned problems and try again.' source='ShellCheck.SC1134' />\n",
+                "<error line='2' column='8' severity='error' message='Failed to process {TMX}/r/b/.editorconfig&#44; line 2&#58; Expected &#39;&#61;&#39; after directive key. Fix any mentioned problems and try again.' source='ShellCheck.SC1134' />\n",
                 "</file>\n",
                 "<file name='r/b/x.sh' >\n",
                 "<error line='2' column='6' severity='warning' message='x is referenced but not assigned.' source='ShellCheck.SC2154' />\n",
@@ -345,7 +378,7 @@ fn a_rejected_editorconfig_replaces_the_shellcheckrc() -> io::Result<()> {
         "\n",
         "In {T}/j/.editorconfig line 3:\n",
         "\tshellcheck.shell = fish\n",
-        "       ^-- SC1134 (error): Failed to process {T}/j/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
+        "       ^-- SC1134 (error): Failed to process {TM}/j/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again.\n",
         "\n",
         "\n",
         "In j/x.sh line 2:\n",
@@ -441,6 +474,24 @@ fn the_global_editorconfig_applies_without_exit_4() -> io::Result<()> {
 }
 
 #[test]
+fn relative_xdg_uses_the_native_home_config_directory() -> io::Result<()> {
+    let f = Fixture::new("relative-xdg")?;
+    std::fs::create_dir(f.0.join("home/.config"))?;
+    f.write(
+        "home/.config/editorconfig.ini",
+        "[*.sh]\nshellcheck.disable=SC2086\n",
+    )?;
+    let run = f.run_in(
+        "",
+        &[("XDG_CONFIG_HOME", "xdg".to_string())],
+        None,
+        &["-f", "json1", "g/x.sh"],
+    )?;
+    f.assert(&run, &json1(&[on(X_2154, "g/x.sh")]), "", 1);
+    Ok(())
+}
+
+#[test]
 fn a_failed_input_outranks_exit_4() -> io::Result<()> {
     let f = Fixture::new("twomissing")?;
     let run = f.run(&["-f", "json1", "z/foo", "missing.sh"])?;
@@ -461,7 +512,7 @@ fn a_glob_that_is_not_a_regex_is_an_sc1134_at_its_header_and_exits_4() -> io::Re
     f.assert(
         &run,
         concat!(
-            "{T}/b/.editorconfig:2:8: error: Failed to process {T}/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]\n",
+            "{T}/b/.editorconfig:2:8: error: Failed to process {TM}/b/.editorconfig, line 2: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]\n",
             "b/x.sh:2:6: warning: x is referenced but not assigned. [SC2154]\n",
             "b/x.sh:2:6: note: Double quote to prevent globbing and word splitting. [SC2086]",
         ),
@@ -477,7 +528,7 @@ fn exit_4_outranks_a_clean_input() -> io::Result<()> {
     let run = f.run(&["-f", "gcc", "z/foo", "m/x.sh"])?;
     f.assert(
         &run,
-        "{T}/z/.editorconfig:3:8: error: Failed to process {T}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]",
+        "{T}/z/.editorconfig:3:8: error: Failed to process {TM}/z/.editorconfig, line 3: Expected '=' after directive key. Fix any mentioned problems and try again. [SC1134]",
         "",
         4,
     );

@@ -68,12 +68,12 @@ jobs:
         with: { persist-credentials: false, fetch-depth: 0 }
       - &py
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with: { version: "0.13.0" }
+        with: { version: "0.13.6" }
       - name: Resolve once
         id: plan
         env: { PUBLISH_EXISTING: "${{ inputs.publish_existing }}", GH_TOKEN: "${{ github.token }}" }
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release plan
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with: { toolchain: "${{ steps.plan.outputs.rust }}" }
       - name: Test release tooling
         run: uv run --locked --no-dev --package rshellcheck-release python -m unittest discover -s .github/release -p 'test_*.py' -v
@@ -88,7 +88,7 @@ jobs:
       - &co1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with: { toolchain: "${{ needs.plan.outputs.rust }}" }
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -121,7 +121,7 @@ jobs:
     steps:
       - *co1
       - *py
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ needs.plan.outputs.rust }}
           targets: ${{ matrix.target }}
@@ -178,7 +178,7 @@ jobs:
       - &node26
         uses: &node actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "26" }
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with: { toolchain: "${{ needs.plan.outputs.rust }}", targets: wasm32-unknown-unknown }
       - name: Build portable core
         run: cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown

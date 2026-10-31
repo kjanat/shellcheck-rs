@@ -47,6 +47,7 @@ pub mod tdfa;
 #[cfg(test)]
 mod test_support;
 
+pub use analytics::optional_checks::{OptionalCheck, optional_checks};
 pub use checker::check_script;
 pub use dialect::Dialect;
 
