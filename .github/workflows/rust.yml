@@ -32,8 +32,15 @@ jobs:
           - uses: actions/setup-go@v7
             with: { go-version: "1.27.3" }
           - uses: $/
-      - env: { "ref": "${{ case(env.actionlint_ref != '', env.actionlint_ref, 'go-identity-model') }}" }
-        run: go run "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}" check --tool shellcheck="rshellcheck -x -o all" --experimental
+      - env:
+          ref: "${{ case(env.actionlint_ref != '', env.actionlint_ref, 'go-identity-model') }}"
+          GOBIN: "${{ runner.temp }}/actionlint/bin"
+        run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
+      - run: actionlint plugin install shellcheck -v
+      - run: actionlint check --tool shellcheck="rshellcheck -x -o all" -v
+          --experimental --summary --network-stats
+          --output-format github --output-format github
 
   lint:
     name: "Format, clippy, workflows"
