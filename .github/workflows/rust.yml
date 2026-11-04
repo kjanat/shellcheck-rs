@@ -37,7 +37,7 @@ jobs:
           GOBIN: "${{ runner.temp }}/actionlint/bin"
         run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
           echo "${GOBIN}" >> "${GITHUB_PATH}"
-      - run: actionlint plugin install shellcheck -v
+      - run: actionlint plugin install shellcheck # `-v` INSTALL HAS NO VERBOSE... FFS
       - run: actionlint check --tool shellcheck="rshellcheck -x -o all" -v
           --experimental --summary --network-stats
           --output-format github --output-format github
