@@ -4,7 +4,7 @@
 #:tombi schema.strict = false
 
 extends  = "https://raw.githubusercontent.com/kjanat/kjanat/refs/heads/master/configs/dprint.remote.json"
-excludes = ["shellcheck.1.md", ".github/ISSUE_TEMPLATE/*.md", "validity/matrix.toml", "validity/outcomes.toml", "validity/REPORT.md"]
+excludes = ["shellcheck.1.md", ".github/ISSUE_TEMPLATE/*.md"]
 
 [exec]
 cwd      = "${configDir}"

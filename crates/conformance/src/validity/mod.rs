@@ -10,6 +10,10 @@ mod run;
 pub mod sources;
 pub mod spec;
 
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
+
 use clap::ValueEnum;
 
 pub const SOURCES: &str = "validity/sources.toml";
@@ -61,6 +65,43 @@ pub struct ValidityArgs {
     /// Only these diagnostic codes. Repeatable.
     #[arg(long, help_heading = "Validity")]
     pub code: Vec<i64>,
+}
+
+pub fn formatted(path: &Path, text: &str) -> Result<String, String> {
+    let path = std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(format!("{}: no file name", path.display()));
+    };
+    let mut child = Command::new("npx")
+        .args(["--yes", "@kjanat/fmt", "--stdin"])
+        .arg(name)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("npx @kjanat/fmt: {e}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "npx @kjanat/fmt: no stdin".to_string())?;
+    let output = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || stdin.write_all(text.as_bytes()));
+        let output = child.wait_with_output();
+        let written = writer
+            .join()
+            .map_err(|_| "npx @kjanat/fmt: stdin writer panicked".to_string())?;
+        written.map_err(|e| format!("npx @kjanat/fmt: {e}"))?;
+        output.map_err(|e| format!("npx @kjanat/fmt: {e}"))
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "npx @kjanat/fmt {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("npx @kjanat/fmt: {e}"))
 }
 
 pub fn run(step: Step, args: &ValidityArgs) -> Result<bool, String> {
