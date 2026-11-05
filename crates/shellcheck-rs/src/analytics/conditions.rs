@@ -2184,8 +2184,8 @@ fn inverted_operator(op: &str) -> Option<&'static str> {
 
 /// `checkUnnecessarilyInvertedTest` (optional: `avoid-negated-conditions`).
 pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token, out: &mut Out) {
-    // `! [ .. ]` as a whole pipeline, which is the T_Banged shape.
-    fn banged_condition(t: &Token) -> Option<&Token> {
+    // A negated single-command pipeline, which is the T_Banged shape.
+    fn banged_command(t: &Token) -> Option<&Token> {
         let InnerToken::T_Banged(inner) = &*t.inner else {
             return None;
         };
@@ -2198,10 +2198,7 @@ pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token,
         let InnerToken::T_Redirecting { cmd, .. } = &*only.inner else {
             return None;
         };
-        let InnerToken::T_Condition { token, .. } = &*cmd.inner else {
-            return None;
-        };
-        Some(token)
+        Some(cmd)
     }
 
     let suggest_rewrite = |bang_inside: bool, typ: &ConditionType, op: &str, out: &mut Out| {
@@ -2242,7 +2239,31 @@ pub(super) fn check_unnecessarily_inverted_test(_params: &Parameters, t: &Token,
         }
         return;
     }
-    if let Some(cond) = banged_condition(t) {
+    if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+        && let [_, bang, op, _] = words.as_slice()
+        && is_command(t, "test")
+        && get_literal_string(bang).as_deref() == Some("!")
+    {
+        match get_literal_string(op).as_deref() {
+            Some("-n") => style(out, t.id(), 2236, "Use -z instead of ! -n."),
+            Some("-z") => style(out, t.id(), 2236, "Use -n instead of ! -z."),
+            _ => {}
+        }
+    }
+    let Some(cmd) = banged_command(t) else {
+        return;
+    };
+    if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+        && let [_, op, _] = words.as_slice()
+        && is_command(cmd, "test")
+    {
+        match get_literal_string(op).as_deref() {
+            Some("-n") => style(out, t.id(), 2237, "Use test -z .. instead of ! test -n .."),
+            Some("-z") => style(out, t.id(), 2237, "Use test -n .. instead of ! test -z .."),
+            _ => {}
+        }
+    }
+    if let InnerToken::T_Condition { token: cond, .. } = &*cmd.inner {
         match &*cond.inner {
             InnerToken::TC_Unary { op, .. } => match op.as_str() {
                 "-n" => style(out, t.id(), 2237, "Use [ -z .. ] instead of ! [ -n .. ]."),
@@ -2588,6 +2609,79 @@ mod tests {
             check_unnecessarily_inverted_test,
             "! [[ $var -gt 3 ]]"
         ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest11() {
+        assert!(emits(
+            check_unnecessarily_inverted_test,
+            r#"test ! -n "$1""#
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest12() {
+        assert!(emits(
+            check_unnecessarily_inverted_test,
+            r#"! test -z "$1""#
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest13() {
+        assert!(!emits(
+            check_unnecessarily_inverted_test,
+            r#"test ! -x "$1""#
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest14() {
+        assert!(!emits(check_unnecessarily_inverted_test, r#"test -n "$1""#));
+    }
+
+    #[test]
+    fn prop_checkUnnecessarilyInvertedTest15() {
+        assert!(!emits(
+            check_unnecessarily_inverted_test,
+            r#"! test -x "$1""#
+        ));
+    }
+
+    #[test]
+    fn inverted_test_command_diagnostics() {
+        for (script, code, message) in [
+            (r#"test ! -n "$1""#, 2236, "Use -z instead of ! -n."),
+            (r#"test ! -z "$1""#, 2236, "Use -n instead of ! -z."),
+            (
+                r#"! test -n "$1""#,
+                2237,
+                "Use test -z .. instead of ! test -n ..",
+            ),
+            (
+                r#"! test -z "$1""#,
+                2237,
+                "Use test -n .. instead of ! test -z ..",
+            ),
+        ] {
+            let script =
+                format!("#!/bin/sh\n# shellcheck enable=avoid-negated-conditions\n{script}");
+            assert_eq!(message_of(&script, code), message);
+        }
+        for script in [
+            r#"test ! -n "$1" extra"#,
+            r#"! test -n "$1" extra"#,
+            r#"other ! -n "$1""#,
+            r#"! other -n "$1""#,
+            r#"test ! "$op" "$1""#,
+            r#"! test "$op" "$1""#,
+            r#"! test -n "$1" | cat"#,
+        ] {
+            assert!(
+                !emits(check_unnecessarily_inverted_test, script),
+                "{script}"
+            );
+        }
     }
 
     #[test]

@@ -20,8 +20,11 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out: &mut Out) {
-    // findSubshelled flow [("oops",[])] Map.empty
-    let mut scopes: Vec<(String, Vec<(Token, String)>)> = vec![("oops".to_string(), Vec::new())];
+    enum SubshellCheckScope {
+        Subshell(String),
+        Function(HashMap<String, VarState>),
+    }
+    let mut scopes = vec![(SubshellCheckScope::Subshell("oops".to_string()), Vec::new())];
     let mut dead: HashMap<String, VarState> = HashMap::new();
 
     for sd in &params.variable_flow {
@@ -35,7 +38,10 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
                 }
             }
             StackData::Reference(_base, read_token, name) => {
+                let assigned_here = matches!(&*read_token.inner,
+                    InnerToken::T_Assignment { mode: AssignmentMode::Assign, var, .. } if var == name);
                 if !subshell_should_ignore(name)
+                    && !assigned_here
                     && let Some(VarState::Dead(write_token, reason)) = dead.get(name).cloned()
                 {
                     info(
@@ -55,7 +61,13 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
                 }
             }
             StackData::StackScope(Scope::SubshellScope(reason)) => {
-                scopes.push((reason.clone(), Vec::new()));
+                scopes.push((SubshellCheckScope::Subshell(reason.clone()), Vec::new()));
+            }
+            StackData::StackScope(Scope::FunctionScope) => {
+                scopes.push((
+                    SubshellCheckScope::Function(std::mem::take(&mut dead)),
+                    Vec::new(),
+                ));
             }
             StackData::StackScope(Scope::NoneScope) => {}
             StackData::StackScopeEnd => {
@@ -63,9 +75,18 @@ pub(super) fn check_subshell_assignment(params: &Parameters, _root: &Token, out:
                 // folded from its head, so the *first* assignment is inserted
                 // last and is the one the map keeps: `for((i=0;;i++))` names
                 // the `i=0`, not the `i++`.
-                if let Some((reason, scope)) = scopes.pop() {
-                    for (token, var) in scope.into_iter().rev() {
-                        dead.insert(var, VarState::Dead(token, reason.clone()));
+                if let Some((kind, scope)) = scopes.pop() {
+                    match kind {
+                        SubshellCheckScope::Subshell(reason) => {
+                            for (token, var) in scope.into_iter().rev() {
+                                dead.insert(var, VarState::Dead(token, reason.clone()));
+                            }
+                        }
+                        SubshellCheckScope::Function(outer) => {
+                            for (name, state) in outer {
+                                dead.entry(name).or_insert(state);
+                            }
+                        }
                     }
                 }
             }
@@ -1098,6 +1119,110 @@ mod tests {
         assert!(!tree_emits(
             check_array_without_index,
             "#!/bin/sh\nPIPESTATUS=foo"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck26() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( a=1; ); f() { echo $a; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck27() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/usr/bin/env bats\n@test 'foo' { run true; [ \"$status\" -eq 0 ]; }\nf() { run true; [ \"$status\" -eq 0 ]; }\n@test 'bar' { f; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck28() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "f() { ( a=1; ); }; echo $a"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck29() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "f() { ( a=1; ); echo $a; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck30() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( f() { a=1; }; ); echo $a"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck31() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/usr/bin/env bats\n@test 'foo' { export a=1; }\n@test 'bar' { export a=2; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck32() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "( a=1; ); declare -x a=2; echo $a"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck33() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "( a=1; ); export a+=2"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck34() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "f() { cmd | while read x; do n=1; done; }; f; echo $n"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck35() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/usr/bin/env bats\n@test 'foo' { f() { a=1; }; }\n@test 'bar' { f; echo $a; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck40() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/usr/bin/env bats\n@test 'foo' { ( run true; ) & run true; echo $status; }"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck41() {
+        assert!(tree_emits(
+            check_subshell_assignment,
+            "( run true; ); echo $status"
+        ));
+    }
+
+    #[test]
+    fn prop_subshellAssignmentCheck42() {
+        assert!(!tree_emits(
+            check_subshell_assignment,
+            "#!/usr/bin/env bats\n@test 'foo' { run true | cat; }\n@test 'bar' { true; }"
         ));
     }
 

@@ -326,16 +326,28 @@ pub fn usage() -> String {
 
 /// Renders the `--list-optional` catalog matching upstream `printOptional`.
 ///
-/// Outputs four `key: value` lines (`name`, `desc`, `example`, `fix`) per check,
+/// Outputs six `key: value` lines (`name`, `id`, `wiki`, `desc`, `example`, `fix`) per check,
 /// separated by blank lines (`newLinesBetween`), including a trailing blank line.
 #[must_use]
 pub fn list_optional_text() -> String {
     let mut s = String::new();
     for check in optional_checks() {
+        let ids = check
+            .codes
+            .iter()
+            .map(|code| format!("SC{code}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let wiki = check
+            .codes
+            .iter()
+            .map(|code| format!("{}SC{code}", crate::formatter::tty::WIKI_LINK))
+            .collect::<Vec<_>>()
+            .join(", ");
         let _ = writeln!(
             s,
-            "name:    {}\ndesc:    {}\nexample: {}\nfix:     {}\n",
-            check.name, check.description, check.example, check.fix
+            "name:    {}\nid:      {}\nwiki:    {}\ndesc:    {}\nexample: {}\nfix:     {}\n",
+            check.name, ids, wiki, check.description, check.example, check.fix
         );
     }
     s
@@ -1026,6 +1038,60 @@ mod tests {
     #[test]
     fn list_optional_has_upstream_and_extension_checks() {
         assert_eq!(list_optional_text().matches("name:").count(), 13);
+    }
+
+    #[test]
+    fn list_optional_includes_ids_and_wiki_links() {
+        let text = list_optional_text();
+        assert!(text.ends_with("\n\n"));
+        let blocks: Vec<_> = text.trim_end_matches('\n').split("\n\n").collect();
+        for block in &blocks {
+            let keys: Vec<_> = block
+                .lines()
+                .map(|line| {
+                    line.split_once(':')
+                        .unwrap_or_else(|| panic!("missing field separator: {line}"))
+                        .0
+                })
+                .collect();
+            assert_eq!(keys, ["name", "id", "wiki", "desc", "example", "fix"]);
+        }
+        let block = |name: &str| {
+            *blocks
+                .iter()
+                .find(|block| block.starts_with(&format!("name:    {name}\n")))
+                .unwrap_or_else(|| panic!("missing check: {name}"))
+        };
+        assert_eq!(
+            block("deprecate-which"),
+            concat!(
+                "name:    deprecate-which\n",
+                "id:      SC2230\n",
+                "wiki:    https://www.shellcheck.net/wiki/SC2230\n",
+                "desc:    Suggest 'command -v' instead of 'which'\n",
+                "example: which javac\n",
+                "fix:     command -v javac",
+            )
+        );
+        assert_eq!(
+            block("avoid-nullary-conditions"),
+            concat!(
+                "name:    avoid-nullary-conditions\n",
+                "id:      SC2243, SC2244\n",
+                "wiki:    https://www.shellcheck.net/wiki/SC2243, https://www.shellcheck.net/wiki/SC2244\n",
+                "desc:    Suggest explicitly using -n in `[ $var ]`\n",
+                "example: [ \"$var\" ] && [ \"$(cmd)\" ]\n",
+                "fix:     [ -n \"$var\" ] && [ -n \"$(cmd)\" ]",
+            )
+        );
+        assert!(block("check-set-e-suppressed").contains(concat!(
+            "id:      SC2310, SC2311\n",
+            "wiki:    https://www.shellcheck.net/wiki/SC2310, https://www.shellcheck.net/wiki/SC2311\n",
+        )));
+        assert!(
+            block("clarify-parse-errors")
+                .starts_with("name:    clarify-parse-errors\nid:      \nwiki:    \n")
+        );
     }
 
     fn run(a: &[&str]) -> RunConfig {

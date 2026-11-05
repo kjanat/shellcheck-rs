@@ -662,6 +662,18 @@ fn important_paths() -> Vec<String> {
         "/boot",
         "/lib64",
         "/usr/bin",
+        "/opt",
+        "/proc",
+        "/root",
+        "/run",
+        "/sbin",
+        "/srv",
+        "/sys",
+        "/usr/include",
+        "/usr/lib",
+        "/usr/libexec",
+        "/usr/lib64",
+        "/usr/sbin",
     ];
     let suffixes = ["", "/", "/*", "/*/*"];
     let mut out = vec![];
@@ -720,7 +732,10 @@ fn get_potential_path(token: &Token) -> Option<String> {
 }
 
 fn check_rm_word(token: &Token, important: &[String], out: &mut Out) {
-    match get_literal_string(token) {
+    match get_literal_string_ext(token, &|inner| match inner {
+        InnerToken::T_Glob(pattern) => Some(pattern.clone()),
+        _ => None,
+    }) {
         Some(s) => {
             if important.iter().any(|p| p == &fix_path(&s)) {
                 warn(
@@ -2039,6 +2054,37 @@ mod tests {
     #[test]
     fn prop_checkCatastrophicRmB() {
         assert!(emits(check_catastrophic_rm(), "rm -rf \"$STEAMROOT/\"*"));
+    }
+
+    #[test]
+    fn catastrophic_rm_fhs_paths_and_globs() {
+        for directory in [
+            "/boot",
+            "/opt",
+            "/proc",
+            "/root",
+            "/run",
+            "/sbin",
+            "/srv",
+            "/sys",
+            "/usr/include",
+            "/usr/lib",
+            "/usr/libexec",
+            "/usr/lib64",
+            "/usr/sbin",
+        ] {
+            for suffix in ["", "/*", "/*/*"] {
+                assert_eq!(
+                    codes(
+                        check_catastrophic_rm(),
+                        &format!("rm -rf {directory}{suffix}")
+                    ),
+                    vec![2114]
+                );
+            }
+        }
+        assert!(!emits(check_catastrophic_rm(), "rm -rf /opt/my-app"));
+        assert!(!emits(check_catastrophic_rm(), "rm /boot/*"));
     }
 
     #[test]

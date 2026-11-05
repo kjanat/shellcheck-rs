@@ -148,6 +148,8 @@ impl ShellOptions {
 pub enum Scope {
     /// `SubshellScope`: a subshell, named by what created it.
     SubshellScope(String),
+    /// A function body, executed in the caller's scope.
+    FunctionScope,
     /// `NoneScope`.
     NoneScope,
 }
@@ -1417,6 +1419,7 @@ fn lead_type(ctx: &FlowCtx, t: &Token) -> Scope {
         T_Backgrounded(_) => s("backgrounding &"),
         T_Subshell(_) => s("(..) group"),
         T_BatsTest { .. } => s("@bats test"),
+        InnerToken::T_Function { .. } => Scope::FunctionScope,
         T_CoProcBody(_) => s("coproc"),
         T_Redirecting { .. } => {
             if causes_subshell(ctx, t) == Some(true) {
@@ -1853,6 +1856,29 @@ fn get_read_variables(base: &Token, rest: &[Token]) -> Vec<(Token, Token, String
     }
 }
 
+/// Variables populated by Bats' `run`, with options ending at the command or `--`.
+fn get_bats_run_variables(args: &[Token]) -> Vec<(&'static str, DataType)> {
+    use DataSource::{SourceExternal, SourceInteger};
+    use DataType::{DataArray, DataString};
+    let mut variables = vec![
+        ("status", DataString(SourceInteger)),
+        ("output", DataString(SourceExternal)),
+        ("lines", DataArray(SourceExternal)),
+    ];
+    let separate_stderr = args
+        .iter()
+        .map(|arg| ast_lib::get_literal_string(arg).unwrap_or_default())
+        .take_while(|arg| arg == "!" || (arg != "--" && arg.starts_with('-')))
+        .any(|arg| arg == "--separate-stderr");
+    if separate_stderr {
+        variables.extend([
+            ("stderr", DataString(SourceExternal)),
+            ("stderr_lines", DataArray(SourceExternal)),
+        ]);
+    }
+    variables
+}
+
 /// `getModifiedVariableCommand` — `base` is the `T_SimpleCommand`, `words[0]` its name.
 fn get_modified_variable_command(
     base: &Token,
@@ -1869,6 +1895,10 @@ fn get_modified_variable_command(
     let result: Vec<(Token, Token, String, DataType)> = match x {
         "builtin" => return get_modified_variable_command(base, rest),
         "read" => get_read_variables(base, rest),
+        "run" => get_bats_run_variables(rest)
+            .into_iter()
+            .map(|(name, value)| (base.clone(), base.clone(), name.to_string(), value))
+            .collect(),
         "getopts" => {
             if rest.len() >= 2 {
                 get_literal_c(base, &rest[1]).into_iter().collect()
@@ -1962,7 +1992,7 @@ fn special_references(name: &str, base: &Token, word: &Token) -> Vec<(Token, Tok
 
 fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, String)> {
     use InnerToken::{
-        T_Assignment, T_BatsTest, T_DollarBraced, T_FdRedirect, TA_Variable, TC_Binary, TC_Unary,
+        T_Assignment, T_DollarBraced, T_FdRedirect, TA_Variable, TC_Binary, TC_Unary,
     };
     match &*t.inner {
         T_DollarBraced { op, .. } => {
@@ -2008,11 +2038,6 @@ fn get_referenced_variables(ctx: &FlowCtx, t: &Token) -> Vec<(Token, Token, Stri
                 vec![]
             }
         }
-        T_BatsTest { .. } => vec![
-            (t.clone(), t.clone(), "lines".into()),
-            (t.clone(), t.clone(), "status".into()),
-            (t.clone(), t.clone(), "output".into()),
-        ],
         T_FdRedirect { fd, target } if fd.starts_with('{') => {
             if is_closing_file_op(target) {
                 let var: String = fd[1..].chars().take_while(|c| *c != '}').collect();
@@ -2406,6 +2431,109 @@ mod tests {
     use super::{determine_shell, get_variables_from_literal};
     use crate::dialect::Dialect;
     use crate::interface::Shell;
+
+    #[test]
+    fn bats_run_variable_flow() {
+        use super::{DataSource, DataType, StackData};
+        for (command, stderr) in [
+            ("run true", false),
+            ("run -1 --separate-stderr false", true),
+            ("run ! --separate-stderr false", true),
+            ("run -- --separate-stderr", false),
+            ("run true --separate-stderr", false),
+            ("run $opts --separate-stderr true", false),
+        ] {
+            let params = crate::test_support::params_for(command);
+            let assignments: Vec<_> = params
+                .variable_flow
+                .iter()
+                .filter_map(|event| {
+                    if let StackData::Assignment(_, _, name, value) = event {
+                        Some((name.as_str(), value))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(assignments.len(), if stderr { 5 } else { 3 }, "{command}");
+            assert!(matches!(
+                assignments[0],
+                ("status", DataType::DataString(DataSource::SourceInteger))
+            ));
+            assert!(matches!(
+                assignments[1],
+                ("output", DataType::DataString(DataSource::SourceExternal))
+            ));
+            assert!(matches!(
+                assignments[2],
+                ("lines", DataType::DataArray(DataSource::SourceExternal))
+            ));
+            if stderr {
+                assert!(matches!(
+                    assignments[3],
+                    ("stderr", DataType::DataString(DataSource::SourceExternal))
+                ));
+                assert!(matches!(
+                    assignments[4],
+                    (
+                        "stderr_lines",
+                        DataType::DataArray(DataSource::SourceExternal)
+                    )
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn bats_run_unused_assignments() {
+        for (script, expected) in [
+            ("run --separate-stderr true", false),
+            ("#!/usr/bin/env bats\n@test 'foo' { true; }", false),
+            ("run=1", true),
+            ("run foo bar", false),
+            ("#!/usr/bin/env bats\n@test 'foo' { output=$(true); }", true),
+        ] {
+            let result = crate::check_script(&crate::interface::CheckSpec {
+                script: script.to_string(),
+                ..crate::interface::CheckSpec::default()
+            });
+            assert_eq!(
+                result.comments.iter().any(|c| c.comment.code == 2034),
+                expected,
+                "{script}"
+            );
+        }
+    }
+
+    #[test]
+    fn bats_run_unassigned_references() {
+        for (script, expected) in [
+            (
+                r#"f() { run true; echo "$status $output ${lines[0]}"; }"#,
+                false,
+            ),
+            (
+                "#!/usr/bin/env bats\n@test 'foo' { run_wrapper; echo \"$status $stderr\"; }",
+                false,
+            ),
+            ("f() { run true; echo $stderr; }", true),
+            (
+                r#"f() { run -1 --separate-stderr false; echo "$stderr ${stderr_lines[0]}"; }"#,
+                false,
+            ),
+            ("echo $stderr", true),
+        ] {
+            let result = crate::check_script(&crate::interface::CheckSpec {
+                script: script.to_string(),
+                ..crate::interface::CheckSpec::default()
+            });
+            assert_eq!(
+                result.comments.iter().any(|c| c.comment.code == 2154),
+                expected,
+                "{script}"
+            );
+        }
+    }
 
     #[test]
     fn filtered_and_generic_checks_keep_order_after_merge() {
