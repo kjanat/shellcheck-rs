@@ -46,8 +46,7 @@ uv_venv_auto = "source"
 [tasks]
 [tasks.format]
 alias = ["f", "fmt"]
-tools = { "github:tombi-toml/tombi" = { prefix = "1.8" } }
-run   = "dprint fmt"
+run   = "kprint fmt"
 
 # --- Refactor safety net -----------------------------------------------------
 # The oracle answers "does the port agree with ShellCheck?". These three answer
