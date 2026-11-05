@@ -109,12 +109,14 @@ jobs:
 
       - name: Build image
         if: github.event_name == 'pull_request'
-        run: cargo validity build --cell "${{ matrix.cell }}"
+        env: &cell { cell: "${{ matrix.cell }}" }
+        run: cargo validity build --cell "${cell}"
 
       - name: Build and push image
         id: push
         if: github.event_name != 'pull_request'
-        run: cargo validity build --push --cell "${{ matrix.cell }}"
+        env: *cell
+        run: cargo validity build --push --cell "${cell}"
 
       - name: Attest build provenance
         if: github.event_name != 'pull_request'

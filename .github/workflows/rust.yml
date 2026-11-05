@@ -24,10 +24,24 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
+    env:
+      ${{ insert }}: ${{ fromJsOn(vars.ACTIONLINT) }}
     steps:
-      - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - run: docker run --rm --pull always -qv "${GITHUB_WORKSPACE:-$PWD}:/w"
-          ghcr.io/kjanat/actionlint:nightly -v
+      - parallel:
+          - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+          - uses: actions/setup-go@v7
+            with: { go-version: "1.27.3" }
+          - uses: $/
+      - env:
+          ref: "${{ case(env.actionlint_ref != '', env.actionlint_ref, 'go-identity-model') }}"
+          GOBIN: "${{ runner.temp }}/actionlint/bin"
+        run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
+      - run: actionlint plugin install shellcheck # `-v` INSTALL HAS NO VERBOSE... FFS
+        if: false # ignore[if-cond]
+      - run: actionlint check -v --network-stats
+          --experimental -o github -o pretty --summary
+          --no-tool shellcheck --no-tool ruff
 
   lint:
     name: "Format, clippy, workflows"
