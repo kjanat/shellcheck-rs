@@ -31,8 +31,11 @@ pub(super) fn check_unused_assignments(params: &Parameters, _root: &Token, out: 
     // assignments: Map.fromList (last write per name), only real variable names.
     let mut assignments: BTreeMap<String, Token> = BTreeMap::new();
     for sd in flow {
-        if let StackData::Assignment(_, token, name, _) = sd
+        if let StackData::Assignment(base, token, name, _) = sd
             && crate::cfg::is_variable_name(name)
+            && !matches!(&*base.inner, InnerToken::T_BatsTest { .. })
+            && !matches!(&*base.inner, InnerToken::T_SimpleCommand { words, .. }
+                if words.first().and_then(crate::ast_lib::get_literal_string).as_deref() == Some("run"))
         {
             assignments.insert(name.clone(), token.clone());
         }
@@ -197,8 +200,8 @@ fn is_checked_elsewhere(params: &Parameters, t: &Token) -> bool {
     })
 }
 
-/// `isMaskDeliberate`: a trailing `|| true` / `|| :` says the status is ignored
-/// on purpose.
+/// `isMaskDeliberate`: a trailing `|| true`, `|| :`, or `|| echo` deliberately
+/// handles the return value.
 fn is_mask_deliberate(params: &Parameters, t: &Token) -> bool {
     let mut path = get_path(params, t);
     path.pop(); // `NE.init`: the root is not one of its own ancestors here.
@@ -215,7 +218,10 @@ fn is_mask_deliberate(params: &Parameters, t: &Token) -> bool {
         let InnerToken::T_Redirecting { cmd, .. } = &*only.inner else {
             return false;
         };
-        matches!(get_command_basename(cmd).as_deref(), Some("true" | ":"))
+        matches!(
+            get_command_basename(cmd).as_deref(),
+            Some("true" | ":" | "echo")
+        )
     })
 }
 
@@ -1023,6 +1029,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn prop_checkExtraMaskedReturns39() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            r#"eval "$(false || echo exit 42)""#
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns40() {
+        assert!(!tree_emits(
+            check_extra_masked_returns,
+            r#"eval "$(git rev-parse --parseopt -- "$@" || echo exit $?)""#
+        ));
+    }
+
+    #[test]
+    fn prop_checkExtraMaskedReturns41() {
+        assert!(tree_emits(
+            check_extra_masked_returns,
+            r#"true "$(false || cat)""#
+        ));
+    }
+
     fn spaceful_verbose(p: &Parameters, t: &Token, out: &mut Out) {
         check_spacefulness_cfg_impl(false, p, t, out);
     }
@@ -1459,6 +1489,40 @@ mod tests {
         for script in ["foo=bar", "set -- -a; foo=bar", "echo set -a; foo=bar"] {
             assert!(tree_emits(check_unused_assignments, script), "{script}");
         }
+    }
+
+    #[test]
+    fn prop_checkUnused53() {
+        assert!(!tree_emits(
+            check_unused_assignments,
+            "run --separate-stderr true"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnused54() {
+        assert!(!tree_emits(
+            check_unused_assignments,
+            "#!/usr/bin/env bats\n@test 'foo' { true; }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUnused55() {
+        assert!(tree_emits(check_unused_assignments, "run=1"));
+    }
+
+    #[test]
+    fn prop_checkUnused56() {
+        assert!(!tree_emits(check_unused_assignments, "run foo bar"));
+    }
+
+    #[test]
+    fn prop_checkUnused57() {
+        assert!(tree_emits(
+            check_unused_assignments,
+            "#!/usr/bin/env bats\n@test 'foo' { output=$(true); }"
+        ));
     }
 
     #[test]

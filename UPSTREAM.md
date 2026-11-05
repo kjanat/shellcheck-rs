@@ -1,11 +1,49 @@
 # Upstream source baseline
 
-Upstream changes are integrated through
-[`c36c85a05ed3`](https://github.com/koalaman/shellcheck/commit/c36c85a05ed3a1560e31bf7d89db040f84ef4556)
-(2026-10-14). This source baseline is newer than the published ShellCheck 0.11.0
+The upstream source baseline and oracle are pinned to
+[`919d37c4d77a`](https://github.com/koalaman/shellcheck/commit/919d37c4d77a7ce16cfc76ebdd781dd6e8081fa5)
+(2026-10-26). This source baseline is newer than the published ShellCheck 0.11.0
 binary; use the pinned upstream oracle for port-conformance comparisons.
 rshellcheck's own version number is independent of the upstream version;
 `rshellcheck --version` prints both, the upstream one from `tools/oracle.json`.
+
+The November 2 sync reviews [all changes after `c36c85a05ed3`](https://github.com/koalaman/shellcheck/compare/c36c85a05ed3a1560e31bf7d89db040f84ef4556...919d37c4d77a7ce16cfc76ebdd781dd6e8081fa5):
+24 ordinary commits and 21 merge commits. The behavioral changes listed below
+are implemented in Rust, including Bats variable-flow and control-flow handling.
+The frozen snapshot was regenerated against the unchanged 4,067 inputs: four
+rows changed, and the subsequent snapshot check reported zero drift. The verified
+oracle gate covers 2,102 upstream properties and 24 optional-check examples:
+2,125 agree, none diverge, and one has the sanctioned added-dialect difference.
+A focused comparison of all 44 newly added properties and the 24 optional-check
+examples also passes without deviations. The full property extractor skips 292
+properties without a replayable script; these results do not establish parity
+for arbitrary inputs.
+
+| Commit                                                                                                                                                                                                     | Upstream behavioral change                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [c868fcbc](https://github.com/koalaman/shellcheck/commit/c868fcbc)                                                                                                                                         | SC2030/SC2031: analyze function bodies independently of preceding subshell assignments and do not attribute function assignments to their enclosing definition-time subshell. Preserve effects of subshells inside functions. Plain `export`/`declare` assignments do not read the previous value; append assignments still do.                              |
+| [612e8a9f](https://github.com/koalaman/shellcheck/commit/612e8a9f)                                                                                                                                         | SC2218: Bats tests may call functions defined later outside tests, including in setup helpers. Calls at top level or before a definition within the same test still warn.                                                                                                                                                                                    |
+| [2af55458](https://github.com/koalaman/shellcheck/commit/2af55458)                                                                                                                                         | SC2016: recognize single-quoted shell scripts passed through wrappers to a shell with a `-c` option, including combined flags and shell paths. Only the script argument is exempt.                                                                                                                                                                           |
+| [2be06cc7](https://github.com/koalaman/shellcheck/commit/2be06cc7)                                                                                                                                         | Bats `run` sets `status`, `output`, and `lines`, plus `stderr` and `stderr_lines` with `--separate-stderr`. These implicit assignments and those attributed to `@test` are exempt from SC2034; explicit assignments remain checked. Remove globally predefined stderr variables and pretend Bats references, affecting SC2154 and subshell analysis as well. |
+| [7a43730f](https://github.com/koalaman/shellcheck/commit/7a43730f)                                                                                                                                         | SC2312: treat `command \|\| echo ...` as deliberate return-status handling, including inside command substitutions passed to `eval`.                                                                                                                                                                                                                         |
+| [f4d10519](https://github.com/koalaman/shellcheck/commit/f4d10519), [9ac74744](https://github.com/koalaman/shellcheck/commit/9ac74744), [32442c3a](https://github.com/koalaman/shellcheck/commit/32442c3a) | Optional-check descriptions gain diagnostic IDs; `--list-optional` prints `id:` and `wiki:` fields. Examples cover both SC2310/SC2311 and SC2243/SC2244; upstream tests verify the exact advertised codes.                                                                                                                                                   |
+| [83ad2576](https://github.com/koalaman/shellcheck/commit/83ad2576)                                                                                                                                         | SC2236/SC2237: diagnose unnecessary `-n`/`-z` negation in `test ! ...` and `! test ...` commands.                                                                                                                                                                                                                                                            |
+| [5f51b960](https://github.com/koalaman/shellcheck/commit/5f51b960), [776ed08f](https://github.com/koalaman/shellcheck/commit/776ed08f)                                                                     | SC2114: expand protected system directories (`/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, and additional `/usr` directories) and recognize glob arguments such as `rm -rf /boot/*`.                                                                                                                                                            |
+
+The remaining 13 ordinary commits are documentation and infrastructure updates:
+
+- Seven manpage commits document `--help`, the default of three wiki links,
+  `--norc` skipping both `.shellcheckrc` and `.editorconfig` and overriding
+  `--rcfile`, half-open disable ranges, the GCC diagnostic suffix, the current
+  bashism-disable range, and a duplicated-word correction. These changes are
+  incorporated into `shellcheck.1.md`.
+- Four README commits add upstream's mise installation instructions and Linux
+  riscv64 binary link, and remove the obsolete Apple Silicon binary caveat.
+  These describe upstream distribution, so they do not replace this port's
+  installation instructions.
+- The two builder Dockerfiles receive a comment typo correction, and distro
+  tests move into a GitHub Actions workflow. These upstream Haskell build
+  changes do not alter the Rust build or release workflow.
 
 The October 15 integration imports the changes after `98deabe1`: one ordinary
 commit and its merge commit.

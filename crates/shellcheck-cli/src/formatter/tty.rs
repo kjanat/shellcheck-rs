@@ -12,7 +12,7 @@ use shellcheck_rs::interface::{PositionedComment, Severity};
 use super::ColorFunc;
 use super::fixer::{apply_fix, fix_mconcat, lines as hs_lines, map_positions, unlines};
 
-const WIKI_LINK: &str = "https://www.shellcheck.net/wiki/";
+pub(crate) const WIKI_LINK: &str = "https://www.shellcheck.net/wiki/";
 const DOCS_LINK: &str = "https://github.com/kjanat/shellcheck-rs/blob/master/docs/diagnostics.md";
 const PORT_CODES: std::ops::RangeInclusive<i64> = 9000..=9999;
 
