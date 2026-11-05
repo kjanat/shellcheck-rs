@@ -13,6 +13,5 @@ jobs:
     cancel-timeout-minutes: 2
     steps:
       - uses: actions/checkout@v7
-      - uses: kjanat/install-dprint@v2
       - uses: kjanat/actions@fmt
       - uses: autofix-ci/action@v1
