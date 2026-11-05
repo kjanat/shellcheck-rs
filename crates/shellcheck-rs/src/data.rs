@@ -143,8 +143,6 @@ pub(crate) const INTERNAL_VARIABLES: &[&str] = &[
     "FLAGS_VERSION",
     "flags_error",
     "flags_return",
-    "stderr",
-    "stderr_lines",
 ];
 
 /// `specialIntegerVariables`.

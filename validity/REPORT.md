@@ -43,7 +43,7 @@ Claim: expanding an array without an index gives only the first element.
 - reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, zsh-sh 5.8.1, zsh-sh 5.9
 - absent: yash 2.59, zsh 5.8.1, zsh 5.9
 - unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `a=' unexpected``
   - busybox 1.30.1: `sh: syntax error: unexpected "("`
   - busybox 1.31.1: `sh: syntax error: unexpected "("`
   - busybox 1.32.1: `sh: syntax error: unexpected "("`
@@ -60,11 +60,11 @@ Claim: expanding an array without an index gives only the first element.
   - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
   - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
   - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `(' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
   - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
-  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `(' unexpected``
+  - posh 0.14.1: ``posh: <stdin>:1: syntax error: `(' unexpected``
   - tcsh 6.24.16: `Badly placed ()'s.`
 
 ## SC2145
@@ -73,7 +73,7 @@ Claim: an array in a string splits into separate arguments after the string.
 
 - reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `a=' unexpected``
   - busybox 1.30.1: `sh: syntax error: unexpected "("`
   - busybox 1.31.1: `sh: syntax error: unexpected "("`
   - busybox 1.32.1: `sh: syntax error: unexpected "("`
@@ -90,11 +90,11 @@ Claim: an array in a string splits into separate arguments after the string.
   - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
   - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
   - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `(' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
   - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
-  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `(' unexpected``
+  - posh 0.14.1: ``posh: <stdin>:1: syntax error: `(' unexpected``
   - tcsh 6.24.16: `Badly placed ()'s.`
 
 ## SC2164
@@ -111,7 +111,7 @@ Claim: an array in [ ] becomes several operands and the test errors.
 
 - reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `a=' unexpected``
   - busybox 1.30.1: `sh: syntax error: unexpected "("`
   - busybox 1.31.1: `sh: syntax error: unexpected "("`
   - busybox 1.32.1: `sh: syntax error: unexpected "("`
@@ -128,11 +128,11 @@ Claim: an array in [ ] becomes several operands and the test errors.
   - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
   - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
   - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `(' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
   - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
-  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `(' unexpected``
+  - posh 0.14.1: ``posh: <stdin>:1: syntax error: `(' unexpected``
   - tcsh 6.24.16: `Badly placed ()'s.`
 
 ## SC2199
@@ -141,7 +141,7 @@ Claim: an array in [[ ]] concatenates instead of matching any element.
 
 - reproduces: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, mksh R59c, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `a=' unexpected``
   - busybox 1.30.1: `sh: syntax error: unexpected "("`
   - busybox 1.31.1: `sh: syntax error: unexpected "("`
   - busybox 1.32.1: `sh: syntax error: unexpected "("`
@@ -158,11 +158,11 @@ Claim: an array in [[ ]] concatenates instead of matching any element.
   - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
   - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
   - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `(' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
   - netbsd-sh 11.0: `sh: 1: Syntax error: Word "x" unexpected (expecting ")")`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
-  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `(' unexpected``
+  - posh 0.14.1: ``posh: <stdin>:1: syntax error: `(' unexpected``
   - tcsh 6.24.16: `Badly placed ()'s.`
 
 ## SC2206
@@ -173,7 +173,7 @@ Claim: an unquoted expansion in an array assignment word-splits.
 - absent: zsh 5.8.1, zsh 5.9
 - differs: yash 2.59
 - unparsable: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, loksh 7.9, netbsd-sh 10.2, netbsd-sh 11.0, oksh 7.9, posh 0.14.1, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `a=' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `a=' unexpected``
   - busybox 1.30.1: `sh: syntax error: unexpected "("`
   - busybox 1.31.1: `sh: syntax error: unexpected "("`
   - busybox 1.32.1: `sh: syntax error: unexpected "("`
@@ -190,11 +190,11 @@ Claim: an unquoted expansion in an array assignment word-splits.
   - dash 0.5.13: `dash: 1: Syntax error: "(" unexpected`
   - freebsd-sh 14.5: `sh: Syntax error: word unexpected (expecting ")")`
   - freebsd-sh 15.1: `sh: Syntax error: word unexpected (expecting ")")`
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `(' unexpected`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `(' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Word "�x=" unexpected (expecting ")")`
   - netbsd-sh 11.0: `sh: 1: Syntax error: Word "�x=" unexpected (expecting ")")`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `(' unexpected`
-  - posh 0.14.1: `posh: <stdin>:1: syntax error: `(' unexpected`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `(' unexpected``
+  - posh 0.14.1: ``posh: <stdin>:1: syntax error: `(' unexpected``
   - tcsh 6.24.16: `Badly placed ()'s.`
   - yash 2.59: `snippet [status 0 stdout "1 1\n" stderr ""] fixed [status 0 stdout "3\n" stderr ""]`
 
@@ -308,9 +308,9 @@ Claim: sh has no =~: the [[ test is a missing command and the else branch runs.
 - reproduces: bosh 2024-03-21, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, netbsd-sh 10.2, netbsd-sh 11.0, posh 0.14.1
 - absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: loksh 7.9, mksh R59c, oksh 7.9, tcsh 6.24.16
-  - loksh 7.9: `loksh: <stdin>[1]: syntax error: `abc' missing expression operator`
+  - loksh 7.9: ``loksh: <stdin>[1]: syntax error: `abc' missing expression operator``
   - mksh R59c: `mksh: <stdin>[1]: syntax error: unexpected operator/operand '=~'`
-  - oksh 7.9: `oksh: <stdin>[1]: syntax error: `abc' missing expression operator`
+  - oksh 7.9: ``oksh: <stdin>[1]: syntax error: `abc' missing expression operator``
   - tcsh 6.24.16: `: No such file or directory.`
 
 ## SC3016
@@ -410,7 +410,7 @@ Claim: sh takes ^ in a bracket expression literally: it does not negate.
 - reproduces: dash 0.5.8, dash 0.5.9.1, dash 0.5.10.2, dash 0.5.11.5, dash 0.5.12, loksh 7.9, mksh R59c, oksh 7.9, posh 0.14.1
 - absent: bash 3.2.57, bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, busybox 1.30.1, busybox 1.31.1, busybox 1.32.1, busybox 1.33.2, busybox 1.34.1, busybox 1.35.0, busybox 1.36.1, busybox 1.37.0, dash 0.5.13, freebsd-sh 14.5, freebsd-sh 15.1, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, netbsd-sh 10.2, netbsd-sh 11.0, osh 0.38.0, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
 - unparsable: bosh 2024-03-21, tcsh 6.24.16
-  - bosh 2024-03-21: `bosh: syntax error at line 1: `^' unexpected`
+  - bosh 2024-03-21: ``bosh: syntax error at line 1: `^' unexpected``
   - tcsh 6.24.16: `Too many )'s.`
 
 ## SC3028
@@ -676,7 +676,7 @@ Claim: sh has no ${!x}: the expansion is a fatal bad substitution.
   - mksh R59c: `snippet [status 0 stdout "y\n" stderr ""] fixed [status 0 stdout "a\n" stderr ""]`
   - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
   - tcsh 6.24.16: `y: Event not found.`
-  - yash 2.59: `syntax error: invalid character `y' in parameter expansion`
+  - yash 2.59: ``syntax error: invalid character `y' in parameter expansion``
   - zsh 5.8.1: `zsh: bad substitution`
   - zsh 5.9: `zsh: bad substitution`
   - zsh-sh 5.8.1: `zsh: bad substitution`
@@ -707,7 +707,7 @@ Claim: sh has no ${!a[@]}: the expansion is a fatal bad substitution.
   - bosh 2024-03-21: `bosh: bad substitution`
   - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
   - tcsh 6.24.16: `a[@]: Event not found.`
-  - yash 2.59: `syntax error: invalid character `a' in parameter expansion`
+  - yash 2.59: ``syntax error: invalid character `a' in parameter expansion``
   - zsh 5.8.1: `zsh: bad substitution`
   - zsh 5.9: `zsh: bad substitution`
   - zsh-sh 5.8.1: `zsh: bad substitution`
@@ -723,7 +723,7 @@ Claim: sh has no ${!prefix@}: the expansion is a fatal bad substitution.
   - bosh 2024-03-21: `bosh: bad substitution`
   - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
   - tcsh 6.24.16: `a@: Event not found.`
-  - yash 2.59: `syntax error: invalid character `a' in parameter expansion`
+  - yash 2.59: ``syntax error: invalid character `a' in parameter expansion``
   - zsh 5.8.1: `zsh: bad substitution`
   - zsh 5.9: `zsh: bad substitution`
   - zsh-sh 5.8.1: `zsh: bad substitution`
@@ -739,7 +739,7 @@ Claim: sh has no ${x:0:1}: the expansion is a fatal bad substitution.
   - bosh 2024-03-21: `bosh: bad substitution`
   - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
   - tcsh 6.24.16: `Bad : modifier in $ '0'.`
-  - yash 2.59: `syntax error: invalid character `0' in parameter expansion`
+  - yash 2.59: ``syntax error: invalid character `0' in parameter expansion``
 
 ## SC3058
 
@@ -764,13 +764,13 @@ Claim: sh has no ${x^^}: the expansion is a fatal bad substitution.
 - absent: bash 4.0, bash 4.2.53, bash 4.4.18, bash 5.0, bash 5.1.16, bash 5.2.37, bash 5.3, brush 0.4.0, osh 0.38.0
 - unparsable: bosh 2024-03-21, ksh 1.0.0, ksh 1.0.4, ksh 1.0.8, ksh 1.0.10, netbsd-sh 10.2, tcsh 6.24.16, yash 2.59, zsh 5.8.1, zsh 5.9, zsh-sh 5.8.1, zsh-sh 5.9
   - bosh 2024-03-21: `bosh: bad substitution`
-  - ksh 1.0.0: `ksh: syntax error at line 1: `^' unexpected`
-  - ksh 1.0.4: `ksh: syntax error at line 1: `^' unexpected`
-  - ksh 1.0.8: `ksh: syntax error at line 1: `^' unexpected`
-  - ksh 1.0.10: `ksh: syntax error at line 1: `^' unexpected`
+  - ksh 1.0.0: ``ksh: syntax error at line 1: `^' unexpected``
+  - ksh 1.0.4: ``ksh: syntax error at line 1: `^' unexpected``
+  - ksh 1.0.8: ``ksh: syntax error at line 1: `^' unexpected``
+  - ksh 1.0.10: ``ksh: syntax error at line 1: `^' unexpected``
   - netbsd-sh 10.2: `sh: 1: Syntax error: Bad substitution`
   - tcsh 6.24.16: `Missing '}'.`
-  - yash 2.59: `syntax error: invalid character `^' in parameter expansion`
+  - yash 2.59: ``syntax error: invalid character `^' in parameter expansion``
   - zsh 5.8.1: `zsh: bad substitution`
   - zsh 5.9: `zsh: bad substitution`
   - zsh-sh 5.8.1: `zsh: bad substitution`

@@ -2,6 +2,7 @@
 
 use super::{conditions, flow, loops, quoting, redirections};
 use crate::analyzer_lib::Checker;
+use crate::interface::Code;
 
 /// One named, opt-in check supported by the engine.
 ///
@@ -11,6 +12,10 @@ use crate::analyzer_lib::Checker;
 pub struct OptionalCheck {
     /// Stable name accepted by `CheckSpec::optional_checks` and `enable=` directives.
     pub name: &'static str,
+    /// Diagnostic IDs emitted by this check (`cdId` upstream).
+    ///
+    /// Empty for extensions that clarify existing diagnostics without adding codes.
+    pub codes: &'static [Code],
     /// Human-readable summary of the check.
     pub description: &'static str,
     /// Shell source that demonstrates the problem.
@@ -65,6 +70,7 @@ pub fn clarify_parse_errors_enabled(name: &str) -> bool {
 const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     OptionalCheck {
         name: "clarify-parse-errors",
+        codes: &[],
         description: "Clarify fatal parser context and empty error messages (Rust extension)",
         example: "((())",
         fix: "((1))",
@@ -72,6 +78,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "add-default-case",
+        codes: &[2249],
         description: "Suggest adding a default case in `case` statements",
         example: "case $? in 0) echo 'Success';; esac",
         fix: "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac",
@@ -79,6 +86,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "avoid-negated-conditions",
+        codes: &[2335],
         description: "Suggest removing unnecessary comparison negations",
         example: "[ ! \"$var\" -eq 1 ]",
         fix: "[ \"$var\" -ne 1 ]",
@@ -88,15 +96,17 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "avoid-nullary-conditions",
+        codes: &[2243, 2244],
         description: "Suggest explicitly using -n in `[ $var ]`",
-        example: "[ \"$var\" ]",
-        fix: "[ -n \"$var\" ]",
+        example: "[ \"$var\" ] && [ \"$(cmd)\" ]",
+        fix: "[ -n \"$var\" ] && [ -n \"$(cmd)\" ]",
         implementation: Implementation::Analysis(|c| {
             c.node(conditions::check_nullary_expansion_test);
         }),
     },
     OptionalCheck {
         name: "check-extra-masked-returns",
+        codes: &[2312],
         description: "Check for additional cases where exit codes are masked",
         example: "rm -r \"$(get_chroot_dir)/home\"",
         fix: "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\"",
@@ -104,13 +114,15 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "check-set-e-suppressed",
+        codes: &[2310, 2311],
         description: "Notify when set -e is suppressed during function invocation",
-        example: "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
-        fix: "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok",
+        example: "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok; x=$(func)",
+        fix: "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok; x=$(set -e; func)",
         implementation: Implementation::Analysis(|c| c.tree(flow::check_set_e_suppressed)),
     },
     OptionalCheck {
         name: "check-unassigned-uppercase",
+        codes: &[2154],
         description: "Warn when uppercase variables are unassigned",
         example: "echo $VAR",
         fix: "VAR=hello; echo $VAR",
@@ -120,6 +132,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "deprecate-which",
+        codes: &[2230],
         description: "Suggest 'command -v' instead of 'which'",
         example: "which javac",
         fix: "command -v javac",
@@ -129,6 +142,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "quote-safe-variables",
+        codes: &[2248],
         description: "Suggest quoting variables without metacharacters",
         example: "var=hello; echo $var",
         fix: "var=hello; echo \"$var\"",
@@ -136,6 +150,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "require-double-brackets",
+        codes: &[2292],
         description: "Require [[ and warn about [ in Bash/Ksh",
         example: "[ -e /etc/issue ]",
         fix: "[[ -e /etc/issue ]]",
@@ -145,6 +160,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "require-double-equals",
+        codes: &[2338],
         description: "Require == and warn about = in Bash tests",
         example: "[[ \"$x\" = \"$y\" ]]",
         fix: "[[ \"$x\" == \"$y\" ]]",
@@ -154,6 +170,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "require-variable-braces",
+        codes: &[2250],
         description: "Suggest putting braces around all variable references",
         example: "var=hello; echo $var",
         fix: "var=hello; echo ${var}",
@@ -161,6 +178,7 @@ const OPTIONAL_CHECKS: &[OptionalCheck] = &[
     },
     OptionalCheck {
         name: "useless-use-of-cat",
+        codes: &[2002],
         description: "Check for Useless Use Of Cat (UUOC)",
         example: "cat foo | grep bar",
         fix: "grep bar foo",
@@ -182,6 +200,36 @@ mod tests {
             assert_ne!(check.description, "");
             assert!(names.insert(check.name), "duplicate name: {}", check.name);
             assert_ne!(check.name, "all");
+        }
+    }
+
+    #[test]
+    fn catalogue_examples_emit_exact_declared_codes() {
+        use crate::analyzer_lib::{Checker, run_checker};
+        use crate::test_support::params_for;
+
+        for check in optional_checks() {
+            if check.clarifies_parse_errors() {
+                assert_eq!(check.codes, []);
+                continue;
+            }
+            assert!(!check.codes.is_empty(), "{}", check.name);
+            let mut checker = Checker::new();
+            check.register(&mut checker);
+            let mut actual: Vec<_> = run_checker(&params_for(check.example), &checker)
+                .into_iter()
+                .map(|comment| comment.comment.code)
+                .collect();
+            actual.sort_unstable();
+            let mut expected = check.codes.to_vec();
+            expected.sort_unstable();
+            assert_eq!(actual, expected, "{}: {}", check.name, check.example);
+            assert!(
+                run_checker(&params_for(check.fix), &checker).is_empty(),
+                "{}: {}",
+                check.name,
+                check.fix
+            );
         }
     }
 

@@ -69,6 +69,10 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     standard output. Subsequent **-f** options are ignored, see **FORMATS**
     below for more information.
 
+**--help**
+
+:   Show a usage summary and exit.
+
 **--list-optional**
 
 :   Output a list of known optional checks. These can be enabled with **-o**
@@ -76,12 +80,14 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 
 **--norc**
 
-:   Don't try to look for .shellcheckrc configuration files.
+:   Don't try to look for .shellcheckrc or .editorconfig configuration files.
+    This also disables **--rcfile**.
 
 **--rcfile** *RCFILE*
 
 :   Prefer the specified configuration file over searching for one
-    in the default locations.
+    in the default locations. The specified file is not read if
+    **--norc** is also given.
 
 **-o**\ *NAME1*[,*NAME2*...],\ **--enable=***NAME1*[,*NAME2*...]
 
@@ -116,7 +122,7 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 **-W** *NUM*,\ **--wiki-link-count=NUM**
 
 :   For TTY output, show *NUM* wiki links to more information about mentioned
-    warnings. Set to 0 to disable them entirely.
+    warnings. The default is 3. Set to 0 to disable them entirely.
 
 **-x**,\ **--external-sources**
 
@@ -154,7 +160,7 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     For example, in Vim, `:set makeprg=shellcheck\ -f\ gcc\ %` will allow
     using `:make` to check the script, and `:cnext` to jump to the next error.
 
-        <file>:<line>:<column>: <type>: <message>
+        <file>:<line>:<column>: <type>: <message> [SC####]
 
 **checkstyle**
 
@@ -256,7 +262,9 @@ Valid keys are:
 :   Disables a comma separated list of error codes for the following command.
     The command can be a simple command like `echo foo`, or a compound command
     like a function definition, subshell block or loop. A range can be
-    be specified with a dash, e.g. `disable=SC3000-SC4000` to exclude 3xxx.
+    specified with a dash, e.g. `disable=SC3000-SC4000` to exclude 3xxx.
+    The end of the range is exclusive: this example covers SC3000 through
+    SC3999, but not SC4000.
     All warnings can be disabled with `disable=all`.
 
 **enable**
@@ -293,7 +301,7 @@ Valid keys are:
 **shell**
 :   Overrides the shell detected from the shebang.  This is useful for
     files meant to be included (and thus lacking a shebang), or possibly
-    as a more targeted alternative to 'disable=SC2039'.
+    as a more targeted alternative to 'disable=SC3000-SC4000'.
 
 # RC FILES
 

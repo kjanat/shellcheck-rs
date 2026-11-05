@@ -8,23 +8,28 @@
 # Do not delete this file: it is the single source of truth for the project's
 # tools and is checked into the repo.
 
-min_version = "2026.10.7"
+min_version = "2026.11.1"
 
 [tools]
-"github:kjanat/dprint"               = "latest"
-go                                   = { prefix = "1.27" }
-node                                 = { prefix = "26" }
-python                               = "latest"                                                     # conformance harness (rust/harness/*.py)
-"github:tombi-toml/tombi"            = { prefix = "1.8" }                                           # Exact version avoids release-age range resolution failures.
-uv                                   = { prefix = "0.13" }
-cargo-binstall                       = { prefix = "1.23" }
-"cargo:cargo-mutants"                = { prefix = "27", depends = ["cargo-binstall"] }
-"github:immanuwell/dockerfile-roast" = { prefix = "1", depends = ["github:kjanat/shellcheck-rs"] }
-"github:kjanat/shellcheck-rs"        = { version = "latest", rename_exe = "shellcheck" }
+cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
+droast         = { prefix = "1" }
+kprint         = "latest"
+tombi          = { prefix = "1.10" }                              # Exact version avoids release-age range resolution failures.
+cargo-binstall = { prefix = "1.23" }
+go             = { prefix = "1.27" }
+node           = "26"
+python         = "3.15"                                           # conformance harness (rust/harness/*.py)
+uv             = { prefix = "0.13" }
 
 [tools.rust]
 version    = "latest"
 components = ["rustfmt", "clippy", "rust-src"]
+
+[tool_alias]
+cargo-mutants = "cargo:cargo-mutants"
+droast        = "github:immanuwell/dockerfile-roast"
+kprint        = "github:kjanat/kprint"
+tombi         = "github:tombi-toml/tombi"
 
 [deps.uv]
 auto = true
@@ -41,8 +46,7 @@ uv_venv_auto = "source"
 [tasks]
 [tasks.format]
 alias = ["f", "fmt"]
-tools = { "github:tombi-toml/tombi" = { prefix = "1.8" } }
-run   = "dprint fmt"
+run   = "kprint fmt"
 
 # --- Refactor safety net -----------------------------------------------------
 # The oracle answers "does the port agree with ShellCheck?". These three answer
@@ -91,5 +95,12 @@ command = "uv"
 args    = ["run", "basedpyright"]
 
 [wrappers."rshellcheck"]
+command = "cargo"
+args    = ["rshellcheck"]
+
+[wrappers."dprint"]
+command = "kprint"
+
+[wrappers."shellcheck"]
 command = "cargo"
 args    = ["rshellcheck"]

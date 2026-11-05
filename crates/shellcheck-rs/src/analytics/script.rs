@@ -234,11 +234,17 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
         return;
     };
 
-    // funcs: name -> [definition ids]
-    let mut funcs: BTreeMap<String, Vec<Id>> = BTreeMap::new();
+    let in_bats_test = |t: &Token| {
+        crate::analyzer_lib::path_iter(params, t)
+            .any(|node| matches!(&*node.inner, InnerToken::T_BatsTest { .. }))
+    };
+    let mut funcs: BTreeMap<String, Vec<(Id, bool)>> = BTreeMap::new();
     root.visit_preorder(&mut |t| {
         if let InnerToken::T_Function { name, .. } = &*t.inner {
-            funcs.entry(name.clone()).or_default().push(t.id());
+            funcs
+                .entry(name.clone())
+                .or_default()
+                .push((t.id(), in_bats_test(t)));
         }
     });
 
@@ -255,12 +261,21 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
             (|| {
                 let name = crate::ast_lib::get_literal_string(cmd)?;
                 let invocations = funcs.get(&name)?;
+                if in_bats_test(t) && invocations.iter().any(|&(_, in_test)| !in_test) {
+                    return None;
+                }
                 // Is the function definitely being defined later?
-                if !invocations.iter().any(|&c| cfga.does_post_dominate(c, id)) {
+                if !invocations
+                    .iter()
+                    .any(|&(c, _)| cfga.does_post_dominate(c, id))
+                {
                     return None;
                 }
                 // Was one already defined, so it's actually a re-definition?
-                if invocations.iter().any(|&c| cfga.does_post_dominate(id, c)) {
+                if invocations
+                    .iter()
+                    .any(|&(c, _)| cfga.does_post_dominate(id, c))
+                {
                     return None;
                 }
                 err(
@@ -1266,6 +1281,38 @@ mod tests {
     }
 
     // ---- checkAssignToSelf ----
+
+    #[test]
+    fn prop_checkUseBeforeDefinition8() {
+        assert!(!tree_emits(
+            check_use_before_definition,
+            "#!/usr/bin/env bats\n@test 'foo' { f; }\nf() { true; }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUseBeforeDefinition9() {
+        assert!(!tree_emits(
+            check_use_before_definition,
+            "#!/usr/bin/env bats\n@test 'foo' { f; }\nsetup() { f() { true; }; }"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUseBeforeDefinition10() {
+        assert!(tree_emits(
+            check_use_before_definition,
+            "#!/usr/bin/env bats\n@test 'foo' {\n f\n f() { true; }\n}"
+        ));
+    }
+
+    #[test]
+    fn prop_checkUseBeforeDefinition11() {
+        assert!(tree_emits(
+            check_use_before_definition,
+            "#!/usr/bin/env bats\nf\n@test 'foo' { true; }\nf() { true; }"
+        ));
+    }
 
     #[test]
     fn prop_checkUseBeforeDefinition1() {

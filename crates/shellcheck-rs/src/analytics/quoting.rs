@@ -293,11 +293,55 @@ pub(super) fn check_single_quoted_variables(params: &Parameters, t: &Token, out:
     let is_probably_ok = ok_assignment
         || SC2016_OK_COMMANDS.contains(&command_name.as_str())
         || command_name.ends_with("awk")
-        || command_name.starts_with("perl");
+        || command_name.starts_with("perl")
+        || is_shell_script_argument(params, t);
 
     if !is_probably_ok {
         show(out);
     }
+}
+
+/// Recognize shell scripts passed through wrappers, e.g. `runc exec ctr sh -c 'echo $HOME'`.
+fn is_shell_script_argument(params: &Parameters, t: &Token) -> bool {
+    let Some(command) = get_closest_command(params, t) else {
+        return false;
+    };
+    let InnerToken::T_Redirecting { cmd, .. } = &*command.inner else {
+        return false;
+    };
+    let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner else {
+        return false;
+    };
+    let path = get_path(params, t);
+    let before: Vec<String> = words
+        .iter()
+        .take_while(|word| !path.iter().any(|node| node.id() == word.id()))
+        .map(|word| ast_lib::get_literal_string(word).unwrap_or_default())
+        .collect();
+    before.iter().enumerate().any(|(index, word)| {
+        matches!(
+            ast_lib::basename(word).as_str(),
+            "sh" | "bash" | "dash" | "ash" | "ksh" | "ksh88" | "ksh93" | "mksh" | "oksh" | "zsh"
+        ) && shell_options_end_with_dash_c(&before[index + 1..])
+    })
+}
+
+fn shell_options_end_with_dash_c(mut options: &[String]) -> bool {
+    while let Some((flag, rest)) = options.split_first() {
+        if rest.is_empty() {
+            return flag.strip_prefix('-').is_some_and(|letters| {
+                letters.contains('c') && letters.bytes().all(|byte| byte.is_ascii_alphabetic())
+            });
+        }
+        if matches!(flag.as_str(), "-o" | "+o" | "-O" | "+O") {
+            options = &rest[1..];
+        } else if flag.starts_with(['-', '+']) {
+            options = rest;
+        } else {
+            return false;
+        }
+    }
+    false
 }
 
 pub(super) fn check_array_as_string(_params: &Parameters, t: &Token, out: &mut Out) {
@@ -1402,6 +1446,70 @@ mod tests {
         assert!(!emits(
             check_single_quoted_variables,
             "exec -c -a foo jq '$__loc__'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables26() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "runc exec ctr sh -c 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables27() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "run -0 nsenter -t 1 -m /bin/bash -eu -o pipefail -c 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables28() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "kubectl exec pod -- sh -euc 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables29() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "runc exec ctr sh -c 'echo $HOME' 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables30() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "runc exec ctr sh -x 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables31() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "runc exec ctr sh script -c 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables32() {
+        assert!(emits(
+            check_single_quoted_variables,
+            "echo sh --rcfile 'echo $HOME'"
+        ));
+    }
+
+    #[test]
+    fn prop_checkSingleQuotedVariables33() {
+        assert!(!emits(
+            check_single_quoted_variables,
+            "chroot /mnt /bin/ksh93 -c 'echo $HOME'"
         ));
     }
 
