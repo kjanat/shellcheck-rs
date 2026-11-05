@@ -38,7 +38,7 @@ jobs:
         run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
           echo "${GOBIN}" >> "${GITHUB_PATH}"
       - run: actionlint plugin install shellcheck # `-v` INSTALL HAS NO VERBOSE... FFS
-        if: false # ignore
+        if: false # actionlint:ignore
       - run: actionlint check -v --network-stats
           --experimental -o github -o pretty --summary
           --no-tool shellcheck --no-tool ruff
