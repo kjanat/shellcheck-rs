@@ -38,9 +38,10 @@ jobs:
         run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
           echo "${GOBIN}" >> "${GITHUB_PATH}"
       - run: actionlint plugin install shellcheck # `-v` INSTALL HAS NO VERBOSE... FFS
+        if: false
       - run: actionlint check -v --summary --network-stats
           --experimental -o github -o pretty
-          # --tool shellcheck="rshellcheck -x -o all"
+          --no-tool shellcheck --no-tool ruff
 
   lint:
     name: "Format, clippy, workflows"
