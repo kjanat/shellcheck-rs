@@ -17,32 +17,19 @@ pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let mut rows: Vec<Row> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut ran = 0usize;
-    for cell in matrix.cells(&args.cell) {
-        let Some(reference) = docker::locate(cell) else {
-            missing.push(cell.id());
-            continue;
-        };
-        ran += 1;
-        let container = Container::start(cell, &reference)?;
-        for (n, s) in specs.iter().enumerate() {
-            let result = evaluate(&container, cell, s, n, baseline, &recorded);
-            let (outcome, observed) = match result {
-                Ok(pair) => pair,
-                Err(e) => {
-                    container.stop();
-                    return Err(e);
-                }
-            };
-            println!("{:<10} {:<20} SC{}", outcome.label(), cell.id(), s.code);
-            rows.push(Row {
-                code: s.code,
-                shell: cell.shell.clone(),
-                version: cell.version.clone(),
-                outcome,
-                observed,
-            });
+    let cells: Vec<&Cell> = matrix.cells(&args.cell).collect();
+    let workers = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let results = in_parallel(&cells, workers, |cell| {
+        run_cell(cell, &specs, baseline, &recorded)
+    })?;
+    for (cell, result) in cells.iter().zip(results) {
+        match result {
+            CellRun::Missing => missing.push(cell.id()),
+            CellRun::Ran(cell_rows) => {
+                ran += 1;
+                rows.extend(cell_rows);
+            }
         }
-        container.stop();
     }
     if ran == 0 {
         return Err(format!(
@@ -160,6 +147,90 @@ impl Coverage {
 fn unrun_cells(cells: &[String], missing: &[String]) -> Option<String> {
     (cells.is_empty() && !missing.is_empty())
         .then(|| format!("full matrix ran without {}", missing.join(", ")))
+}
+
+enum CellRun {
+    Missing,
+    Ran(Vec<Row>),
+}
+
+fn run_cell(
+    cell: &Cell,
+    specs: &[Spec],
+    baseline: Baseline,
+    recorded: &Outcomes,
+) -> Result<CellRun, String> {
+    let Some(reference) = docker::locate(cell) else {
+        return Ok(CellRun::Missing);
+    };
+    let container = Container::start(cell, &reference)?;
+    let mut rows = Vec::with_capacity(specs.len());
+    for (n, s) in specs.iter().enumerate() {
+        let (outcome, observed) = match evaluate(&container, cell, s, n, baseline, recorded) {
+            Ok(pair) => pair,
+            Err(e) => {
+                container.stop();
+                return Err(e);
+            }
+        };
+        rows.push(Row {
+            code: s.code,
+            shell: cell.shell.clone(),
+            version: cell.version.clone(),
+            outcome,
+            observed,
+        });
+    }
+    container.stop();
+    for row in &rows {
+        println!(
+            "{:<10} {:<20} SC{}",
+            row.outcome.label(),
+            cell.id(),
+            row.code
+        );
+    }
+    Ok(CellRun::Ran(rows))
+}
+
+fn in_parallel<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    work: impl Fn(&T) -> Result<R, String> + Sync,
+) -> Result<Vec<R>, String> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let mut done: Vec<(usize, Result<R, String>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers.clamp(1, items.len().max(1)))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut finished = Vec::new();
+                    while !failed.load(std::sync::atomic::Ordering::Relaxed) {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            break;
+                        };
+                        let result = work(item);
+                        if result.is_err() {
+                            failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        finished.push((index, result));
+                    }
+                    finished
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| vec![(usize::MAX, Err("cell worker panicked".to_string()))])
+            })
+            .collect()
+    });
+    done.sort_by_key(|(index, _)| *index);
+    done.into_iter().map(|(_, result)| result).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +469,39 @@ fn speaks(port_shell: &str, spec_shell: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_cells_keep_matrix_order() {
+        let items: Vec<u64> = (0..40).collect();
+        let squares = in_parallel(&items, 4, |n| {
+            std::thread::sleep(std::time::Duration::from_millis(40 - n));
+            Ok(n * n)
+        })
+        .unwrap();
+        assert_eq!(squares, items.iter().map(|n| n * n).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_failing_cell_fails_the_run_and_stops_new_cells() {
+        let started = std::sync::atomic::AtomicUsize::new(0);
+        let items: Vec<usize> = (0..100).collect();
+        let result = in_parallel(&items, 2, |n| {
+            started.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if *n == 3 {
+                Err(format!("cell {n} broke"))
+            } else {
+                Ok(*n)
+            }
+        });
+        assert_eq!(result, Err("cell 3 broke".to_string()));
+        assert!(started.load(std::sync::atomic::Ordering::Relaxed) < items.len());
+    }
+
+    #[test]
+    fn no_cells_and_one_worker_both_work() {
+        assert_eq!(in_parallel(&Vec::<u8>::new(), 4, |n| Ok(*n)), Ok(vec![]));
+        assert_eq!(in_parallel(&[1, 2, 3], 0, |n| Ok(n + 1)), Ok(vec![2, 3, 4]));
+    }
 
     fn port_check(
         cell: &Cell,
