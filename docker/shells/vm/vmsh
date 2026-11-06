@@ -7,10 +7,16 @@ for arg in "$@"; do
 done
 dir=${TMPDIR:-/tmp}
 remote="TMPDIR='$dir'; export TMPDIR; cd \"\$TMPDIR\" 2>/dev/null; exec$cmd"
+host="$(cat /vm/user)@127.0.0.1"
+connect() {
+	ssh -q -T -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+		-o ConnectTimeout=5 -o LogLevel=ERROR -o ControlPath=/tmp/.vmsh-control -i /vm/key -p 2222 "$@"
+}
 deadline=$(($(date +%s) + 300))
 while :; do
-	ssh -q -T -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-		-o ConnectTimeout=5 -o LogLevel=ERROR -i /vm/key -p 2222 "$(cat /vm/user)@127.0.0.1" "$remote"
+	connect -O check "$host" 2>/dev/null ||
+		connect -f -N -o ControlMaster=yes -o ControlPersist=yes "$host" </dev/null >/dev/null 2>&1
+	connect -o ControlMaster=no "$host" "$remote"
 	status=$?
 	[ "$status" -ne 255 ] && exit "$status"
 	[ "$(date +%s)" -ge "$deadline" ] && exit 255

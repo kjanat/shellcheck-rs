@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -229,10 +230,6 @@ impl Container {
         self.plain(&["mkdir", "-p", dir])
     }
 
-    pub fn remove(&self, dir: &str) -> Result<(), String> {
-        self.plain(&["rm", "-rf", dir])
-    }
-
     fn plain(&self, argv: &[&str]) -> Result<(), String> {
         let out = Command::new("docker")
             .args(["exec", &self.id])
@@ -280,6 +277,26 @@ impl Container {
         })
     }
 
+    pub fn run_all(&self, dirs: &[String], requests: &[Request]) -> Result<Vec<Run>, String> {
+        let script = driver(self.prefix(), self.vm, dirs, requests);
+        let child = Command::new("docker")
+            .args(["exec", "--interactive", &self.id, "sh", "-s"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("docker: {e}"))?;
+        let out = feed(child, &script)?;
+        if !out.status.success() {
+            return Err(format!(
+                "container {}: driver failed: {}",
+                self.id,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        parse_runs(&out.stdout, requests.len())
+    }
+
     pub fn stop(self) {
         let _ = Command::new("docker")
             .args(["rm", "--force", &self.id])
@@ -289,10 +306,202 @@ impl Container {
     }
 }
 
+pub struct Request {
+    pub dir: String,
+    pub argv: Vec<String>,
+    pub stdin: String,
+}
+
+fn feed(mut child: std::process::Child, script: &str) -> Result<std::process::Output, String> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "driver: no stdin".to_string())?;
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || stdin.write_all(script.as_bytes()));
+        let output = child.wait_with_output();
+        writer
+            .join()
+            .map_err(|_| "driver: stdin writer panicked".to_string())?
+            .map_err(|e| format!("driver: {e}"))?;
+        output.map_err(|e| format!("driver: {e}"))
+    })
+}
+
+fn quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+fn driver(prefix: &[&str], vm: bool, dirs: &[String], requests: &[Request]) -> String {
+    let prefix = prefix.iter().fold(String::new(), |mut out, part| {
+        let _ = write!(out, "{} ", quote(part));
+        out
+    });
+    let quoted_dirs: Vec<String> = dirs.iter().map(|d| quote(d)).collect();
+    let quoted_dirs = quoted_dirs.join(" ");
+    let mut script = String::from("in=$(mktemp -d) || exit 1\n");
+    if !dirs.is_empty() {
+        let _ = writeln!(
+            script,
+            "{prefix}mkdir -p {quoted_dirs} </dev/null || exit 1"
+        );
+    }
+    for (i, request) in requests.iter().enumerate() {
+        let workdir = if vm { "/tmp" } else { request.dir.as_str() };
+        let argv: Vec<String> = request.argv.iter().map(|a| quote(a)).collect();
+        let _ = writeln!(
+            script,
+            "printf '%s' {} > \"$in/{i}\"",
+            quote(&request.stdin)
+        );
+        let _ = writeln!(
+            script,
+            "cat \"$in/{i}\" | (cd {} && TMPDIR={} exec timeout {TIMEOUT_SECONDS} {prefix}{}) > \"$in/{i}.out\" 2> \"$in/{i}.err\"",
+            quote(workdir),
+            quote(&request.dir),
+            argv.join(" ")
+        );
+        let _ = writeln!(script, "status=$?");
+        let _ = writeln!(
+            script,
+            "printf '@run {i} %s %s %s\\n' \"$status\" \"$(wc -c < \"$in/{i}.out\")\" \"$(wc -c < \"$in/{i}.err\")\""
+        );
+        let _ = writeln!(script, "cat \"$in/{i}.out\" \"$in/{i}.err\"");
+    }
+    if !dirs.is_empty() {
+        let _ = writeln!(script, "{prefix}rm -rf {quoted_dirs} </dev/null || exit 1");
+    }
+    script.push_str("rm -rf \"$in\"\n");
+    script
+}
+
+fn parse_runs(output: &[u8], count: usize) -> Result<Vec<Run>, String> {
+    let mut runs = Vec::with_capacity(count);
+    let mut rest = output;
+    for i in 0..count {
+        let end = rest
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or_else(|| format!("driver: no record for run {i}"))?;
+        let header = String::from_utf8_lossy(&rest[..end]);
+        let fields: Vec<&str> = header.split_whitespace().collect();
+        let [tag, index, status, out_len, err_len] = fields[..] else {
+            return Err(format!("driver: bad record header {header:?}"));
+        };
+        if tag != "@run" || index != i.to_string() {
+            return Err(format!("driver: expected run {i}, got {header:?}"));
+        }
+        let number = |field: &str| {
+            field
+                .parse::<usize>()
+                .map_err(|e| format!("driver: {header:?}: {e}"))
+        };
+        let status: i32 = status
+            .parse()
+            .map_err(|e| format!("driver: {header:?}: {e}"))?;
+        let (out_len, err_len) = (number(out_len)?, number(err_len)?);
+        let body = &rest[end + 1..];
+        if body.len() < out_len + err_len {
+            return Err(format!("driver: run {i} output is truncated"));
+        }
+        runs.push(Run {
+            status,
+            stdout: String::from_utf8_lossy(&body[..out_len]).into_owned(),
+            stderr: String::from_utf8_lossy(&body[out_len..out_len + err_len]).into_owned(),
+            timed_out: status == TIMEOUT_STATUS,
+        });
+        rest = &body[out_len + err_len..];
+    }
+    Ok(runs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::matrix::SourcePin;
-    use super::{Cell, Container, build_command, in_actions, pick, write_step_output};
+    use super::{
+        Cell, Container, Request, Run, build_command, driver, feed, in_actions, parse_runs, pick,
+        write_step_output,
+    };
+    use std::process::{Command, Stdio};
+
+    fn drive(prefix: &[&str], vm: bool, dirs: &[String], requests: &[Request]) -> Vec<Run> {
+        let child = Command::new("sh")
+            .arg("-s")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = feed(child, &driver(prefix, vm, dirs, requests)).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        parse_runs(&out.stdout, requests.len()).unwrap()
+    }
+
+    fn scratch(name: &str) -> [String; 2] {
+        let root = std::env::temp_dir().join(format!("validity-{name}-{}", std::process::id()));
+        [root.join("a"), root.join("b")].map(|dir| dir.display().to_string())
+    }
+
+    fn sh(dir: &str, script: &str) -> Request {
+        Request {
+            dir: dir.to_string(),
+            argv: vec!["sh".to_string()],
+            stdin: script.to_string(),
+        }
+    }
+
+    #[test]
+    fn one_driver_runs_every_request_and_frames_each_output() {
+        let dirs = scratch("driver");
+        let runs = drive(
+            &[],
+            false,
+            &dirs,
+            &[
+                sh(&dirs[0], "printf 'x\\ny'; echo oops >&2; exit 3\n"),
+                sh(
+                    &dirs[1],
+                    "pwd; echo \"$TMPDIR\"; echo \"it's @run 9 0 0 0\"\n",
+                ),
+            ],
+        );
+        assert_eq!(runs.len(), 2);
+        assert_eq!((runs[0].status, runs[0].stdout.as_str()), (3, "x\ny"));
+        assert_eq!(runs[0].stderr, "oops\n");
+        assert!(!runs[0].timed_out);
+        assert_eq!(
+            runs[1].stdout,
+            format!("{0}\n{0}\nit's @run 9 0 0 0\n", dirs[1])
+        );
+        assert!(dirs.iter().all(|dir| !std::path::Path::new(dir).exists()));
+    }
+
+    #[test]
+    fn a_guest_driver_runs_from_tmp_through_the_prefix() {
+        let dirs = scratch("guest");
+        let runs = drive(
+            &["env"],
+            true,
+            &dirs,
+            &[sh(&dirs[0], "pwd; echo \"$TMPDIR\"\n")],
+        );
+        assert_eq!(runs[0].stdout, format!("/tmp\n{}\n", dirs[0]));
+        assert!(dirs.iter().all(|dir| !std::path::Path::new(dir).exists()));
+    }
+
+    #[test]
+    fn records_mark_timeouts_and_reject_missing_or_short_output() {
+        let runs = parse_runs(b"@run 0 124 2 0\nhi", 1).unwrap();
+        assert!(runs[0].timed_out);
+        assert_eq!(runs[0].stdout, "hi");
+        assert!(parse_runs(b"@run 0 0 5 0\nhi", 1).is_err());
+        assert!(parse_runs(b"@run 1 0 0 0\n", 1).is_err());
+        assert!(parse_runs(b"", 1).is_err());
+    }
 
     const PINNED: &str = "ghcr.io/x/shell-bash@sha256:abc";
     const TAG: &str = "ghcr.io/x/shell-bash:5.3";

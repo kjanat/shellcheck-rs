@@ -1,5 +1,5 @@
 use super::ValidityArgs;
-use super::docker::{self, Container, Run};
+use super::docker::{self, Container, Request, Run};
 use super::matrix::{self, Cell};
 use super::outcomes::{self, Outcome, Outcomes, Row};
 use super::spec::{self, Kind, Spec};
@@ -163,16 +163,26 @@ fn run_cell(
     let Some(reference) = docker::locate(cell) else {
         return Ok(CellRun::Missing);
     };
+    let plans: Vec<Plan> = specs
+        .iter()
+        .enumerate()
+        .map(|(n, spec)| Plan::new(cell, spec, n))
+        .collect();
+    let dirs: Vec<String> = plans.iter().flat_map(|p| p.dirs.clone()).collect();
+    let requests: Vec<Request> = plans.iter().flat_map(Plan::requests).collect();
     let container = Container::start(cell, &reference)?;
+    let runs = container.run_all(&dirs, &requests);
+    container.stop();
+    let mut runs = runs?.into_iter();
     let mut rows = Vec::with_capacity(specs.len());
-    for (n, s) in specs.iter().enumerate() {
-        let (outcome, observed) = match evaluate(&container, cell, s, n, baseline, recorded) {
-            Ok(pair) => pair,
-            Err(e) => {
-                container.stop();
-                return Err(e);
-            }
+    for (plan, s) in plans.iter().zip(specs) {
+        let parsed = [next_run(&mut runs)?, next_run(&mut runs)?];
+        let ran = if plan.runtime {
+            Some([next_run(&mut runs)?, next_run(&mut runs)?])
+        } else {
+            None
         };
+        let (outcome, observed) = decide(cell, s, plan, &parsed, ran, baseline, recorded)?;
         rows.push(Row {
             code: s.code,
             shell: cell.shell.clone(),
@@ -181,7 +191,6 @@ fn run_cell(
             observed,
         });
     }
-    container.stop();
     for row in &rows {
         println!(
             "{:<10} {:<20} SC{}",
@@ -245,56 +254,75 @@ impl Baseline {
     }
 }
 
-fn evaluate(
-    container: &Container,
-    cell: &Cell,
-    spec: &Spec,
-    n: usize,
-    baseline: Baseline,
-    recorded: &Outcomes,
-) -> Result<(Outcome, String), String> {
-    let dirs = [format!("/tmp/run{n}a"), format!("/tmp/run{n}b")];
-    for d in &dirs {
-        container.mkdir(d)?;
-    }
-    let result = observe(container, cell, spec, &dirs, baseline, recorded);
-    for d in &dirs {
-        container.remove(d)?;
-    }
-    result
+struct Plan {
+    dirs: [String; 2],
+    snippet: String,
+    fixed: String,
+    parse_argv: Vec<String>,
+    run_argv: Vec<String>,
+    runtime: bool,
 }
 
-fn observe(
-    container: &Container,
+impl Plan {
+    fn new(cell: &Cell, spec: &Spec, n: usize) -> Self {
+        let mut parse_argv = cell.argv.clone();
+        parse_argv.extend(cell.parse.iter().cloned());
+        Self {
+            dirs: [format!("/tmp/run{n}a"), format!("/tmp/run{n}b")],
+            snippet: format!("{}\n", spec.snippet.script),
+            fixed: format!("{}\n", spec.fixed.script),
+            parse_argv,
+            run_argv: cell.argv.clone(),
+            runtime: spec.observes_runtime(),
+        }
+    }
+
+    fn requests(&self) -> Vec<Request> {
+        let request = |dir: &str, argv: &[String], stdin: &str| Request {
+            dir: dir.to_string(),
+            argv: argv.to_vec(),
+            stdin: stdin.to_string(),
+        };
+        let mut requests = vec![
+            request(&self.dirs[0], &self.parse_argv, &self.snippet),
+            request(&self.dirs[0], &self.parse_argv, &self.fixed),
+        ];
+        if self.runtime {
+            requests.push(request(&self.dirs[0], &self.run_argv, &self.snippet));
+            requests.push(request(&self.dirs[1], &self.run_argv, &self.fixed));
+        }
+        requests
+    }
+}
+
+fn next_run(runs: &mut impl Iterator<Item = Run>) -> Result<Run, String> {
+    runs.next()
+        .ok_or_else(|| "driver returned fewer runs than requested".to_string())
+}
+
+fn decide(
     cell: &Cell,
     spec: &Spec,
-    dirs: &[String; 2],
+    plan: &Plan,
+    parsed: &[Run; 2],
+    ran: Option<[Run; 2]>,
     baseline: Baseline,
     recorded: &Outcomes,
 ) -> Result<(Outcome, String), String> {
-    let snippet = format!("{}\n", spec.snippet.script);
-    let fixed = format!("{}\n", spec.fixed.script);
-    let mut parse_argv = cell.argv.clone();
-    parse_argv.extend(cell.parse.iter().cloned());
-    let parsed = [
-        container.exec(&dirs[0], &parse_argv, &snippet)?,
-        container.exec(&dirs[0], &parse_argv, &fixed)?,
-    ];
-    if let Some(outcome) = parse_verdict(spec, &parsed) {
+    if let Some(outcome) = parse_verdict(spec, parsed) {
         return Ok(outcome);
     }
-    let ran = if spec.observes_runtime() {
-        [
-            container.exec(&dirs[0], &cell.argv, &snippet)?,
-            container.exec(&dirs[1], &cell.argv, &fixed)?,
-        ]
-    } else {
-        parsed.clone()
-    };
-    match verdict(spec, &parsed, &ran) {
-        Verdict::Claim(claim) => {
-            port_check_claim(cell, spec, &snippet, &fixed, claim, baseline, recorded)
-        }
+    let ran = ran.unwrap_or_else(|| parsed.clone());
+    match verdict(spec, parsed, &ran) {
+        Verdict::Claim(claim) => port_check_claim(
+            cell,
+            spec,
+            &plan.snippet,
+            &plan.fixed,
+            claim,
+            baseline,
+            recorded,
+        ),
         Verdict::Outcome(outcome, observed) => Ok((outcome, observed)),
     }
 }
