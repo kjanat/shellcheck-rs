@@ -98,14 +98,13 @@ is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
 
 ### Z5. A filename that starts with `-`
 
-`rshellcheck -.sh` checks the file `-.sh`. Upstream's `getOpt` reads every
-argument that starts with `-` as options, so it stops at `.` with
+`rshellcheck -.sh` checks the file `-.sh` when it exists. Upstream's `getOpt`
+reads every argument that starts with `-` as options, so it stops at `.` with
 ``unrecognized option `-.'`` and exit 3. The port reads such an argument as a
-filename when its first option does not exist (`-.sh`, `-nope.sh`, `--bogus`),
-and also when it reads as options but fails or carries a value that its option
-rejects (`-fope.sh`, `-xZ`) while a file by that name exists. Without the file
-the second kind keeps upstream's error. A valid option such as `-x` stays an
-option whatever the directory holds. [POSIX Utility Syntax Guideline 14][g14]
+filename when it does not read as valid options (`-.sh`, `-h`, `--bogus`,
+`-fope.sh`, `-xZ`) and a file by that name exists. Without the file it keeps
+upstream's error and usage, exit 3. A valid option such as `-x` stays an option
+whatever the directory holds, and every argument after `--` is a filename. [POSIX Utility Syntax Guideline 14][g14]
 asks only that arguments identifiable as options be treated as options. Kept,
 like Z4.
 

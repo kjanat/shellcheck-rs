@@ -15,11 +15,10 @@
 //!     bad number, bad boolean)
 //!   * 4 = `SupportFailure` (unknown format / shell / severity / color value)
 //!
-//! One deliberate difference: an argument that starts with `-` is a filename
-//! when its first option does not exist, and also when it reads as options but
-//! fails, or carries a value that its option rejects, while a file by that name
-//! exists. `getOpt` rejects both (exit 3); [POSIX Utility Syntax Guideline 14]
-//! only asks that arguments identifiable as options be treated as options.
+//! One deliberate difference: an argument that starts with `-` and does not
+//! read as valid options is a filename when a file by that name exists.
+//! `getOpt` rejects it (exit 3); [POSIX Utility Syntax Guideline 14] only asks
+//! that arguments identifiable as options be treated as options.
 //!
 //! [POSIX Utility Syntax Guideline 14]: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap12.html#tag_12_02
 //!
@@ -386,9 +385,8 @@ enum OptResult {
 /// messages, each ending in a newline: the argument errors first, then the
 /// unrecognized options, as `getOpt` orders them.
 ///
-/// An argument whose first option does not exist can only be a filename, and
-/// is one. An argument that reads as options but fails, or carries a value
-/// that its option rejects, is a filename when `exists` says so.
+/// An argument that does not read as valid options is a filename when
+/// `exists` says so, and otherwise keeps `getOpt`'s errors.
 fn tokenize(
     argv: &[OsString],
     exists: &dyn Fn(&Path) -> bool,
@@ -410,8 +408,7 @@ fn tokenize(
         }
         let mut ahead = rest.clone();
         let results = get_next(&arg, &mut ahead);
-        let only_a_file = matches!(results.first(), Some(OptResult::Unrecognized(_)));
-        if only_a_file || (!results.iter().all(is_valid_opt) && exists(Path::new(native_arg))) {
+        if !results.iter().all(is_valid_opt) && exists(Path::new(native_arg)) {
             files.push(PathBuf::from(native_arg));
             continue;
         }
@@ -950,10 +947,24 @@ mod tests {
     }
 
     #[test]
-    fn a_dash_argument_whose_first_option_does_not_exist_is_a_file() {
-        let c = run(&["-.sh", "-nope.sh", "--bogus"]);
-        assert_eq!(c.inputs, ["-.sh", "-nope.sh", "--bogus"].map(PathBuf::from));
-        assert_eq!(c.spec_template.optional_checks, Vec::<String>::new());
+    fn an_unknown_dash_argument_is_a_file_only_when_the_file_exists() {
+        let names = ["-.sh", "-nope.sh", "--bogus", "-h"];
+        let exists = |name: &str| names.contains(&name);
+        match super::parse(&args(&names), &exists) {
+            Outcome::Run(c) => {
+                assert_eq!(c.inputs, names.map(PathBuf::from));
+                assert_eq!(c.spec_template.optional_checks, Vec::<String>::new());
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+        match parse(&args(&["-h"])) {
+            Outcome::Error { code, message } => {
+                assert_eq!(code, 3);
+                assert!(message.starts_with("unrecognized option `-h'\n\nUsage:"));
+            }
+            other => panic!("expected Error(3), got {other:?}"),
+        }
+        assert_eq!(run(&["--", "-h"]).inputs, [PathBuf::from("-h")]);
     }
 
     #[test]
