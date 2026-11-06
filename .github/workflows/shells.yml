@@ -190,8 +190,12 @@ jobs:
           sudo udevadm control --reload-rules;
           sudo udevadm trigger --name-match=kvm
 
-      - name: Resolve image digests
-        run: cargo validity pin
+      - name: Pin rebuilt image digests
+        if: needs.pin.outputs.cells != '[]'
+        env: { CELLS: "${{ needs.pin.outputs.cells }}" }
+        run: |
+          mapfile -t cells < <(jq -r '.[] | "--cell=" + .' <<< "${CELLS}")
+          cargo validity pin "${cells[@]}"
 
       - name: Record outcomes
         run: cargo validity --record

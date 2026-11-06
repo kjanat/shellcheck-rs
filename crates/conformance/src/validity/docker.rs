@@ -124,18 +124,15 @@ fn quiet(args: &[&str]) -> bool {
 }
 
 pub fn locate(cell: &Cell) -> Option<String> {
-    pick(&cell.reference(), &cell.image, quiet)
+    pick(&cell.reference(), quiet)
 }
 
-fn pick(pinned: &str, tag: &str, probe: impl Fn(&[&str]) -> bool) -> Option<String> {
+fn pick(pinned: &str, probe: impl Fn(&[&str]) -> bool) -> Option<String> {
     if probe(&["image", "inspect", pinned]) {
         return Some(pinned.to_string());
     }
     if pinned.contains("@sha256:") && probe(&["pull", "--quiet", pinned]) {
         return Some(pinned.to_string());
-    }
-    if pinned != tag && probe(&["image", "inspect", tag]) {
-        return Some(tag.to_string());
     }
     None
 }
@@ -623,30 +620,30 @@ mod tests {
 
     #[test]
     fn pinned_image_present_locally_wins() {
-        let found = pick(PINNED, TAG, |a| a == ["image", "inspect", PINNED]);
+        let found = pick(PINNED, |a| a == ["image", "inspect", PINNED]);
         assert_eq!(found.as_deref(), Some(PINNED));
     }
 
     #[test]
     fn pinned_image_is_pulled_before_the_tag_is_tried() {
-        let found = pick(PINNED, TAG, |a| a == ["pull", "--quiet", PINNED]);
+        let found = pick(PINNED, |a| a == ["pull", "--quiet", PINNED]);
         assert_eq!(found.as_deref(), Some(PINNED));
     }
 
     #[test]
-    fn local_tag_serves_when_the_digest_is_unreachable() {
-        let found = pick(PINNED, TAG, |a| a == ["image", "inspect", TAG]);
-        assert_eq!(found.as_deref(), Some(TAG));
+    fn an_unreachable_digest_is_never_replaced_by_the_tag() {
+        let found = pick(PINNED, |a| a == ["image", "inspect", TAG]);
+        assert_eq!(found, None);
     }
 
     #[test]
     fn unpinned_cell_never_pulls() {
-        let found = pick(TAG, TAG, |a| a[0] == "pull");
+        let found = pick(TAG, |a| a[0] == "pull");
         assert_eq!(found, None);
     }
 
     #[test]
     fn nothing_available_is_none() {
-        assert_eq!(pick(PINNED, TAG, |_| false), None);
+        assert_eq!(pick(PINNED, |_| false), None);
     }
 }

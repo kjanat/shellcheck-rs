@@ -106,7 +106,7 @@ pub fn formatted(path: &Path, text: &str) -> Result<String, String> {
 
 pub fn run(step: Step, args: &ValidityArgs) -> Result<bool, String> {
     match step {
-        Step::Pin => pin::run(args.refresh).map(|()| true),
+        Step::Pin => pin::run(args.refresh, &args.cell).map(|()| true),
         Step::Build => docker::build_all(args).map(|()| true),
         Step::Cells => {
             let matrix = matrix::load()?;

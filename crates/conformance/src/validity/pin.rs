@@ -8,7 +8,7 @@ use super::matrix::{self, Cell, Matrix, SourcePin};
 use super::sources::{self, Kind, Source};
 use super::{DOCKERFILES, REGISTRY};
 
-pub fn run(refresh: bool) -> Result<(), String> {
+pub fn run(refresh: bool, cells: &[String]) -> Result<(), String> {
     let sources = sources::load()?;
     let previous = matrix::load()?;
     let mut bases: BTreeMap<String, String> = BTreeMap::new();
@@ -31,7 +31,10 @@ pub fn run(refresh: bool) -> Result<(), String> {
                 source,
                 version,
                 previous: prev.map(|c| &c.source),
-                previous_digest: prev.map(|c| c.digest.as_str()),
+                previous_digest: prev
+                    .map(|c| c.digest.as_str())
+                    .filter(|digest| !digest.is_empty()),
+                keep_digest: !refresh && !names(cells, name, version),
                 base,
                 dockerfile: dockerfile.clone(),
             });
@@ -54,6 +57,7 @@ struct Plan<'a> {
     version: &'a str,
     previous: Option<&'a SourcePin>,
     previous_digest: Option<&'a str>,
+    keep_digest: bool,
     base: String,
     dockerfile: String,
 }
@@ -98,7 +102,7 @@ fn resolve_plan(plan: &Plan<'_>, default_parse: &[String], refresh: bool) -> Res
     Ok(Cell {
         shell: plan.name.to_string(),
         version: plan.version.to_string(),
-        digest: pinned_digest(&image, lookup(&image), plan.previous_digest),
+        digest: digest_for(&image, plan.previous_digest, plan.keep_digest, lookup),
         image,
         base: plan.base.clone(),
         dockerfile: plan.dockerfile.clone(),
@@ -113,6 +117,24 @@ fn resolve_plan(plan: &Plan<'_>, default_parse: &[String], refresh: bool) -> Res
         dialect: plan.source.dialect.clone(),
         source: resolve_source(plan.source, plan.version, plan.previous, refresh)?,
     })
+}
+
+fn digest_for(
+    image: &str,
+    previous: Option<&str>,
+    keep: bool,
+    look: impl FnOnce(&str) -> Lookup,
+) -> String {
+    previous.filter(|_| keep).map_or_else(
+        || pinned_digest(image, look(image), previous),
+        str::to_string,
+    )
+}
+
+fn names(cells: &[String], name: &str, version: &str) -> bool {
+    cells
+        .iter()
+        .any(|cell| cell == name || *cell == format!("{name}:{version}"))
 }
 
 fn repo_of(image: &str) -> &str {
@@ -367,6 +389,31 @@ mod tests {
             classify(true, "garbage", ""),
             Lookup::Failed("unexpected output \"garbage\"".to_string())
         );
+    }
+
+    #[test]
+    fn a_committed_digest_is_kept_without_asking_the_registry() {
+        let image = "ghcr.io/x/shell-bash:5";
+        let never = |_: &str| -> Lookup { panic!("kept digests are never looked up") };
+        assert_eq!(
+            digest_for(image, Some("sha256:old"), true, never),
+            "sha256:old"
+        );
+        let fresh = |_: &str| Lookup::Found("sha256:new".to_string());
+        assert_eq!(
+            digest_for(image, Some("sha256:old"), false, fresh),
+            "sha256:new"
+        );
+        assert_eq!(digest_for(image, None, true, fresh), "sha256:new");
+    }
+
+    #[test]
+    fn only_named_cells_are_looked_up_again() {
+        let cells = ["bash:5.3".to_string(), "dash".to_string()];
+        assert!(names(&cells, "bash", "5.3"));
+        assert!(!names(&cells, "bash", "5.2"));
+        assert!(names(&cells, "dash", "0.5.12"));
+        assert!(!names(&[], "dash", "0.5.12"));
     }
 
     #[test]
