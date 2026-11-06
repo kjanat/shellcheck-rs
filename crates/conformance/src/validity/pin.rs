@@ -31,6 +31,7 @@ pub fn run(refresh: bool) -> Result<(), String> {
                 source,
                 version,
                 previous: prev.map(|c| &c.source),
+                previous_digest: prev.map(|c| c.digest.as_str()),
                 base,
                 dockerfile: dockerfile.clone(),
             });
@@ -42,7 +43,6 @@ pub fn run(refresh: bool) -> Result<(), String> {
     for cell in cells {
         println!("pinned {}:{}", cell.shell, cell.version);
         matrix.cell.push(cell);
-        checkpoint(&matrix, &previous)?;
     }
     matrix.sort();
     matrix::save(&matrix)
@@ -53,6 +53,7 @@ struct Plan<'a> {
     source: &'a Source,
     version: &'a str,
     previous: Option<&'a SourcePin>,
+    previous_digest: Option<&'a str>,
     base: String,
     dockerfile: String,
 }
@@ -65,7 +66,7 @@ fn resolve_plans(
     if plans.is_empty() {
         return Ok(Vec::new());
     }
-    let workers = plans.len().min(8);
+    let workers = plans.len();
     let chunk_size = plans.len().div_ceil(workers);
     thread::scope(|scope| {
         let handles: Vec<_> = plans
@@ -97,7 +98,7 @@ fn resolve_plan(plan: &Plan<'_>, default_parse: &[String], refresh: bool) -> Res
     Ok(Cell {
         shell: plan.name.to_string(),
         version: plan.version.to_string(),
-        digest: image_digest(&image).unwrap_or_default(),
+        digest: pinned_digest(&image, lookup(&image), plan.previous_digest),
         image,
         base: plan.base.clone(),
         dockerfile: plan.dockerfile.clone(),
@@ -114,19 +115,6 @@ fn resolve_plan(plan: &Plan<'_>, default_parse: &[String], refresh: bool) -> Res
     })
 }
 
-fn checkpoint(done: &Matrix, previous: &Matrix) -> Result<(), String> {
-    let mut snapshot = Matrix {
-        cell: done.cell.clone(),
-    };
-    for cell in &previous.cell {
-        if done.find(&cell.shell, &cell.version).is_none() {
-            snapshot.cell.push(cell.clone());
-        }
-    }
-    snapshot.sort();
-    matrix::save(&snapshot)
-}
-
 fn repo_of(image: &str) -> &str {
     image.rsplit_once(':').map_or(image, |(r, _)| r)
 }
@@ -141,8 +129,34 @@ fn resolve_base(cache: &mut BTreeMap<String, String>, name: &str) -> Result<Stri
     Ok(pinned)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Lookup {
+    Found(String),
+    Missing,
+    Failed(String),
+}
+
 pub fn manifest_digest(reference: &str) -> Option<String> {
-    let out = Command::new("docker")
+    match lookup(reference) {
+        Lookup::Found(digest) => Some(digest),
+        Lookup::Missing | Lookup::Failed(_) => None,
+    }
+}
+
+fn lookup(reference: &str) -> Lookup {
+    let mut result = lookup_once(reference);
+    for delay in [1, 2] {
+        if !matches!(result, Lookup::Failed(_)) {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_secs(delay));
+        result = lookup_once(reference);
+    }
+    result
+}
+
+fn lookup_once(reference: &str) -> Lookup {
+    match Command::new("docker")
         .args([
             "buildx",
             "imagetools",
@@ -152,16 +166,42 @@ pub fn manifest_digest(reference: &str) -> Option<String> {
             "{{.Manifest.Digest}}",
         ])
         .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    {
+        Ok(out) => classify(
+            out.status.success(),
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+        ),
+        Err(e) => Lookup::Failed(format!("docker: {e}")),
     }
-    let digest = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    digest.starts_with("sha256:").then_some(digest)
 }
 
-fn image_digest(image: &str) -> Option<String> {
-    manifest_digest(image)
+fn classify(success: bool, stdout: &str, stderr: &str) -> Lookup {
+    let digest = stdout.trim();
+    if success && digest.starts_with("sha256:") {
+        return Lookup::Found(digest.to_string());
+    }
+    let reason = stderr.to_ascii_lowercase();
+    if !success && (reason.contains("not found") || reason.contains("manifest unknown")) {
+        return Lookup::Missing;
+    }
+    Lookup::Failed(if stderr.trim().is_empty() {
+        format!("unexpected output {digest:?}")
+    } else {
+        stderr.trim().to_string()
+    })
+}
+
+fn pinned_digest(image: &str, lookup: Lookup, previous: Option<&str>) -> String {
+    match lookup {
+        Lookup::Found(digest) => digest,
+        Lookup::Missing => String::new(),
+        Lookup::Failed(reason) => {
+            let kept = previous.unwrap_or_default();
+            eprintln!("warning: {image}: digest lookup failed ({reason}); keeping {kept:?}");
+            kept.to_string()
+        }
+    }
 }
 
 fn resolve_source(
@@ -304,6 +344,55 @@ fn parse_ls_remote(output: &str, tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lookup_tells_a_missing_image_from_a_failed_request() {
+        assert_eq!(
+            classify(true, "sha256:abc\n", ""),
+            Lookup::Found("sha256:abc".to_string())
+        );
+        assert_eq!(
+            classify(false, "", "ERROR: ghcr.io/x/shell-bash:9: not found\n"),
+            Lookup::Missing
+        );
+        assert_eq!(
+            classify(false, "", "MANIFEST_UNKNOWN: manifest unknown"),
+            Lookup::Missing
+        );
+        assert_eq!(
+            classify(false, "", "429 Too Many Requests\n"),
+            Lookup::Failed("429 Too Many Requests".to_string())
+        );
+        assert_eq!(
+            classify(true, "garbage", ""),
+            Lookup::Failed("unexpected output \"garbage\"".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_lookup_keeps_the_previous_digest_and_a_missing_image_clears_it() {
+        let image = "ghcr.io/x/shell-bash:5";
+        assert_eq!(
+            pinned_digest(
+                image,
+                Lookup::Found("sha256:new".to_string()),
+                Some("sha256:old")
+            ),
+            "sha256:new"
+        );
+        assert_eq!(
+            pinned_digest(image, Lookup::Missing, Some("sha256:old")),
+            ""
+        );
+        assert_eq!(
+            pinned_digest(image, Lookup::Failed("429".to_string()), Some("sha256:old")),
+            "sha256:old"
+        );
+        assert_eq!(
+            pinned_digest(image, Lookup::Failed("429".to_string()), None),
+            ""
+        );
+    }
 
     #[test]
     fn the_peeled_tag_wins_over_the_tag_object() {

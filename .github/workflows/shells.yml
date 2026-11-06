@@ -118,13 +118,18 @@ jobs:
         env: *cell
         run: cargo validity build --push --cell "${cell}"
 
-      - name: Attest build provenance
+      - name: Record image digest
         if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-name: "${{ steps.push.outputs.repository }}"
-          subject-digest: "${{ steps.push.outputs.digest }}"
-          push-to-registry: false
+        env:
+          repository: ${{ steps.push.outputs.repository }}
+          digest: ${{ steps.push.outputs.digest }}
+          index: ${{ strategy.job-index }}
+        run: printf '%s  %s\n' "${digest#sha256:}" "${repository}" > "${index}.sha256"
+
+      - name: Upload image digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with: { name: "digest-${{ strategy.job-index }}", path: "${{ strategy.job-index }}.sha256" }
 
       - name: Generate image SBOM
         if: github.event_name != 'pull_request'
@@ -148,6 +153,24 @@ jobs:
           subject-digest: "${{ steps.push.outputs.digest }}"
           sbom-path: image.spdx.json
           push-to-registry: false
+
+  attest:
+    name: Attest build provenance
+    needs: build
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write, attestations: write }
+    steps:
+      - name: Download image digests
+        uses: *DL
+        with: { pattern: "digest-*", merge-multiple: true, path: digests }
+
+      - name: Collect subjects
+        run: cat digests/*.sha256 > subjects.sha256
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with: { subject-checksums: subjects.sha256 }
 
   run:
     name: Run the matrix

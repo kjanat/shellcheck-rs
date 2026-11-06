@@ -21,7 +21,7 @@ rbr                  = "run --release --bin"
 rshellcheck          = "rbr rshellcheck --"
 schemas              = "run -q -p conformance -- schemas"
 shellcheck           = "rbr rshellcheck --"
-validity             = "run --release -q -p conformance -- validity"
+validity             = "run -q -p conformance -- validity"
 
 [build]
 rustflags = ["-Dwarnings"]
