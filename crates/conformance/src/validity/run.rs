@@ -5,6 +5,7 @@ use super::outcomes::{self, Outcome, Outcomes, Row};
 use super::spec::{self, Kind, Spec};
 use crate::port_keys;
 use shellcheck_rs::Dialect;
+use shellcheck_rs::dialect_policy::Policy;
 
 pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let matrix = matrix::load()?;
@@ -462,6 +463,9 @@ fn port_check_claim(
     if claim == Claim::Reproduces && spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
         return Ok((claim.outcome(), String::new()));
     }
+    if keeps_floor_by_design(dialect, snippet, spec.code) {
+        return Ok((claim.outcome(), String::new()));
+    }
     let codes = |script: &str| -> Result<Vec<i64>, String> {
         Ok(port_keys(script, "-", Some(dialect))?
             .iter()
@@ -477,6 +481,18 @@ fn port_check_claim(
         Outcome::PortMiss,
         format!("port as {dialect}: snippet {on_snippet:?} fixed {on_fixed:?}"),
     ))
+}
+
+fn keeps_floor_by_design(dialect: &str, script: &str, code: i64) -> bool {
+    let Some(dialect) = Dialect::from_name(dialect) else {
+        return false;
+    };
+    shellcheck_rs::parser::parse_script("-", script)
+        .root
+        .is_some_and(|root| {
+            let policy = Policy::of(dialect, &root);
+            matches!(policy, Policy::OptionsChanged(_)) && !policy.follows_matrix(code)
+        })
 }
 
 fn port_dialect<'a>(cell: &'a Cell, spec: &Spec) -> Option<&'a str> {
@@ -497,6 +513,22 @@ fn speaks(port_shell: &str, spec_shell: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_port_check_skips_only_codes_the_port_keeps_after_an_option_change() {
+        assert!(keeps_floor_by_design(
+            "yash",
+            "set -e; [ -o errexit ]\n",
+            3062
+        ));
+        assert!(!keeps_floor_by_design("yash", "set -o errtrace\n", 3040));
+        assert!(!keeps_floor_by_design("yash", "[ -o errexit ]\n", 3062));
+        assert!(!keeps_floor_by_design(
+            "sh",
+            "set -e; [ -o errexit ]\n",
+            3062
+        ));
+    }
 
     #[test]
     fn parallel_cells_keep_matrix_order() {

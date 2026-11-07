@@ -200,6 +200,18 @@ jobs:
       - name: Record outcomes
         run: cargo validity --record
 
+      - name: Check the port against the recorded outcomes
+        run: |
+          status=0
+          cargo validity 2>&1 | tee validity.log || status=$?
+          {
+            echo '### Validity check'
+            echo '```text'
+            grep -E '^(validity:|DRIFT|FAIL|missing)' validity.log || true
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${status}"
+
       - name: Refresh behaviour snapshot
         run: cargo conformance-snapshot --write
 
