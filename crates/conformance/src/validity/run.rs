@@ -463,7 +463,7 @@ fn port_check_claim(
     if claim == Claim::Reproduces && spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
         return Ok((claim.outcome(), String::new()));
     }
-    if keeps_floor_by_design(dialect, snippet, spec.code) {
+    if keeps_floor_by_design(dialect, snippet) {
         return Ok((claim.outcome(), String::new()));
     }
     let codes = |script: &str| -> Result<Vec<i64>, String> {
@@ -483,16 +483,13 @@ fn port_check_claim(
     ))
 }
 
-fn keeps_floor_by_design(dialect: &str, script: &str, code: i64) -> bool {
+fn keeps_floor_by_design(dialect: &str, script: &str) -> bool {
     let Some(dialect) = Dialect::from_name(dialect) else {
         return false;
     };
     shellcheck_rs::parser::parse_script("-", script)
         .root
-        .is_some_and(|root| {
-            let policy = Policy::of(dialect, &root);
-            matches!(policy, Policy::OptionsChanged(_)) && !policy.follows_matrix(code)
-        })
+        .is_some_and(|root| dialect.is_added() && Policy::of(dialect, &root) == Policy::Floor)
 }
 
 fn port_dialect<'a>(cell: &'a Cell, spec: &Spec) -> Option<&'a str> {
@@ -515,19 +512,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_port_check_skips_only_codes_the_port_keeps_after_an_option_change() {
-        assert!(keeps_floor_by_design(
-            "yash",
-            "set -e; [ -o errexit ]\n",
-            3062
-        ));
-        assert!(!keeps_floor_by_design("yash", "set -o errtrace\n", 3040));
-        assert!(!keeps_floor_by_design("yash", "[ -o errexit ]\n", 3062));
-        assert!(!keeps_floor_by_design(
-            "sh",
-            "set -e; [ -o errexit ]\n",
-            3062
-        ));
+    fn the_port_check_skips_added_dialect_scripts_that_change_options() {
+        assert!(keeps_floor_by_design("yash", "set -e; [ -o errexit ]\n"));
+        assert!(keeps_floor_by_design("yash", "set -o errtrace\n"));
+        assert!(!keeps_floor_by_design("yash", "[ -o errexit ]\n"));
+        assert!(!keeps_floor_by_design("sh", "set -e; [ -o errexit ]\n"));
     }
 
     #[test]

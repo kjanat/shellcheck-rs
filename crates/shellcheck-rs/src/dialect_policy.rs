@@ -43,26 +43,16 @@ pub enum Policy {
     Floor,
     /// The codes the matrix recorded for an added dialect under its default options.
     Measured(Dialect),
-    /// An added dialect whose script changes its options: the matrix decides
-    /// only the codes that report a `set` option itself.
-    OptionsChanged(Dialect),
 }
 
-/// SC3040, SC3041 and SC3042 report the `set` option that changes the
-/// options, so their recorded outcome holds in every script that triggers them.
-const SET_OPTION_CODES: [i64; 3] = [3040, 3041, 3042];
-
 impl Policy {
-    /// `Measured` for an added dialect whose script keeps the default options,
-    /// and `OptionsChanged` for one whose script changes them.
+    /// `Measured` for an added dialect whose script keeps the default options.
     #[must_use]
     pub fn of(dialect: Dialect, root: &Token) -> Self {
-        if !dialect.is_added() {
-            Self::Floor
-        } else if keeps_default_options(dialect, root) {
+        if dialect.is_added() && keeps_default_options(dialect, root) {
             Self::Measured(dialect)
         } else {
-            Self::OptionsChanged(dialect)
+            Self::Floor
         }
     }
 
@@ -71,19 +61,7 @@ impl Policy {
     pub fn keeps(self, code: i64) -> bool {
         match self {
             Self::Floor => true,
-            Self::Measured(dialect) | Self::OptionsChanged(dialect) => {
-                !self.follows_matrix(code) || applies_by(RULES, code, dialect)
-            }
-        }
-    }
-
-    /// Whether the matrix's recorded outcome decides `code`, instead of the floor.
-    #[must_use]
-    pub fn follows_matrix(self, code: i64) -> bool {
-        match self {
-            Self::Floor => false,
-            Self::Measured(_) => true,
-            Self::OptionsChanged(_) => SET_OPTION_CODES.contains(&code),
+            Self::Measured(dialect) => applies_by(RULES, code, dialect),
         }
     }
 }
@@ -295,21 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn a_set_option_code_follows_the_matrix_after_the_options_change() {
-        let script = "set -o errtrace\n[ -o errexit ]\n";
-        let changed = policy(Dialect::Yash, script);
-        assert_eq!(changed, Policy::OptionsChanged(Dialect::Yash));
-        assert!(!changed.keeps(3040));
-        assert!(changed.keeps(3062));
-        assert!(!Policy::Measured(Dialect::Yash).keeps(3062));
-        assert!(changed.follows_matrix(3040));
-        assert!(!changed.follows_matrix(3062));
-        assert!(Policy::Measured(Dialect::Yash).follows_matrix(3062));
-        assert!(!Policy::Floor.follows_matrix(3040));
-        assert_eq!(policy(Dialect::Bash, script), Policy::Floor);
-    }
-
-    #[test]
     fn a_code_with_no_row_for_the_dialect_applies() {
         let rules = [rule(2086, Dialect::Zsh, "5.9", Outcome::Absent)];
         assert!(applies_by(&rules, 2086, Dialect::Mksh));
@@ -398,11 +361,7 @@ mod tests {
             "options=(shwordsplit on)\necho $x\n",
             "options+=(shwordsplit on)\necho $x\n",
         ] {
-            assert_eq!(
-                policy(Dialect::Zsh, script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{script:?}"
-            );
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
             assert!(policy(Dialect::Zsh, script).keeps(2086), "{script:?}");
         }
     }
@@ -457,7 +416,7 @@ mod tests {
             let script = format!("#!/usr/bin/env {arguments}\necho $x\n");
             assert_eq!(
                 policy(Dialect::Zsh, &script),
-                Policy::OptionsChanged(Dialect::Zsh),
+                Policy::Floor,
                 "{arguments:?}"
             );
         }
@@ -492,11 +451,7 @@ mod tests {
             "noglob builtin eval \"$command\"; echo $x\n",
             "eval \"$command\"; echo $x\n",
         ] {
-            assert_eq!(
-                policy(Dialect::Zsh, script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{script:?}"
-            );
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
         }
         for script in ["echo eval $x\n", "builtin printf '%s' eval $x\n"] {
             assert_eq!(
@@ -515,11 +470,7 @@ mod tests {
             "builtin source \"$path\"; echo $x\n",
             "noglob . \"$path\"; echo $x\n",
         ] {
-            assert_eq!(
-                policy(Dialect::Zsh, script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{script:?}"
-            );
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
         }
         for script in ["echo source $x\n", "builtin printf '%s' . $x\n"] {
             assert_eq!(
@@ -537,11 +488,7 @@ mod tests {
             "builtin alias split='set -y'\nsplit\necho $x\n",
             "noglob alias \"$definition\"\nsplit\necho $x\n",
         ] {
-            assert_eq!(
-                policy(Dialect::Zsh, script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{script:?}"
-            );
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script:?}");
         }
         for script in ["echo alias $x\n", "builtin printf '%s' alias $x\n"] {
             assert_eq!(
@@ -581,11 +528,7 @@ mod tests {
             "typeset -Lfu split",
         ] {
             let script = format!("{command}; split; echo $x\n");
-            assert_eq!(
-                policy(Dialect::Zsh, &script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{command}"
-            );
+            assert_eq!(policy(Dialect::Zsh, &script), Policy::Floor, "{command}");
         }
         for command in [
             "functions",
@@ -632,11 +575,7 @@ mod tests {
             "functions+=(split 'setopt SH_WORD_SPLIT'); echo $x\n",
             "dis_functions[split]='setopt SH_WORD_SPLIT'; enable -f split; split; echo $x\n",
         ] {
-            assert_eq!(
-                policy(Dialect::Zsh, script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{script}"
-            );
+            assert_eq!(policy(Dialect::Zsh, script), Policy::Floor, "{script}");
         }
         for script in [
             "echo \"${functions[split]}\"; echo $x\n",
@@ -662,11 +601,7 @@ mod tests {
             "dis_saliases",
         ] {
             let script = format!("{name}[split]='setopt SH_WORD_SPLIT'\nsplit\necho $x\n");
-            assert_eq!(
-                policy(Dialect::Zsh, &script),
-                Policy::OptionsChanged(Dialect::Zsh),
-                "{name}"
-            );
+            assert_eq!(policy(Dialect::Zsh, &script), Policy::Floor, "{name}");
             let read = format!("echo \"${{{name}[split]}}\"\necho $x\n");
             assert_eq!(policy(Dialect::Zsh, &read), Policy::Measured(Dialect::Zsh));
             assert_eq!(
