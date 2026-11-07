@@ -385,8 +385,13 @@ impl Parser {
         self.read_term_more_inner(current, false)
     }
 
-    fn read_term_more_inner(&mut self, current: Token, top_level: bool) -> PResult<Vec<Token>> {
-        if let Some((sep, (start, end))) = self.read_separator() {
+    fn read_term_more_inner(&mut self, mut current: Token, top_level: bool) -> PResult<Vec<Token>> {
+        let mut terms = Vec::new();
+        loop {
+            let Some((sep, (start, end))) = self.read_separator() else {
+                terms.push(current);
+                return Ok(terms);
+            };
             let id = self.next_id_between(start, end);
             let node = if sep == '&' {
                 Token::new(id, InnerToken::T_Backgrounded(current))
@@ -400,10 +405,9 @@ impl Parser {
             }
             // try to read another and-or
             let m = self.mark();
+            terms.push(node);
             if let Ok(next) = self.read_and_or() {
-                let mut v = vec![node];
-                v.extend(self.read_term_more_inner(next, top_level)?);
-                Ok(v)
+                current = next;
             } else {
                 // `option (T_EOF id) readAndOr`: a failure that consumed
                 // input is out of reach of that `option`, and of the
@@ -412,10 +416,8 @@ impl Parser {
                     return Err(());
                 }
                 self.reset(m);
-                Ok(vec![node])
+                return Ok(terms);
             }
-        } else {
-            Ok(vec![current])
         }
     }
 

@@ -122,6 +122,33 @@ fn deeply_nested_if_statements_parse_without_losing_contexts() {
         .unwrap();
 }
 
+#[test]
+fn a_long_statement_list_parses_in_constant_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let script = format!("#!/bin/bash\n{}", "echo \"$a\"; echo b &\n".repeat(10_000));
+            let result = parse_script_spec(&ParseSpec {
+                filename: "long.sh".to_string(),
+                script,
+                ..ParseSpec::default()
+            });
+            let root = result.root.unwrap();
+            let InnerToken::T_Annotation { token, .. } = &*root.inner else {
+                panic!("root is not an annotation");
+            };
+            let InnerToken::T_Script { commands, .. } = &*token.inner else {
+                panic!("annotation holds no script");
+            };
+            assert_eq!(commands.len(), 20_000);
+            assert!(matches!(&*commands[1].inner, InnerToken::T_Backgrounded(_)));
+            assert!(result.notes.is_empty(), "{:?}", result.notes);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[cfg(test)]
 mod arith_tests {
     use super::*;
