@@ -238,6 +238,33 @@ absent:     zsh native 5.9
 
 The report is generated from `outcomes.toml` and committed with it.
 
+## Drift
+
+The `run` job in `.github/workflows/shells.yml` records the outcomes and opens
+or updates the `validity/drift` pull request when a generated file changes.
+Before recording, it writes every added dialect's findings over the snapshot
+corpus, and the codes the table drops, to a JSON file:
+
+```sh
+cargo conformance-snapshot --findings before.json
+```
+
+After recording, it compares that file with the new table:
+
+```sh
+cargo conformance-snapshot --explain before.json
+```
+
+The Markdown output lists, per dialect, the codes newly dropped, the codes
+restored and the number still dropped. Per code it lists the findings lost and
+gained, their dialects, their counts and one corpus example. The pull request
+body carries this text, and the run's `validity-findings` artifact holds both
+findings files. Each example names the corpus id of its `rust/snapshot.txt`
+line.
+
+On the drift pull request, the `drift` job runs `cargo validity` without
+`--record` against the committed matrix.
+
 ## Runner
 
 ```sh

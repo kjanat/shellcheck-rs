@@ -25,6 +25,7 @@
 
 mod bench;
 mod corpus;
+mod delta;
 mod deviations;
 mod fuzz;
 mod oracle;
@@ -655,6 +656,26 @@ pub struct SnapshotArgs {
     /// diff of `rust/snapshot.txt` belongs in the commit that causes it.
     #[arg(long, env = "WRITE", help_heading = "Snapshot")]
     pub write: bool,
+
+    /// Write the added dialects' findings over the corpus, and the codes the
+    /// recorded table drops for them, as JSON to this file.
+    #[arg(
+        long,
+        value_name = "PATH",
+        help_heading = "Snapshot",
+        conflicts_with_all = ["write", "explain"]
+    )]
+    pub findings: Option<std::path::PathBuf>,
+
+    /// Print as Markdown what the added dialects drop and find now, against
+    /// a file `--findings` wrote earlier.
+    #[arg(
+        long,
+        value_name = "PATH",
+        help_heading = "Snapshot",
+        conflicts_with = "write"
+    )]
+    pub explain: Option<std::path::PathBuf>,
 }
 
 /// The options under the "Bench" heading.

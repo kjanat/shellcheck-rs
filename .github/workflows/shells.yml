@@ -185,10 +185,14 @@ jobs:
         uses: *LOGIN
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
 
-      - name: Open /dev/kvm to every user
+      - &KVM
+        name: Open /dev/kvm to every user
         run: echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules;
           sudo udevadm control --reload-rules;
           sudo udevadm trigger --name-match=kvm
+
+      - name: Record the added dialects' findings under the current rules
+        run: cargo conformance-snapshot --findings "${RUNNER_TEMP}/findings-before.json"
 
       - name: Pin rebuilt image digests
         if: needs.pin.outputs.cells != '[]'
@@ -200,7 +204,8 @@ jobs:
       - name: Record outcomes
         run: cargo validity --record
 
-      - name: Check the port against the recorded outcomes
+      - &CHECK
+        name: Check the port against the recorded outcomes
         shell: bash -o pipefail {0}
         env: { status: "0" }
         run: |
@@ -216,6 +221,21 @@ jobs:
       - name: Refresh behaviour snapshot
         run: cargo conformance-snapshot --write
 
+      - name: Explain the changed findings
+        run: |
+          cargo conformance-snapshot --findings "${RUNNER_TEMP}/findings-after.json"
+          cargo conformance-snapshot --explain "${RUNNER_TEMP}/findings-before.json" > "${RUNNER_TEMP}/delta.md"
+          cat "${RUNNER_TEMP}/delta.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the findings
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: validity-findings
+          path: |
+            ${{ runner.temp }}/findings-before.json
+            ${{ runner.temp }}/findings-after.json
+            ${{ runner.temp }}/delta.md
+
       - name: Obtain the Beepboop App identity and repository token
         uses: kjanat/beepboop/actions/token@v1
         id: beepboop
@@ -229,6 +249,7 @@ jobs:
           "${{ insert }}": ${{ steps.beepboop.outputs }}
           DRIFT_BRANCH: validity/drift
           PR_TITLE: "🧪 Record shell validity drift"
+          DELTA: ${{ runner.temp }}/delta.md
         with:
           github-token: ${{ steps.beepboop.outputs.token }}
           retries: 3
@@ -253,6 +274,7 @@ jobs:
               '## 🧪 Shell validity drift', '',
               `The full shell fleet completed for [${context.sha.slice(0, 12)}](${root}/commit/${context.sha}) in [workflow run ${process.env.GITHUB_RUN_ID}](${root}/actions/runs/${process.env.GITHUB_RUN_ID}).`, '',
               '### What changed', ...changed.map(path => `- ${meaning[path]}`), '',
+              require('node:fs').readFileSync(process.env.DELTA, 'utf8'),
               '### Diff footprint', '', '```text', stat, '```', '',
               `Start with [the rendered report](${root}/blob/${branch}/validity/REPORT.md), then inspect the exact rows in the files tab.`,
             ].join('\n');
@@ -279,3 +301,23 @@ jobs:
 
       - name: Test the recorded rules
         run: cargo test --workspace --locked --lib --bins
+
+  drift:
+    name: Check the drift against the shells
+    if: github.event_name == 'pull_request' && github.head_ref == 'validity/drift'
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: read }
+    steps:
+      - name: Checkout repository
+        uses: *CO
+
+      - name: Install Rust stable
+        uses: *RUST
+
+      - name: Log in to GHCR
+        uses: *LOGIN
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+
+      - *KVM
+
+      - *CHECK

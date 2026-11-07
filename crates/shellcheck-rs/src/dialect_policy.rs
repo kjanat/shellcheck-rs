@@ -66,6 +66,23 @@ impl Policy {
     }
 }
 
+/// Every code the recorded table drops for an added dialect, by dialect and code.
+#[must_use]
+pub fn dropped() -> Vec<(Dialect, i64)> {
+    dropped_by(RULES)
+}
+
+fn dropped_by(rules: &[Rule]) -> Vec<(Dialect, i64)> {
+    let mut pairs: Vec<(Dialect, i64)> = rules
+        .iter()
+        .map(|r| (r.dialect, r.code))
+        .filter(|&(dialect, code)| !applies_by(rules, code, dialect))
+        .collect();
+    pairs.sort_unstable_by_key(|&(dialect, code)| (dialect.name(), code));
+    pairs.dedup();
+    pairs
+}
+
 fn keeps_default_options(dialect: Dialect, root: &Token) -> bool {
     let mut keeps = true;
     root.visit_preorder(&mut |t| {
@@ -311,6 +328,28 @@ mod tests {
             let rules = [rule(2086, Dialect::Osh, "0.38.0", outcome)];
             assert!(applies_by(&rules, 2086, Dialect::Osh), "{outcome:?}");
         }
+    }
+
+    #[test]
+    fn dropped_lists_each_dialect_code_pair_once_when_no_version_reproduces() {
+        let rules = [
+            rule(2086, Dialect::Zsh, "5.8.1", Outcome::Absent),
+            rule(2086, Dialect::Zsh, "5.9", Outcome::Absent),
+            rule(2046, Dialect::Zsh, "5.9", Outcome::Absent),
+            rule(2046, Dialect::Zsh, "5.8.1", Outcome::Reproduces),
+            rule(2016, Dialect::Mksh, "R59c", Outcome::Absent),
+            rule(2016, Dialect::Osh, "0.38.0", Outcome::Differs),
+        ];
+        assert_eq!(
+            dropped_by(&rules),
+            [(Dialect::Mksh, 2016), (Dialect::Zsh, 2086)]
+        );
+    }
+
+    #[test]
+    fn the_recorded_table_drops_sc2086_for_zsh() {
+        assert!(dropped().contains(&(Dialect::Zsh, 2086)));
+        assert!(!dropped().iter().any(|&(dialect, _)| !dialect.is_added()));
     }
 
     fn policy(dialect: Dialect, script: &str) -> Policy {
