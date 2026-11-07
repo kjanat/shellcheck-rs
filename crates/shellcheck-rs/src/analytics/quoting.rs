@@ -762,20 +762,24 @@ fn contains_quotes(s: &str) -> bool {
 
 /// `forToken quoteMap t`.
 fn for_token(map: &HashMap<String, Id>, t: &Token) -> Option<Id> {
-    match &*t.inner {
-        // skip getBracedReference here to avoid false positives on PE
-        InnerToken::T_DollarBraced { op, .. } => map.get(&oversimplify(op).concat()).copied(),
-        InnerToken::T_DoubleQuoted(tokens) | InnerToken::T_NormalWord(tokens) => {
-            tokens.iter().find_map(|x| for_token(map, x))
-        }
-        _ => {
-            if contains_quotes(&oversimplify(t).concat()) {
-                Some(t.id())
-            } else {
+    // `msum (map (forToken quoteMap) tokens)`. The answer comes from the first
+    // part that finds anything, depth-first and left to right.
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        let found = match &*t.inner {
+            // skip getBracedReference here to avoid false positives on PE
+            InnerToken::T_DollarBraced { op, .. } => map.get(&oversimplify(op).concat()).copied(),
+            InnerToken::T_DoubleQuoted(tokens) | InnerToken::T_NormalWord(tokens) => {
+                pending.extend(tokens.iter().rev());
                 None
             }
+            _ => contains_quotes(&oversimplify(t).concat()).then(|| t.id()),
+        };
+        if found.is_some() {
+            return found;
         }
     }
+    None
 }
 
 /// `squashesQuotes t`: a `${#...}` length reference.
@@ -835,24 +839,24 @@ fn iu_quotes_single_thing(parts: &[Token]) -> bool {
 }
 
 /// `isSpecial` over a getPath-list (path[0] is the trapped token).
-fn iu_is_special(path: &[Token]) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    match &*path[0].inner {
-        InnerToken::T_Redirecting { .. } => false,
-        InnerToken::T_DollarBraced { .. } => true,
-        _ => {
-            // (a:(TC_Binary _ _ "=~" lhs rhs):rest) -> getId a == getId rhs
-            if path.len() >= 2
-                && let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner
-                && op == "=~"
-            {
-                return path[0].id() == rhs.id();
+fn iu_is_special(mut path: &[Token]) -> bool {
+    while let Some(first) = path.first() {
+        match &*first.inner {
+            InnerToken::T_Redirecting { .. } => return false,
+            InnerToken::T_DollarBraced { .. } => return true,
+            _ => {
+                // (a:(TC_Binary _ _ "=~" lhs rhs):rest) -> getId a == getId rhs
+                if path.len() >= 2
+                    && let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner
+                    && op == "=~"
+                {
+                    return first.id() == rhs.id();
+                }
+                path = &path[1..];
             }
-            iu_is_special(&path[1..])
         }
     }
+    false
 }
 
 fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {

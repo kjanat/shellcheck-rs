@@ -1654,6 +1654,74 @@ mod tests {
         }
     }
 
+    /// The parser, the control flow graph, the dataflow, the checks and the
+    /// drop of the tree run their recursion on the heap. A script nested far
+    /// deeper than this thread's stack allows still checks.
+    #[test]
+    fn deep_nesting_checks_in_a_small_stack() {
+        const DEPTH: usize = 200;
+        let n = DEPTH;
+        let cases: [(&str, String, Option<usize>); 11] = [
+            ("andor", "true && ".repeat(n) + "true\n", Some(0)),
+            ("pipe", "true | ".repeat(n) + "true\n", Some(0)),
+            ("bang", "! ".repeat(n) + "true\n", Some(0)),
+            (
+                "subshell",
+                "( ".repeat(n) + "true" + &" )".repeat(n) + "\n",
+                Some(0),
+            ),
+            (
+                "brace",
+                "{ ".repeat(n) + "true; " + &"}; ".repeat(n - 1) + "}\n",
+                Some(0),
+            ),
+            (
+                "cmdsub",
+                "echo ".to_string() + &"$(".repeat(n) + "true" + &")".repeat(n) + "\n",
+                Some(n + 1),
+            ),
+            (
+                "ifs",
+                "if true; then ".repeat(n) + "true; " + &"fi; ".repeat(n - 1) + "fi\n",
+                Some(0),
+            ),
+            (
+                "param",
+                "echo ".to_string() + &"${a:-".repeat(n) + "x" + &"}".repeat(n) + "\n",
+                None,
+            ),
+            (
+                "arith",
+                "echo $(( ".to_string() + &"1 + ".repeat(n) + "1 ))\n",
+                Some(0),
+            ),
+            (
+                "arithparen",
+                "echo $(( ".to_string() + &"(".repeat(n) + "1" + &")".repeat(n) + " ))\n",
+                Some(n),
+            ),
+            (
+                "condparen",
+                "[[ ".to_string() + &"( ".repeat(n) + "-n a" + &" )".repeat(n) + " ]]\n",
+                None,
+            ),
+        ];
+        // One level of every pass fits in 512 KiB.
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(move || {
+                for (name, body, expected) in cases {
+                    let result = check_script(&spec(&format!("#!/bin/bash\n{body}")));
+                    if let Some(expected) = expected {
+                        assert_eq!(result.comments.len(), expected, "{name}");
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn rc_disabled_range_filters_by_membership() {
         assert_eq!(codes(&spec("echo $x\n")), vec![2148, 2154, 2086]);

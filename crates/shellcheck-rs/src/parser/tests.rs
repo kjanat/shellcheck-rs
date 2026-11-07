@@ -1,27 +1,39 @@
 //! Parser unit tests (ports of the `Parser.hs` props and regression cases).
 use super::*;
+use reblessive::Stk;
 
 pub(super) fn parses_cleanly<T>(
     script: &str,
-    parser: impl FnOnce(&mut Parser) -> PResult<T>,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
 ) -> Option<bool> {
     let mut p = Parser::new("-", script);
-    let parsed = parser(&mut p);
+    let parsed = reblessive::Stack::new()
+        .enter(|stk| parser(&mut p, stk))
+        .finish();
     if parsed.is_err() || p.has_committed_failure() || !p.eof() {
         return None;
     }
     Some(p.notes.is_empty() && p.problems.is_empty())
 }
 
-pub(super) fn is_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_ok<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser) == Some(true)
 }
 
-pub(super) fn is_warning<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_warning<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser) == Some(false)
 }
 
-pub(super) fn is_not_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_not_ok<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser).is_none()
 }
 
@@ -32,49 +44,52 @@ mod spacing_tests {
 
     #[test]
     fn prop_spacing1() {
-        assert!(is_ok("  \\\n # Comment", |p| {
+        assert!(is_ok("  \\\n # Comment", async |p, _stk| {
             p.spacing();
             Ok(())
         }));
     }
     #[test]
     fn prop_spacing2() {
-        assert!(is_ok("# We can continue lines with \\", |p| {
+        assert!(is_ok("# We can continue lines with \\", async |p, _stk| {
             p.spacing();
             Ok(())
         }));
     }
     #[test]
     fn prop_spacing3() {
-        assert!(is_warning("   \\\n #  --verbose=true \\", |p| {
-            p.spacing();
-            Ok(())
-        }));
+        assert!(is_warning(
+            "   \\\n #  --verbose=true \\",
+            async |p, _stk| {
+                p.spacing();
+                Ok(())
+            }
+        ));
     }
     #[test]
     fn prop_allspacing() {
-        assert!(is_ok("#foo", |p| {
-            p.allspacing();
+        assert!(is_ok("#foo", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_allspacing2() {
-        assert!(is_ok(" #foo\n # bar\n#baz\n", |p| {
-            p.allspacing();
+        assert!(is_ok(" #foo\n # bar\n#baz\n", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_allspacing3() {
-        assert!(is_ok("#foo\n#bar\n#baz\n", |p| {
-            p.allspacing();
+        assert!(is_ok("#foo\n#bar\n#baz\n", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_readAnyComment() {
-        assert!(is_ok("# Comment", Parser::read_any_comment));
+        assert!(is_ok("# Comment", async |p, _stk| p.read_any_comment()));
     }
 }
 
@@ -85,12 +100,16 @@ fn lookahead_restores_context_frames_even_when_the_prefix_was_replaced() {
         parser.push_ctx("outer");
     }
     let before = parser.contexts.clone();
-    let answer = parser.peek_ahead(|p| {
-        p.contexts.truncate(10);
-        p.push_ctx("replacement");
-        p.commit();
-        Err::<(), ()>(())
-    });
+    let answer = reblessive::Stack::new()
+        .enter(|stk| {
+            parser.peek_ahead(stk, async |p, _stk| {
+                p.contexts.truncate(10);
+                p.push_ctx("replacement");
+                p.commit();
+                Err::<(), ()>(())
+            })
+        })
+        .finish();
     assert!(answer.is_none());
     assert_eq!(parser.contexts, before);
     assert!(!parser.committed);
@@ -1871,7 +1890,10 @@ mod double_escape_tests {
 
     fn double_quoted_literal(script: &str) -> String {
         let mut p = Parser::new("-", script);
-        let word = p.read_normal_word().expect("a word");
+        let word = reblessive::Stack::new()
+            .enter(|stk| p.read_normal_word(stk))
+            .finish()
+            .expect("a word");
         let mut out = String::new();
         word.visit_preorder(&mut |t| {
             if let InnerToken::T_Literal(s) = &*t.inner {

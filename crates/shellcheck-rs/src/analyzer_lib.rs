@@ -481,18 +481,20 @@ pub fn named_dialect(root: &Token) -> Option<Dialect> {
     Dialect::from_name(&get_candidate(root))
 }
 
-fn get_candidate(t: &Token) -> String {
-    match &*t.inner {
-        InnerToken::T_Script { shebang, .. } => from_shebang(shebang),
-        InnerToken::T_Annotation { annotations, token } => {
-            for a in annotations {
-                if let Annotation::ShellOverride(s) = a {
-                    return s.clone();
+fn get_candidate(mut t: &Token) -> String {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Script { shebang, .. } => return from_shebang(shebang),
+            InnerToken::T_Annotation { annotations, token } => {
+                for a in annotations {
+                    if let Annotation::ShellOverride(s) = a {
+                        return s.clone();
+                    }
                 }
+                token
             }
-            get_candidate(token)
-        }
-        _ => String::new(),
+            _ => return String::new(),
+        };
     }
 }
 
@@ -507,16 +509,21 @@ fn from_shebang(shebang: &Token) -> String {
 /// Build Id -> parent-Id and Id -> token maps.
 #[must_use]
 pub fn build_maps(root: &Token) -> (IdMap<Id, Id>, IdMap<Id, Token>) {
-    fn go(t: &Token, parent: &mut IdMap<Id, Id>, id_map: &mut IdMap<Id, Token>) {
-        id_map.insert(t.id(), t.clone());
-        t.inner.for_each_child(|c| {
-            parent.insert(c.id(), t.id());
-            go(c, parent, id_map);
-        });
-    }
     let mut parent = IdMap::default();
     let mut id_map = IdMap::default();
-    go(root, &mut parent, &mut id_map);
+    // Pre-order, so both maps are filled in the order a recursive walk would
+    // fill them: a node's parent entry, then the node, then its subtree.
+    let mut pending: Vec<(&Token, Option<Id>)> = vec![(root, None)];
+    let mut children = Vec::new();
+    while let Some((t, up)) = pending.pop() {
+        if let Some(up) = up {
+            parent.insert(t.id(), up);
+        }
+        id_map.insert(t.id(), t.clone());
+        t.inner.for_each_child(|c| children.push((c, Some(t.id()))));
+        pending.extend(children.iter().rev());
+        children.clear();
+    }
     (parent, id_map)
 }
 
@@ -841,37 +848,36 @@ pub(crate) fn get_printf_formats(s: &str) -> String {
     get_formats(&cs)
 }
 
-fn get_formats(cs: &[char]) -> String {
-    if cs.is_empty() {
-        return String::new();
-    }
-    if cs[0] == '%' {
+/// `getFormats`, with `regexBasedGetFormats` folded in.
+///
+/// Both Haskell functions read a piece, recurse on the rest of the string
+/// and prepend the piece. This loop appends each piece as it reads it,
+/// which gives the same order.
+fn get_formats(mut cs: &[char]) -> String {
+    let mut out = String::new();
+    while let Some(&c) = cs.first() {
+        if c != '%' {
+            cs = &cs[1..];
+            continue;
+        }
         if cs.get(1) == Some(&'%') {
-            return get_formats(&cs[2..]);
+            cs = &cs[2..];
+            continue;
         }
         if cs.get(1) == Some(&'(') {
             let rest = &cs[2..];
             if let Some(pos) = rest.iter().position(|&c| c == ')')
                 && pos + 1 < rest.len()
             {
-                let c = rest[pos + 1];
-                let trailing = &rest[pos + 2..];
-                let mut out = String::new();
-                out.push(c);
-                out.push_str(&get_formats(trailing));
-                return out;
+                out.push(rest[pos + 1]);
+                cs = &rest[pos + 2..];
+                continue;
             }
-            return String::new();
+            break;
         }
-        return regex_based_get_formats(&cs[1..]);
-    }
-    get_formats(&cs[1..])
-}
-
-fn regex_based_get_formats(rest: &[char]) -> String {
-    let (mut out, remaining) = match match_format_re(rest) {
-        Some((width_star, prec_star, typ, remaining)) => {
-            let mut out = String::new();
+        // regexBasedGetFormats
+        let rest = &cs[1..];
+        if let Some((width_star, prec_star, typ, remaining)) = match_format_re(rest) {
             if width_star {
                 out.push('*');
             }
@@ -879,11 +885,12 @@ fn regex_based_get_formats(rest: &[char]) -> String {
                 out.push('*');
             }
             out.push(typ);
-            (out, remaining)
+            cs = remaining;
+        } else {
+            out.extend(rest.iter().take(1));
+            cs = rest;
         }
-        None => (rest.iter().take(1).collect::<String>(), rest),
-    };
-    out.push_str(&get_formats(remaining));
+    }
     out
 }
 
@@ -988,12 +995,14 @@ fn is_flag_word(t: &Token) -> bool {
 }
 
 /// `getCommand`.
-pub(crate) fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
+pub(crate) fn get_command(mut t: &Token) -> Option<&Token> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Redirecting { cmd, .. } => cmd,
+            InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => return Some(t),
+            InnerToken::T_Annotation { token, .. } => token,
+            _ => return None,
+        };
     }
 }
 
@@ -1376,28 +1385,59 @@ fn assign_first(t: &Token) -> bool {
     )
 }
 
-fn stack_analysis(ctx: &FlowCtx, t: &Token, out: &mut Vec<StackData>) {
-    // startScope
-    let scope = lead_type(ctx, t);
-    let has_scope = !matches!(scope, Scope::NoneScope);
-    if has_scope {
-        out.push(StackData::StackScope(scope));
+fn stack_analysis(ctx: &FlowCtx, root: &Token, out: &mut Vec<StackData>) {
+    /// One step of `doStackAnalysis startScope endScope`. `Leave` carries the
+    /// decision of its `Enter` to the matching `endScope`.
+    enum Step<'a> {
+        Enter(&'a Token),
+        Leave {
+            t: &'a Token,
+            has_scope: bool,
+            assign_first: bool,
+        },
     }
-    let af = assign_first(t);
-    if af {
-        push_modified(t, out);
-    }
-    // recurse (doStackAnalysis)
-    t.inner.for_each_child(|c| stack_analysis(ctx, c, out));
-    // endScope
-    for (b, tok, name) in get_referenced_variables(ctx, t) {
-        out.push(StackData::Reference(b, tok, name));
-    }
-    if !af {
-        push_modified(t, out);
-    }
-    if has_scope {
-        out.push(StackData::StackScopeEnd);
+    let mut pending = vec![Step::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Enter(t) => {
+                // startScope
+                let scope = lead_type(ctx, t);
+                let has_scope = !matches!(scope, Scope::NoneScope);
+                if has_scope {
+                    out.push(StackData::StackScope(scope));
+                }
+                let af = assign_first(t);
+                if af {
+                    push_modified(t, out);
+                }
+                pending.push(Step::Leave {
+                    t,
+                    has_scope,
+                    assign_first: af,
+                });
+                // recurse (doStackAnalysis)
+                t.inner.for_each_child(|c| children.push(c));
+                pending.extend(children.iter().rev().map(|c| Step::Enter(c)));
+                children.clear();
+            }
+            Step::Leave {
+                t,
+                has_scope,
+                assign_first,
+            } => {
+                // endScope
+                for (b, tok, name) in get_referenced_variables(ctx, t) {
+                    out.push(StackData::Reference(b, tok, name));
+                }
+                if !assign_first {
+                    push_modified(t, out);
+                }
+                if has_scope {
+                    out.push(StackData::StackScopeEnd);
+                }
+            }
+        }
     }
 }
 
@@ -1682,20 +1722,32 @@ fn let_param_to_literal(base: &Token, token: &Token) -> Vec<(Token, Token, Strin
     }
 }
 
-fn get_set_params(tokens: &[Token]) -> Option<Vec<Token>> {
-    if tokens.len() >= 2 && ast_lib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
-        return get_set_params(&tokens[2..]);
-    }
-    let first = tokens.first()?;
-    let rest = &tokens[1..];
-    match ast_lib::get_literal_string(first) {
-        Some(s) if s == "--" => Some(rest.to_vec()),
-        Some(s) if s.starts_with('-') => get_set_params(rest),
-        _ => {
-            let mut out = vec![first.clone()];
-            out.extend(get_set_params(rest).unwrap_or_default());
-            Some(out)
+/// `getSetParams`.
+///
+/// Upstream recurses once per argument. It prepends a positional parameter
+/// to the result for the rest, where `Nothing` counts as no parameters, and
+/// it skips flags and `-o name` pairs. `params` holds what upstream would
+/// have prepended so far.
+fn get_set_params(mut tokens: &[Token]) -> Option<Vec<Token>> {
+    let mut params: Option<Vec<Token>> = None;
+    loop {
+        if tokens.len() >= 2 && ast_lib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
+            tokens = &tokens[2..];
+            continue;
         }
+        let Some((first, rest)) = tokens.split_first() else {
+            return params;
+        };
+        match ast_lib::get_literal_string(first) {
+            Some(s) if s == "--" => {
+                let mut out = params.unwrap_or_default();
+                out.extend_from_slice(rest);
+                return Some(out);
+            }
+            Some(s) if s.starts_with('-') => {}
+            _ => params.get_or_insert_default().push(first.clone()),
+        }
+        tokens = rest;
     }
 }
 
@@ -1882,18 +1934,24 @@ fn get_bats_run_variables(args: &[Token]) -> Vec<(&'static str, DataType)> {
 /// `getModifiedVariableCommand` — `base` is the `T_SimpleCommand`, `words[0]` its name.
 fn get_modified_variable_command(
     base: &Token,
-    words: &[Token],
+    mut words: &[Token],
 ) -> Vec<(Token, Token, String, DataType)> {
-    // first word's leading literal is the command name x
-    let Some(x) = words.first().and_then(leading_literal) else {
-        return vec![];
+    // first word's leading literal is the command name x; `builtin cmd ..`
+    // is `cmd ..`, however many times it is repeated.
+    let x = loop {
+        let Some(x) = words.first().and_then(leading_literal) else {
+            return vec![];
+        };
+        if x != "builtin" {
+            break x;
+        }
+        words = &words[1..];
     };
     let rest = &words[1..];
     let flags = command_flag_strings(words);
     let has = |f: &str| flags.iter().any(|s| s == f);
 
     let result: Vec<(Token, Token, String, DataType)> = match x {
-        "builtin" => return get_modified_variable_command(base, rest),
         "read" => get_read_variables(base, rest),
         "run" => get_bats_run_variables(rest)
             .into_iter()
@@ -2219,15 +2277,17 @@ pub(crate) fn in_condition(params: &Parameters, t: &Token) -> bool {
 }
 
 /// `isTestCommand`.
-pub(crate) fn is_test_command(t: &Token) -> bool {
+pub(crate) fn is_test_command(mut t: &Token) -> bool {
     use InnerToken::{T_Annotation, T_Condition, T_Pipeline, T_Redirecting, T_SimpleCommand};
-    match &*t.inner {
-        T_Condition { .. } => true,
-        T_SimpleCommand { .. } => is_command(t, "test"),
-        T_Redirecting { cmd, .. } => is_test_command(cmd),
-        T_Annotation { token, .. } => is_test_command(token),
-        T_Pipeline { commands, .. } if commands.len() == 1 => is_test_command(&commands[0]),
-        _ => false,
+    loop {
+        t = match &*t.inner {
+            T_Condition { .. } => return true,
+            T_SimpleCommand { .. } => return is_command(t, "test"),
+            T_Redirecting { cmd, .. } => cmd,
+            T_Annotation { token, .. } => token,
+            T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
+            _ => return false,
+        };
     }
 }
 

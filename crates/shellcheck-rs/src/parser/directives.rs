@@ -1,15 +1,16 @@
 //! ShellCheck directive annotations (`# shellcheck ...`).
 use super::{ALMOST_SPACE_CHARS, Annotation, PResult, Parser, Position, Severity};
+use reblessive::Stk;
 
 impl Parser {
     /// `readAnnotations`: zero or more `# shellcheck ...` directive lines.
-    pub(super) fn read_annotations(&mut self) -> Vec<Annotation> {
+    pub(super) async fn read_annotations(&mut self, stk: &mut Stk) -> Vec<Annotation> {
         let mut out = Vec::new();
         loop {
             let m = self.mark();
-            if let Ok(mut anns) = self.read_annotation() {
+            if let Ok(mut anns) = self.read_annotation(stk).await {
                 out.append(&mut anns);
-                self.allspacing();
+                self.allspacing(stk).await;
             } else {
                 // `many` stops on a failure that consumed nothing; a
                 // malformed directive has consumed its prefix, and nothing
@@ -27,8 +28,11 @@ impl Parser {
 
     /// A single `# shellcheck <keys>` directive. A line that is not one fails
     /// without consuming; one that is, but is malformed, is a parse error.
-    pub(super) fn read_annotation(&mut self) -> PResult<Vec<Annotation>> {
-        self.called("shellcheck directive", Self::read_annotation_body)
+    pub(super) async fn read_annotation(&mut self, stk: &mut Stk) -> PResult<Vec<Annotation>> {
+        self.called(stk, "shellcheck directive", async |p, _stk| {
+            p.read_annotation_body()
+        })
+        .await
     }
 
     fn read_annotation_body(&mut self) -> PResult<Vec<Annotation>> {

@@ -692,15 +692,17 @@ pub(super) fn check_bats_test_does_not_use_negation(params: &Parameters, t: &Tok
 
 /// `couldBeOptimized`: the argument won't be re-split/globbed if inlined.
 fn could_be_optimized(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Glob(_) | InnerToken::T_Extglob { .. } | InnerToken::T_BraceExpansion(_) => {
-            false
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            InnerToken::T_Glob(_)
+            | InnerToken::T_Extglob { .. }
+            | InnerToken::T_BraceExpansion(_) => return false,
+            InnerToken::T_NormalWord(l) | InnerToken::T_DoubleQuoted(l) => pending.extend(l),
+            _ => {}
         }
-        InnerToken::T_NormalWord(l) | InnerToken::T_DoubleQuoted(l) => {
-            l.iter().all(could_be_optimized)
-        }
-        _ => true,
     }
+    true
 }
 
 /// `containsSetE`: `params.has_set_e()` (which covers `set -e` commands) plus the
@@ -746,9 +748,11 @@ fn is_cd_revert(t: &Token) -> bool {
     o.len() == 2 && (o[1] == ".." || o[1] == "-")
 }
 
-fn cd_candidate(t: &Token) -> Option<&Token> {
+fn cd_candidate(mut t: &Token) -> Option<&Token> {
+    while let InnerToken::T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
     match &*t.inner {
-        InnerToken::T_Annotation { token, .. } => cd_candidate(token),
         InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
             if is_command(&commands[0], "cd") {
                 Some(&commands[0])
@@ -896,16 +900,15 @@ fn first_word_is_arg(list: &[Token]) -> bool {
 /// always this fallback artifact — suppressing it drops the parser noise
 /// without hiding any real glob-as-command.
 fn is_condition_fallback_glob(first: &Token) -> bool {
-    fn has_spaced_glob(t: &Token) -> bool {
+    let mut pending = vec![first];
+    while let Some(t) = pending.pop() {
         match &*t.inner {
-            InnerToken::T_Glob(s) => s.chars().any(|c| c == ' ' || c == '\t'),
-            InnerToken::T_NormalWord(l) | InnerToken::T_DoubleQuoted(l) => {
-                l.iter().any(has_spaced_glob)
-            }
-            _ => false,
+            InnerToken::T_Glob(s) if s.chars().any(|c| c == ' ' || c == '\t') => return true,
+            InnerToken::T_NormalWord(l) | InnerToken::T_DoubleQuoted(l) => pending.extend(l),
+            _ => {}
         }
     }
-    has_spaced_glob(first)
+    false
 }
 
 const fn has_execfail(params: &Parameters) -> bool {
@@ -925,15 +928,17 @@ fn spurious_cleanup(t: &Token) -> bool {
     false
 }
 
-fn spurious_is_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => spurious_is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            !assignments.is_empty() && words.is_empty()
-        }
-        InnerToken::T_Assignment { .. } => true,
-        InnerToken::T_Annotation { token, .. } => spurious_is_assignment(token),
-        _ => false,
+fn spurious_is_assignment(mut t: &Token) -> bool {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Redirecting { cmd, .. } => cmd,
+            InnerToken::T_SimpleCommand { assignments, words } => {
+                return !assignments.is_empty() && words.is_empty();
+            }
+            InnerToken::T_Assignment { .. } => return true,
+            InnerToken::T_Annotation { token, .. } => token,
+            _ => return false,
+        };
     }
 }
 
@@ -945,46 +950,41 @@ fn strip_cleanup(cmds: &[Token]) -> &[Token] {
     &cmds[..end]
 }
 
+/// `doList`. Upstream strips the trailing cleanup and recurses on the tail
+/// after each command. Every tail ends in the stripped list's last command,
+/// and stripping a tail again removes nothing. This loop strips once and
+/// then walks the commands.
 fn do_list(cmds: &[Token], in_loop: bool, out: &mut Out) {
-    let stripped = strip_cleanup(cmds);
-    do_list_stripped(stripped, in_loop, out);
-}
-
-fn do_list_stripped(cmds: &[Token], in_loop: bool, out: &mut Out) {
-    if in_loop {
-        // Comment every command, including the last.
-        if let Some((current, tail)) = cmds.split_first() {
-            comment_if_exec(current, out);
-            do_list(tail, true, out);
-        }
+    let cmds = strip_cleanup(cmds);
+    // In a loop, every command gets a comment, the last one included. Outside
+    // a loop, every command except the last one gets a comment.
+    let commented = if in_loop {
+        cmds
     } else {
-        // Comment all but the last remaining command.
-        if cmds.len() >= 2 {
-            comment_if_exec(&cmds[0], out);
-            do_list(&cmds[1..], false, out);
-        }
+        &cmds[..cmds.len().saturating_sub(1)]
+    };
+    for current in commented {
+        comment_if_exec(current, out);
     }
 }
 
-fn comment_if_exec(t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            comment_if_exec(&commands[0], out);
-        }
-        InnerToken::T_Redirecting { cmd, .. } => {
-            if let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
-                && words.len() >= 2
-                && ast_lib::get_literal_string(&words[0]).as_deref() == Some("exec")
-            {
-                warn(
-                    out,
-                    cmd.id(),
-                    2093,
-                    "Remove \"exec \" if script should continue after this command.",
-                );
-            }
-        }
-        _ => {}
+fn comment_if_exec(mut t: &Token, out: &mut Out) {
+    while let InnerToken::T_Pipeline { commands, .. } = &*t.inner
+        && commands.len() == 1
+    {
+        t = &commands[0];
+    }
+    if let InnerToken::T_Redirecting { cmd, .. } = &*t.inner
+        && let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
+        && words.len() >= 2
+        && ast_lib::get_literal_string(&words[0]).as_deref() == Some("exec")
+    {
+        warn(
+            out,
+            cmd.id(),
+            2093,
+            "Remove \"exec \" if script should continue after this command.",
+        );
     }
 }
 

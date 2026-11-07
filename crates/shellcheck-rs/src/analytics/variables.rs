@@ -499,12 +499,17 @@ fn is_indexed(expr: &Token) -> bool {
 
 fn commarray_literal(t: &Token) -> String {
     use InnerToken::{T_IndexedElement, T_Literal, T_NormalWord};
-    match &*t.inner {
-        T_IndexedElement { value, .. } => commarray_literal(value),
-        T_NormalWord(l) => l.iter().map(commarray_literal).collect(),
-        T_Literal(s) => s.clone(),
-        _ => String::new(),
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_IndexedElement { value, .. } => pending.push(value),
+            T_NormalWord(l) => pending.extend(l.iter().rev()),
+            T_Literal(s) => out.push_str(s),
+            _ => {}
+        }
     }
+    out
 }
 
 /// `ShellCheck.ASTLib.isUnmodifiedParameterExpansion`.
@@ -956,18 +961,19 @@ fn decoded_literal_string(t: &Token) -> Option<String> {
         T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
         T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
     };
-    match &*t.inner {
-        T_Literal(s) | T_SingleQuoted(s) | T_ParamSubSpecialChar(s) => Some(s.clone()),
-        T_DollarSingleQuoted(s) => Some(decode_escapes(s)),
-        T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | T_NormalWord(l) | TA_Expansion(l) => {
-            let mut out = String::new();
-            for p in l {
-                out.push_str(&decoded_literal_string(p)?);
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_Literal(s) | T_SingleQuoted(s) | T_ParamSubSpecialChar(s) => out.push_str(s),
+            T_DollarSingleQuoted(s) => out.push_str(&decode_escapes(s)),
+            T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | T_NormalWord(l) | TA_Expansion(l) => {
+                pending.extend(l.iter().rev());
             }
-            Some(out)
+            _ => return None,
         }
-        _ => None,
     }
+    Some(out)
 }
 
 #[cfg(test)]

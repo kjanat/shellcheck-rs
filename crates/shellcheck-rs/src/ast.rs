@@ -120,13 +120,89 @@ pub struct Token {
     pub inner: std::rc::Rc<InnerToken>,
 }
 
+thread_local! {
+    /// The token pairs that the running comparison still has to compare. It is
+    /// `None` when no comparison runs on this thread.
+    static UNCOMPARED: std::cell::RefCell<Option<Vec<(Token, Token)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl PartialEq for Token {
+    /// Mirrors `instance Eq Token where OuterToken _ a == OuterToken _ b = a == b`.
+    ///
+    /// The derived `InnerToken` equality compares a node's fields and calls
+    /// this function for each child token. Inside a running comparison, that
+    /// call only queues the pair and returns `true`. The outermost call works
+    /// through the queue, so the depth of the tree never reaches the call
+    /// stack. Two trees are equal when every queued pair is equal.
     fn eq(&self, other: &Self) -> bool {
-        // Mirrors `instance Eq Token where OuterToken _ a == OuterToken _ b = a == b`
-        self.inner == other.inner
+        /// Ends the comparison on this thread on every exit path, panics included.
+        struct Running;
+        impl Drop for Running {
+            fn drop(&mut self) {
+                UNCOMPARED.with_borrow_mut(|queue| *queue = None);
+            }
+        }
+        if std::rc::Rc::ptr_eq(&self.inner, &other.inner) {
+            return true;
+        }
+        let queued = UNCOMPARED.with_borrow_mut(|queue| {
+            queue
+                .as_mut()
+                .map(|queue| queue.push((self.clone(), other.clone())))
+                .is_some()
+        });
+        if queued {
+            return true;
+        }
+        UNCOMPARED.with_borrow_mut(|queue| *queue = Some(Vec::new()));
+        let _running = Running;
+        let mut equal = *self.inner == *other.inner;
+        while equal {
+            let Some((a, b)) = UNCOMPARED.with_borrow_mut(|queue| queue.as_mut()?.pop()) else {
+                break;
+            };
+            equal = std::rc::Rc::ptr_eq(&a.inner, &b.inner) || *a.inner == *b.inner;
+        }
+        equal
     }
 }
 impl Eq for Token {}
+
+thread_local! {
+    static VACANT: std::rc::Rc<InnerToken> = std::rc::Rc::new(InnerToken::T_Semi);
+}
+
+/// Moves the payload out of `slot` when no other token shares it, and puts
+/// a shared leaf in its place. The token's own drop then has nothing to
+/// descend into.
+fn take_unique(slot: &mut std::rc::Rc<InnerToken>) -> Option<InnerToken> {
+    if std::rc::Rc::strong_count(slot) != 1 {
+        return None;
+    }
+    let vacant = VACANT.try_with(std::rc::Rc::clone).ok()?;
+    std::rc::Rc::try_unwrap(std::mem::replace(slot, vacant)).ok()
+}
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        let Some(mut inner) = take_unique(&mut self.inner) else {
+            return;
+        };
+        let mut orphans = Vec::new();
+        loop {
+            let _ = inner.try_for_each_child_mut(|child| {
+                orphans.extend(take_unique(&mut child.inner));
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            drop(inner);
+            let Some(next) = orphans.pop() else {
+                break;
+            };
+            inner = next;
+        }
+    }
+}
 
 impl Token {
     /// `OuterToken id inner`.
@@ -923,8 +999,10 @@ impl Token {
 
     /// Pre-order visit (parent before children), matching `doAnalysis f`.
     pub fn visit_preorder<F: FnMut(&Self)>(&self, f: &mut F) {
-        f(self);
-        self.inner.for_each_child(|c| c.visit_preorder(f));
+        let _ = self.try_visit_preorder(&mut |t| {
+            f(t);
+            std::ops::ControlFlow::<()>::Continue(())
+        });
     }
 
     /// Pre-order traversal that stops immediately when the visitor breaks.
@@ -932,18 +1010,44 @@ impl Token {
         &self,
         visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
     ) -> std::ops::ControlFlow<B> {
-        visit(self)?;
-        self.inner
-            .try_for_each_child(|child| child.try_visit_preorder(visit))
+        let mut pending = vec![self];
+        let mut children = Vec::new();
+        while let Some(token) = pending.pop() {
+            visit(token)?;
+            token.inner.for_each_child(|c| children.push(c));
+            pending.extend(children.iter().rev());
+            children.clear();
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     /// Stack analysis: `start` pre-order, recurse, `end` post-order —
     /// matching `doStackAnalysis`.
     pub fn visit_stack<S: FnMut(&Self), E: FnMut(&Self)>(&self, start: &mut S, end: &mut E) {
-        start(self);
-        self.inner.for_each_child(|c| c.visit_stack(start, end));
-        end(self);
+        let mut pending = vec![Visit::Enter(self)];
+        let mut children = Vec::new();
+        while let Some(step) = pending.pop() {
+            match step {
+                Visit::Enter(token) => {
+                    start(token);
+                    pending.push(Visit::Leave(token));
+                    token.inner.for_each_child(|c| children.push(c));
+                    pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+                    children.clear();
+                }
+                Visit::Leave(token) => end(token),
+            }
+        }
     }
+}
+
+/// A step of a depth-first walk that sees each token on the way down and up.
+#[derive(Clone, Copy)]
+pub enum Visit<'a> {
+    /// Entering the token, before its children.
+    Enter(&'a Token),
+    /// Leaving the token, after its children.
+    Leave(&'a Token),
 }
 
 #[cfg(test)]

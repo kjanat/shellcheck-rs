@@ -47,6 +47,22 @@ requests: list[dict[str, JSON]] = [
     {"script": "true", "severity": "invalid"},
     {},
 ]
+# Each host must check scripts nested this deep, as the native core does.
+DEPTH = 1000
+requests += [
+    {"script": "#!/bin/bash\n" + script + "\n"}
+    for script in (
+        "true && " * DEPTH + "true",
+        "! " * DEPTH + "true",
+        "(" * DEPTH + "true" + ")" * DEPTH,
+        "{ " * DEPTH + "true; " + "}; " * (DEPTH - 1) + "}",
+        "echo " + "$(" * DEPTH + "true" + ")" * DEPTH,
+        "if true; then " * DEPTH + "true; " + "fi; " * (DEPTH - 1) + "fi",
+        "echo " + "${a:-" * DEPTH + "x" + "}" * DEPTH,
+        "echo $(( " + "(" * DEPTH + "1" + ")" * DEPTH + " ))",
+        "[[ " + "( " * DEPTH + "-n a" + " )" * DEPTH + " ]]",
+    )
+]
 fixtures: list[JSON] = []
 for request in requests:
     result = subprocess.run(

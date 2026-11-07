@@ -12,11 +12,13 @@ pub(super) fn surround_with(params: &Parameters, id: Id, s: &str) -> Fix {
 }
 
 /// `getCommand`.
-pub(super) fn get_command_local(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command_local(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command_local(token),
-        _ => None,
+pub(super) fn get_command_local(mut t: &Token) -> Option<&Token> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Redirecting { cmd, .. } => cmd,
+            InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => return Some(t),
+            InnerToken::T_Annotation { token, .. } => token,
+            _ => return None,
+        };
     }
 }

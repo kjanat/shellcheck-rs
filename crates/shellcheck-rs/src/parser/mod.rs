@@ -23,6 +23,7 @@ use crate::ast::{
 };
 use crate::ast_lib;
 use crate::interface::{NoExternalSources, Position, Severity, Shell, System, columns};
+use reblessive::Stk;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -653,17 +654,20 @@ impl Parser {
 
     /// Run `body` as the named production, so that a failure inside it can
     /// report "Couldn't parse this <name>".
-    fn called<T>(
+    async fn called<T>(
         &mut self,
+        stk: &mut Stk,
         name: &'static str,
-        body: impl FnOnce(&mut Self) -> PResult<T>,
+        body: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<T>,
     ) -> PResult<T> {
         let start_idx = self.idx;
         let committed = self.committed;
         self.push_ctx(name);
         let serial = self.contexts.back().map_or(0, |c| c.serial);
         self.open_starts.push(start_idx);
-        let r = body(self);
+        // Every named production passes through this call, and `stk.run`
+        // moves the parser's recursion onto the heap stack.
+        let r = stk.run(|stk| body(self, stk)).await;
         self.open_starts.pop();
         // `parsecBracket` runs no `after val` once the body has committed.
         if self.committed && !committed {
@@ -701,10 +705,11 @@ impl Parser {
     /// it fails too (`forgetOnFailure`); and if both fail, run the expected one
     /// a second time, so the error reported is the one from the production the
     /// author most likely meant rather than from the fallback.
-    fn read_ambiguous(
+    async fn read_ambiguous(
         &mut self,
-        expected: impl Fn(&mut Self) -> PResult<Token>,
-        alternative: impl Fn(&mut Self) -> PResult<Token>,
+        stk: &mut Stk,
+        expected: impl AsyncFn(&mut Self, &mut Stk) -> PResult<Token>,
+        alternative: impl AsyncFn(&mut Self, &mut Stk) -> PResult<Token>,
         warn: impl FnOnce(&mut Self, Position),
     ) -> PResult<Token> {
         let pos = self.pos();
@@ -716,7 +721,7 @@ impl Parser {
         // caught rather than propagated: the parse is not over.
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
-        if let Ok(t) = expected(self)
+        if let Ok(t) = expected(self, stk).await
             && self.committed == committed
         {
             return Ok(t);
@@ -724,13 +729,13 @@ impl Parser {
         self.committed = committed;
         self.reset(m);
         self.notes.truncate(notes);
-        self.frozen_contexts = frozen.clone();
+        self.frozen_contexts.clone_from(&frozen);
         // Problems and contexts live outside Parsec, so the first attempt's
         // survive: `forgetOnFailure` only rewinds what the *alternative* adds.
         let problems = self.problems.len();
         let contexts = self.contexts.clone();
         let annotations = self.ann_contexts.clone();
-        if let Ok(t) = alternative(self)
+        if let Ok(t) = alternative(self, stk).await
             && self.committed == committed
         {
             warn(self, pos);
@@ -746,7 +751,7 @@ impl Parser {
         self.committed = committed;
         self.frozen_contexts = frozen;
         self.reset(m);
-        expected(self)
+        expected(self, stk).await
     }
 
     /// Fail the current production outright, Haskell `fail "msg"`. The message
@@ -799,9 +804,10 @@ impl Parser {
     /// the keyword that ended their last term -- is gone, and an attempt that
     /// recorded nothing of its own stands for Parsec's unknown error where it
     /// gave up. A success or a consuming failure keeps its own, as always.
-    pub(super) fn many_attempt<T>(
+    pub(super) async fn many_attempt<T>(
         &mut self,
-        f: impl FnOnce(&mut Self) -> PResult<T>,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<T>,
     ) -> PResult<T> {
         let m = self.mark();
         // Past a commitment there is no accumulated error to lose: the failure
@@ -810,7 +816,7 @@ impl Parser {
         if !self.committed {
             self.failure = None;
         }
-        let r = f(self);
+        let r = f(self, stk).await;
         if r.is_err() && self.idx == m.idx && self.failure.is_none() {
             self.fail_implicitly();
         }
@@ -850,14 +856,18 @@ impl Parser {
     /// commitment, since a consuming failure inside a `try` is caught rather
     /// than propagated. The context stack and the problems live in the `StateT`
     /// underneath and stay.
-    pub(super) fn try_parse<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+    pub(super) async fn try_parse<T>(
+        &mut self,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<T>,
+    ) -> PResult<T> {
         let m = self.mark();
         let notes = self.notes.len();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
         let pending = self.pending_heredocs.clone();
         let bodies = self.heredoc_bodies.clone();
-        if let Ok(v) = f(self)
+        if let Ok(v) = f(self, stk).await
             && self.committed == committed
         {
             Ok(v)
@@ -882,7 +892,11 @@ impl Parser {
     /// then replies with an unknown error at its own position, which loses
     /// the merge against whatever stood before. A failure keeps its error,
     /// as `try` does.
-    pub(super) fn peek_ahead<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> Option<T> {
+    pub(super) async fn peek_ahead<T>(
+        &mut self,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<T>,
+    ) -> Option<T> {
         let m = self.mark();
         let notes = self.notes.len();
         let problems = self.problems.len();
@@ -893,7 +907,7 @@ impl Parser {
         let failure = self.failure.clone();
         let pending = self.pending_heredocs.clone();
         let bodies = self.heredoc_bodies.clone();
-        let out = f(self).ok();
+        let out = f(self, stk).await.ok();
         if out.is_some() {
             self.failure = failure;
         }
@@ -927,10 +941,11 @@ impl Parser {
     /// `parsecBracket` the scope closes on success or on a failure that
     /// consumed nothing; one that consumed leaves it open, which is what lets
     /// `# shellcheck disable=..` silence the failure notes too.
-    pub(super) fn with_annotations<T>(
+    pub(super) async fn with_annotations<T>(
         &mut self,
+        stk: &mut Stk,
         anns: &[Annotation],
-        f: impl FnOnce(&mut Self) -> PResult<T>,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<T>,
     ) -> PResult<T> {
         let from = self.ann_contexts.len();
         let start_idx = self.idx;
@@ -947,7 +962,7 @@ impl Parser {
                 Rc::make_mut(context).annotation_depth = Some(from);
             }
         }
-        let r = f(self);
+        let r = f(self, stk).await;
         if (r.is_ok() || self.idx == start_idx) && !anns.is_empty() {
             self.pop_ctx();
         }
@@ -1027,9 +1042,10 @@ impl Parser {
     /// `readStringForParser p`: the raw text `p` would consume, with everything
     /// it read and everything it reported forgotten -- `inSeparateContext
     /// $ lookAhead (p >> getPosition)`, then `anyChar` up to that position.
-    pub(super) fn read_string_for_parser(
+    pub(super) async fn read_string_for_parser(
         &mut self,
-        f: impl FnOnce(&mut Self) -> PResult<()>,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> PResult<()>,
     ) -> PResult<String> {
         let m = self.mark();
         let notes = self.notes.len();
@@ -1039,7 +1055,7 @@ impl Parser {
         let failure = self.failure.clone();
         let committed = self.committed;
         let frozen = self.frozen_contexts.clone();
-        let r = f(self);
+        let r = f(self, stk).await;
         let failed = r.is_err() || self.committed != committed;
         let end = self.idx;
         self.reset(m);
@@ -1583,20 +1599,20 @@ impl Parser {
         Ok('\r')
     }
 
-    fn linefeed(&mut self) -> PResult<char> {
+    async fn linefeed(&mut self, stk: &mut Stk) -> PResult<char> {
         // optional carriage return, then '\n', then read pending heredocs
         let _ = self.carriage_return();
         self.char('\n')?;
-        self.read_pending_heredocs()?;
+        stk.run(|stk| self.read_pending_heredocs(stk)).await?;
         Ok('\n')
     }
 
     /// `linefeed <|> carriageReturn`, the unit `readNewlineList` repeats. A
     /// `linefeed` that consumed a CR and then found no `\n` takes the whole
     /// alternation down with it, as a bare `<|>` does.
-    fn linefeed_or_carriage_return(&mut self) -> PResult<char> {
+    async fn linefeed_or_carriage_return(&mut self, stk: &mut Stk) -> PResult<char> {
         let m = self.mark();
-        if let Ok(c) = self.linefeed() {
+        if let Ok(c) = self.linefeed(stk).await {
             Ok(c)
         } else {
             if self.idx != m.idx {
@@ -1606,7 +1622,7 @@ impl Parser {
         }
     }
 
-    pub(super) fn whitespace(&mut self) -> PResult<char> {
+    pub(super) async fn whitespace(&mut self, stk: &mut Stk) -> PResult<char> {
         if let Ok(c) = self.line_whitespace() {
             return Ok(c);
         }
@@ -1615,7 +1631,7 @@ impl Parser {
         if let Ok(c) = self.carriage_return() {
             return Ok(c);
         }
-        self.linefeed()
+        self.linefeed(stk).await
     }
 
     /// `allspacing`: whitespace including linefeeds and comments.
@@ -1626,12 +1642,12 @@ impl Parser {
     /// (SC1035) and whether a line was broken without a `\` (SC1080); a comment
     /// counts as neither, which is why `spacing` leaves it out of what it
     /// returns.
-    fn allspacing(&mut self) -> String {
+    async fn allspacing(&mut self, stk: &mut Stk) -> String {
         let mut out = String::new();
         loop {
             out.push_str(&self.spacing());
             let m = self.mark();
-            if self.linefeed().is_err() {
+            if self.linefeed(stk).await.is_err() {
                 if !self.committed {
                     self.reset(m);
                 }
@@ -1642,11 +1658,11 @@ impl Parser {
         out
     }
 
-    fn line_break(&mut self) {
+    async fn line_break(&mut self, stk: &mut Stk) {
         // `readLineBreak = optional readNewlineList`, after the spacing that
         // upstream's token parsers take with the token before it.
         self.spacing();
-        self.newline_list();
+        self.newline_list(stk).await;
     }
 
     /// `checkBadBreak`: after a line break, a line that *starts* with `|`, `||`
@@ -1692,7 +1708,9 @@ pub fn parse_script(filename: &str, script: &str) -> ParseOutput {
 #[must_use]
 pub fn audit_commitment_backtracks(filename: &str, script: &str) -> Vec<String> {
     let mut p = Parser::new(filename, script);
-    let _ = p.read_script_file();
+    let _ = reblessive::Stack::new()
+        .enter(|stk| p.read_script_file(stk))
+        .finish();
     p.backtracked_over_commitment()
 }
 
@@ -1786,7 +1804,16 @@ fn finish_parse(parser: impl Fn() -> Parser) -> ParseOutput {
 }
 
 fn parse_to_output(p: &mut Parser) -> ParseOutput {
-    let root = p.read_script_file();
+    // The parser recurses as deep as the script nests. It runs on a heap
+    // stack, where that depth costs memory.
+    reblessive::Stack::new()
+        .enter(|stk| parse_to_output_on(p, stk))
+        .finish()
+}
+
+/// [`parse_to_output`], on the heap stack `stk`.
+async fn parse_to_output_on(p: &mut Parser, stk: &mut Stk) -> ParseOutput {
+    let root = p.read_script_file(stk).await;
     // A production that failed after consuming input means the script does not
     // parse, even if backtracking found some other way to read the rest of it:
     // Parsec's `<|>` offers no alternative once input has been consumed. Input
@@ -1813,10 +1840,13 @@ fn parse_to_output(p: &mut Parser) -> ParseOutput {
     // Reattach here-doc bodies collected during parsing.
     let root = root.map(|r| reattach_heredocs(r, &p.heredoc_bodies));
     // Reparse array indices as arithmetic / index words (reparseIndices).
-    let root = root.map(|r| {
-        let assoc = get_associative_arrays(&r);
-        p.reparse_indices_root(r, &assoc)
-    });
+    let root = match root {
+        Some(r) => {
+            let assoc = get_associative_arrays(&r);
+            Some(p.reparse_indices_root(stk, r, &assoc).await)
+        }
+        None => None,
+    };
     // An index that is not an expression fails `reparseIndices`, and that
     // failure is the file's: `mapM` in the parser monad has nothing to recover
     // with, so there is no tree to analyse after it.
@@ -1942,14 +1972,21 @@ fn reattach_heredocs(mut t: Token, bodies: &BTreeMap<Id, Vec<Token>>) -> Token {
 }
 
 fn reattach_in_place(t: &mut Token, bodies: &BTreeMap<Id, Vec<Token>>) {
-    for child in t.inner_mut().children_mut() {
-        reattach_in_place(child, bodies);
-    }
-    let id = t.id();
-    if let InnerToken::T_HereDoc { body, .. } = t.inner_mut()
-        && body.is_empty()
-        && let Some(list) = bodies.get(&id)
-    {
-        body.clone_from(list);
+    // The walk fills a here-document after it has visited the document's
+    // children. The body arrives after that visit, and the walk never
+    // enters it.
+    let mut pending: Vec<&mut Token> = vec![t];
+    while let Some(t) = pending.pop() {
+        let id = t.id();
+        if let InnerToken::T_HereDoc { body, .. } = &*t.inner
+            && body.is_empty()
+            && let Some(list) = bodies.get(&id)
+        {
+            if let InnerToken::T_HereDoc { body, .. } = t.inner_mut() {
+                body.clone_from(list);
+            }
+            continue;
+        }
+        pending.extend(t.inner_mut().children_mut());
     }
 }

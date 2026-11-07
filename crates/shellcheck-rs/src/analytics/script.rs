@@ -572,11 +572,8 @@ fn find_alias_commands(
     aliases: &mut HashMap<String, Token>,
     out: &mut Out,
 ) {
-    // preorder: run on t, then recurse into children.
-    process_alias_node(params, t, aliases, out);
-    for c in t.children() {
-        find_alias_commands(params, c, aliases, out);
-    }
+    // preorder: run on t, then on its children.
+    t.visit_preorder(&mut |n| process_alias_node(params, n, aliases, out));
 }
 
 fn process_alias_node(
@@ -644,18 +641,18 @@ fn direct_command_name_and_token(cmd: &Token) -> (Option<String>, &Token) {
     (None, cmd)
 }
 
-fn recursion_check_list(params: &Parameters, name: &str, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Backgrounded(inner) => recursion_check_list(params, name, inner, out),
-        InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => {
-            recursion_check_list(params, name, lhs, out);
+fn recursion_check_list(params: &Parameters, name: &str, mut t: &Token, out: &mut Out) {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Backgrounded(inner) => inner,
+            InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => lhs,
+            _ => break,
+        };
+    }
+    if let InnerToken::T_Pipeline { commands, .. } = &*t.inner {
+        for cmd in commands {
+            recursion_check_command(params, name, cmd, out);
         }
-        InnerToken::T_Pipeline { commands, .. } => {
-            for cmd in commands {
-                recursion_check_command(params, name, cmd, out);
-            }
-        }
-        _ => {}
     }
 }
 

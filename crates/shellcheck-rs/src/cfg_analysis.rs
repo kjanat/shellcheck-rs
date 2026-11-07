@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use im_rc::OrdMap;
 use im_rc::ordmap::DiffItem;
+use reblessive::Stk;
 
 use crate::ast::{Id, Token};
 use crate::cfg::{
@@ -1424,12 +1425,18 @@ impl Ctx {
         self.output = patch_state(&self.output, diff);
     }
 
-    fn with_new_stack_frame<R>(
+    /// `withNewStackFrame node isCall (dataflow node)`. Runs the dataflow from
+    /// `node` in a fresh frame and returns it with the dependencies the frame
+    /// collected.
+    ///
+    /// A function or subshell body is a dataflow of its own, so the analysis
+    /// recurses here. The call goes through `stk.run`.
+    async fn dataflow_in_new_frame(
         &mut self,
+        stk: &mut Stk,
         node: Node,
         is_call: bool,
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> (R, BTreeSet<StateDependency>) {
+    ) -> (StateMap, BTreeSet<StateDependency>) {
         let call_site = self.node;
         let state = self.output.clone();
         let entry = StackEntry {
@@ -1444,7 +1451,7 @@ impl Ctx {
         let saved_node = self.node;
         self.node = node;
         self.stack.push(entry);
-        let x = f(self);
+        let x = stk.run(|stk| self.dataflow(stk, node)).await;
         let deps = self.stack.pop().map_or_else(
             || {
                 self.fail("Missing stack frame");
@@ -1541,35 +1548,44 @@ impl Ctx {
         None
     }
 
-    fn run_cached(
+    /// The first half of `runCached`. With a cached result for `node`, it
+    /// patches the result in and returns `true`. Otherwise it returns `false`,
+    /// and the caller computes the result and passes it to
+    /// [`Self::cache_result`].
+    fn use_cached(&mut self, node: Node) -> bool {
+        let Some(v) = self.get_cache(node) else {
+            return false;
+        };
+        self.patch_output(&v);
+        true
+    }
+
+    /// The second half of `runCached`. It stores a computed result and patches
+    /// it in.
+    fn cache_result(
         &mut self,
         node: Node,
-        f: impl FnOnce(&mut Self) -> (BTreeSet<StateDependency>, InternalState),
+        (deps, diff): (BTreeSet<StateDependency>, InternalState),
     ) {
-        if let Some(v) = self.get_cache(node) {
-            self.patch_output(&v);
-        } else {
-            let (deps, diff) = f(self);
-            let old = self.cache.remove(&node).unwrap_or_default();
-            let mut newlist = vec![(deps, diff.clone())];
-            newlist.extend(old.into_iter().take(CACHE_ENTRIES));
-            self.cache.insert(node, newlist);
-            self.patch_output(&diff);
-        }
+        let old = self.cache.remove(&node).unwrap_or_default();
+        let mut newlist = vec![(deps, diff.clone())];
+        newlist.extend(old.into_iter().take(CACHE_ENTRIES));
+        self.cache.insert(node, newlist);
+        self.patch_output(&diff);
     }
 
     // --- transfer ---
 
-    fn transfer(&mut self, label: &CFNode) {
+    async fn transfer(&mut self, stk: &mut Stk, label: &CFNode) {
         match label {
             CFNode::CFStructuralNode
             | CFNode::CFEntryPoint(_)
             | CFNode::CFImpliedExit
             | CFNode::CFResolvedExit
             | CFNode::CFSetBackgroundPid(_) => {}
-            CFNode::CFExecuteCommand(cmd) => self.transfer_command(cmd.clone()),
+            CFNode::CFExecuteCommand(cmd) => self.transfer_command(stk, cmd.clone()).await,
             CFNode::CFExecuteSubshell(_reason, entry, exit) => {
-                self.transfer_subshell(*entry, *exit);
+                self.transfer_subshell(stk, *entry, *exit).await;
             }
             CFNode::CFApplyEffects(effects) => {
                 for e in effects {
@@ -1590,21 +1606,25 @@ impl Ctx {
         }
     }
 
-    fn transfer_subshell(&mut self, entry: Node, exit: Node) {
+    async fn transfer_subshell(&mut self, stk: &mut Stk, entry: Node, exit: Node) {
         let initial = self.output.clone();
-        self.run_cached(entry, move |s| s.subshell_recompute(entry, exit));
+        if !self.use_cached(entry) {
+            let result = self.subshell_recompute(stk, entry, exit).await;
+            self.cache_result(entry, result);
+        }
         let res_exit = self.output.s_exit_codes.clone();
         let mut newout = initial;
         newout.s_exit_codes = res_exit;
         self.output = newout;
     }
 
-    fn subshell_recompute(
+    async fn subshell_recompute(
         &mut self,
+        stk: &mut Stk,
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, false).await;
         let res = states.get(&exit).map_or_else(
             || {
                 self.fail("Subshell has no exit");
@@ -1616,21 +1636,21 @@ impl Ctx {
         (deps, res)
     }
 
-    fn transfer_command(&mut self, name: Option<String>) {
+    async fn transfer_command(&mut self, stk: &mut Stk, name: Option<String>) {
         let Some(name) = name else {
             return;
         };
         let targets = self.read_function(&name);
         let funcs: Vec<FunctionDefinition> = targets.into_iter().collect();
-        self.transfer_multiple(&funcs);
+        self.transfer_multiple(stk, &funcs).await;
     }
 
-    fn transfer_multiple(&mut self, funcs: &[FunctionDefinition]) {
+    async fn transfer_multiple(&mut self, stk: &mut Stk, funcs: &[FunctionDefinition]) {
         let original = self.output.clone();
         let mut branches = Vec::new();
         for f in funcs {
             self.output = original.clone();
-            self.transfer_function_value(f);
+            self.transfer_function_value(stk, f).await;
             branches.push(self.output.clone());
         }
         let merged = self.merge_states(original.clone(), &branches);
@@ -1638,7 +1658,7 @@ impl Ctx {
         self.output = patched;
     }
 
-    fn transfer_function_value(&mut self, fv: &FunctionDefinition) {
+    async fn transfer_function_value(&mut self, stk: &mut Stk, fv: &FunctionDefinition) {
         match fv {
             FunctionDefinition::FunctionUnknown => {}
             FunctionDefinition::FunctionDefinition(_name, entry, exit) => {
@@ -1646,19 +1666,21 @@ impl Ctx {
                 let is_recursive = self.would_be_recursive(entry);
                 if is_recursive {
                     // TODO: Find a better strategy for recursion
-                } else {
-                    self.run_cached(entry, move |s| s.tfv_recompute(entry, exit));
+                } else if !self.use_cached(entry) {
+                    let result = self.tfv_recompute(stk, entry, exit).await;
+                    self.cache_result(entry, result);
                 }
             }
         }
     }
 
-    fn tfv_recompute(
+    async fn tfv_recompute(
         &mut self,
+        stk: &mut Stk,
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, deps) = self.with_new_stack_frame(entry, true, |s| s.dataflow(entry));
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, true).await;
         let res = match states.get(&exit) {
             Some((_input, output)) => {
                 // Discard local variables.
@@ -1674,7 +1696,7 @@ impl Ctx {
 
     // --- the iterative DFA ---
 
-    fn process(&mut self, states: &mut StateMap, node: Node) -> Vec<Node> {
+    async fn process(&mut self, stk: &mut Stk, states: &mut StateMap, node: Node) -> Vec<Node> {
         let incoming = self.pred_flow.get(&node).cloned().unwrap_or_default();
         let outgoing = self.succ_all.get(&node).cloned().unwrap_or_default();
         let label = self
@@ -1702,7 +1724,7 @@ impl Ctx {
         self.input = input.clone();
         self.output = input.clone();
         self.node = node;
-        self.transfer(&label);
+        self.transfer(stk, &label).await;
         let new_output = self.output.clone();
         let result = if outgoing.len() >= 2 {
             self.version_state(new_output)
@@ -1723,7 +1745,7 @@ impl Ctx {
         }
     }
 
-    fn dataflow(&mut self, entry: Node) -> StateMap {
+    async fn dataflow(&mut self, stk: &mut Stk, entry: Node) -> StateMap {
         let mut pending: BTreeSet<Node> = BTreeSet::new();
         pending.insert(entry);
         let mut states: StateMap = BTreeMap::new();
@@ -1744,7 +1766,7 @@ impl Ctx {
                 break;
             };
             pending.remove(&next);
-            let nexts = self.process(&mut states, next);
+            let nexts = self.process(stk, &mut states, next).await;
             for x in nexts {
                 pending.insert(x);
             }
@@ -1755,11 +1777,17 @@ impl Ctx {
         states
     }
 
-    fn run_root(&mut self, env: InternalState, entry: Node, exit: Node) -> InternalState {
+    async fn run_root(
+        &mut self,
+        stk: &mut Stk,
+        env: InternalState,
+        entry: Node,
+        exit: Node,
+    ) -> InternalState {
         self.input = env.clone();
         self.output = env;
         self.node = entry;
-        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, false).await;
         self.register_flow_result(entry, &states, &deps);
         states.get(&exit).map_or_else(
             || {
@@ -1770,14 +1798,19 @@ impl Ctx {
         )
     }
 
-    fn analyze_stragglers(&mut self, state: &InternalState, stragglers: &[FunctionDefinition]) {
+    async fn analyze_stragglers(
+        &mut self,
+        stk: &mut Stk,
+        state: &InternalState,
+        stragglers: &[FunctionDefinition],
+    ) {
         for def in stragglers {
             self.input = state.clone();
             self.output = state.clone();
             if let FunctionDefinition::FunctionDefinition(_, entry, _) = def {
                 self.node = *entry;
             }
-            self.transfer_function_value(def);
+            self.transfer_function_value(stk, def).await;
         }
     }
 }
@@ -1914,8 +1947,14 @@ pub fn analyze_control_flow(
     let mut ctx = Ctx::new(&cfg.cf_graph);
     let env = create_environment_state();
 
+    // The analysis recurses into function and subshell bodies as deep as the
+    // script nests them, and it runs on a heap stack.
+    let mut stack = reblessive::Stack::new();
+
     // Do a dataflow analysis starting on the root node.
-    let exit_state = ctx.run_root(env.clone(), entry, exit);
+    let exit_state = stack
+        .enter(|stk| ctx.run_root(stk, env.clone(), entry, exit))
+        .finish();
 
     // All nodes we've touched.
     let mut invoked_nodes: BTreeSet<Node> = BTreeSet::new();
@@ -1938,7 +1977,9 @@ pub fn analyze_control_flow(
         s.s_exit_codes = None;
         s
     };
-    ctx.analyze_stragglers(&straggler_input, &uninvoked);
+    stack
+        .enter(|stk| ctx.analyze_stragglers(stk, &straggler_input, &uninvoked))
+        .finish();
 
     // Round up all the states from all data flows:
     // flattenByNode ∘ groupByNode ∘ addDeps, then internalToExternal.

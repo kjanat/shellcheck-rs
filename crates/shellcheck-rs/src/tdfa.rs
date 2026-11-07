@@ -80,39 +80,72 @@ impl Parser {
         ))
     }
 
-    /// `p_regex = POr <$> sepBy1 p_branch (char '|')`.
+    /// `p_regex = POr <$> sepBy1 p_branch (char '|')`, with
+    /// `p_branch = PConcat <$> many1 p_piece`,
+    /// `p_piece = (p_anchor <|> p_atom) >>= p_post_atom` and
+    /// `p_atom = p_group <|> p_bracket <|> p_char`.
+    ///
+    /// A group's `p_regex` is the same parser again, one level down. Here each
+    /// open group is a [`Level`] on a stack, and the nesting depth of the
+    /// pattern costs heap memory.
     fn regex(&mut self) -> Result<String, String> {
-        let mut out = self.branch()?;
-        while self.eat('|') {
-            out.push('|');
-            out.push_str(&self.branch()?);
+        /// A `p_regex` in progress. It holds the branches read so far, joined by
+        /// `|`, and the pieces of the current branch.
+        #[derive(Default)]
+        struct Level {
+            branches: String,
+            branch: String,
+            pieces: usize,
         }
-        Ok(out)
-    }
-
-    /// `p_branch = PConcat <$> many1 p_piece`.
-    fn branch(&mut self) -> Result<String, String> {
-        let Some(first) = self.piece()? else {
-            return self.unexpected();
-        };
-        let mut out = first;
-        while let Some(piece) = self.piece()? {
-            out.push_str(&piece);
+        let mut levels = vec![Level::default()];
+        loop {
+            // p_piece
+            let atom = match self.anchor() {
+                Some(anchor) => Some(anchor),
+                // p_group. Its `p_regex` starts on a new level.
+                None if self.eat('(') => {
+                    levels.push(Level::default());
+                    continue;
+                }
+                None if self.eat('[') => Some(self.bracket()?),
+                None => self.char_atom(),
+            };
+            let Some(level) = levels.last_mut() else {
+                return self.unexpected();
+            };
+            if let Some(atom) = atom {
+                level.branch.push_str(&atom);
+                level.branch.push_str(&self.post_atom());
+                level.pieces += 1;
+                continue;
+            }
+            // No piece starts here. `many1 p_piece` ends here, or fails when it has
+            // read no piece.
+            if level.pieces == 0 {
+                return self.unexpected();
+            }
+            level.branches.push_str(&std::mem::take(&mut level.branch));
+            level.pieces = 0;
+            if self.eat('|') {
+                level.branches.push('|');
+                continue;
+            }
+            // This `p_regex` is complete. It is the whole pattern or a group.
+            let Some(done) = levels.pop() else {
+                return self.unexpected();
+            };
+            let Some(outer) = levels.last_mut() else {
+                return Ok(done.branches);
+            };
+            if !self.eat(')') {
+                return self.unexpected();
+            }
+            outer.branch.push('(');
+            outer.branch.push_str(&done.branches);
+            outer.branch.push(')');
+            outer.branch.push_str(&self.post_atom());
+            outer.pieces += 1;
         }
-        Ok(out)
-    }
-
-    /// `p_piece = (p_anchor <|> p_atom) >>= p_post_atom`, or `None` when no
-    /// piece starts here.
-    fn piece(&mut self) -> Result<Option<String>, String> {
-        let atom = match self.anchor() {
-            Some(anchor) => anchor,
-            None => match self.atom()? {
-                Some(atom) => atom,
-                None => return Ok(None),
-            },
-        };
-        Ok(Some(atom + &self.post_atom()))
     }
 
     /// `p_anchor`: `^`, `$`, or the empty group `()`.
@@ -127,21 +160,6 @@ impl Parser {
         } else {
             None
         }
-    }
-
-    /// `p_atom = p_group <|> p_bracket <|> p_char`.
-    fn atom(&mut self) -> Result<Option<String>, String> {
-        if self.eat('(') {
-            let inner = self.regex()?;
-            if !self.eat(')') {
-                return self.unexpected();
-            }
-            return Ok(Some(format!("({inner})")));
-        }
-        if self.eat('[') {
-            return self.bracket().map(Some);
-        }
-        Ok(self.char_atom())
     }
 
     /// `p_post_atom`: at most one of `?`, `+`, `*` or a bound.

@@ -3,14 +3,14 @@ use super::{
     ALMOST_SPACE_CHARS, CaseClause, CaseType, IfClause, InnerToken, PResult, Parser, Position,
     Severity, Token, columns,
 };
+use reblessive::Stk;
 
 impl Parser {
     /// `readAmbiguous "((" readArithmeticExpression readSubshell`: `((` opens
     /// an arithmetic command in most shells and nested subshells in others.
-    fn read_ambiguous_arithmetic(&mut self) -> PResult<Token> {
-        self.read_ambiguous(
-            Self::read_arithmetic_command,
-            Self::read_subshell,
+    async fn read_ambiguous_arithmetic(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.read_ambiguous(stk, async |p, stk| p.read_arithmetic_command(stk).await,
+            async |p, stk| p.read_subshell(stk).await,
             |p, pos| {
                 p.note_at(
                     pos.clone(),
@@ -20,16 +20,16 @@ impl Parser {
                     "Shells disambiguate (( differently or not at all. For subshell, add spaces around ( . For ((, fix parsing errors.",
                 );
             },
-        )
+        ).await
     }
 
-    pub(super) fn read_compound_command(&mut self) -> PResult<Token> {
+    pub(super) async fn read_compound_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         let c = self.peek();
         let m = self.mark();
         let cmd = match c {
-            Some('(') if self.peek_at(1) == Some('(') => self.read_ambiguous_arithmetic(),
-            Some('(') => self.read_subshell(),
-            Some('{') => self.read_brace_group(),
+            Some('(') if self.peek_at(1) == Some('(') => self.read_ambiguous_arithmetic(stk).await,
+            Some('(') => self.read_subshell(stk).await,
+            Some('{') => self.read_brace_group(stk).await,
             _ => {
                 // Each of these is a `tryWordToken`, whose missing-space
                 // warning outlives the attempt.
@@ -39,28 +39,28 @@ impl Parser {
                     if self.word_matches(kw) {
                         self.warn_keyword_needs_space(kw);
                     }
-                    self.miscased_keyword(kw);
+                    self.miscased_keyword(stk, kw).await;
                 }
-                if self.keyword_ahead("if") {
-                    self.read_if_clause()
-                } else if self.keyword_ahead("while") {
-                    self.read_while_clause()
-                } else if self.keyword_ahead("until") {
-                    self.read_until_clause()
-                } else if self.keyword_ahead("for") {
-                    self.read_for_clause()
-                } else if self.keyword_ahead("case") {
-                    self.read_case_clause()
-                } else if self.keyword_ahead("select") {
-                    self.read_select_clause()
-                } else if self.keyword_ahead("function") {
-                    self.read_function_def()
+                if self.keyword_ahead(stk, "if").await {
+                    self.read_if_clause(stk).await
+                } else if self.keyword_ahead(stk, "while").await {
+                    self.read_while_clause(stk).await
+                } else if self.keyword_ahead(stk, "until").await {
+                    self.read_until_clause(stk).await
+                } else if self.keyword_ahead(stk, "for").await {
+                    self.read_for_clause(stk).await
+                } else if self.keyword_ahead(stk, "case").await {
+                    self.read_case_clause(stk).await
+                } else if self.keyword_ahead(stk, "select").await {
+                    self.read_select_clause(stk).await
+                } else if self.keyword_ahead(stk, "function").await {
+                    self.read_function_def(stk).await
                 } else if self.peek() == Some('(') && self.peek_at(1) == Some('(') {
-                    self.read_ambiguous_arithmetic()
+                    self.read_ambiguous_arithmetic(stk).await
                 } else if self.string_peek("@test ") {
-                    self.read_bats_test()
+                    self.read_bats_test(stk).await
                 } else if self.looks_like_posix_function() {
-                    self.read_posix_function()
+                    self.read_posix_function(stk).await
                 } else {
                     Err(())
                 }
@@ -71,11 +71,11 @@ impl Parser {
             // possibly-empty redirect list), exactly as ShellCheck's
             // readCompoundCommand. This keeps parent-path depth (and thus
             // fix precedence) identical to the oracle.
-            let redirs = self.read_redirect_list()?;
+            let redirs = self.read_redirect_list(stk).await?;
             let (s, _) = self.span_for(t.id());
             let e = self.pos();
             let id = self.next_id_between(s, e);
-            self.warn_on_tokens_after_compound_command()?;
+            self.warn_on_tokens_after_compound_command(stk).await?;
             Ok(Token::new(id, InnerToken::T_Redirecting { redirs, cmd: t }))
         } else {
             // The cursor is left where the attempt gave up: callers need it
@@ -90,7 +90,7 @@ impl Parser {
     /// A compound command is finished; anything but a keyword or a `{` still
     /// sitting there is a missing terminator or a mistyped redirection. Read
     /// under `lookAhead`, so the words themselves are put back.
-    fn warn_on_tokens_after_compound_command(&mut self) -> PResult<()> {
+    async fn warn_on_tokens_after_compound_command(&mut self, stk: &mut Stk) -> PResult<()> {
         // What stood before the whole `optional . lookAhead`: a keyword
         // attempt that matched a prefix (`d` against `do`) records past it,
         // and a lookahead that then succeeds gives that up too.
@@ -100,7 +100,7 @@ impl Parser {
         // `unexpecting ""`, so a keyword that *is* there is read -- as far as
         // `keyword_end` says its token reaches -- and then failed on with
         // "Unexpected ", which is where Parsec's error ends up.
-        if let Some(n) = self.keyword_end() {
+        if let Some(n) = self.keyword_end(stk).await {
             let m = self.mark();
             for _ in 0..n {
                 self.bump();
@@ -114,7 +114,7 @@ impl Parser {
         // `g_Lbrace` is a `tryWordToken`, so `{,}` is a word and not the keyword.
         if self.peek() == Some('{') {
             self.warn_keyword_needs_space("{");
-            if self.at_keyword_separator(1) {
+            if self.at_keyword_separator(stk, 1).await {
                 let m = self.mark();
                 self.bump();
                 self.spacing();
@@ -122,7 +122,7 @@ impl Parser {
                 self.reset(m);
                 return Ok(());
             }
-            self.keyword_attempt_failure("{");
+            self.keyword_attempt_failure(stk, "{").await;
         }
         let m = self.mark();
         let notes = self.notes.len();
@@ -134,7 +134,7 @@ impl Parser {
         let mut any = false;
         loop {
             let wm = self.mark();
-            if self.read_normal_word().is_ok() {
+            if self.read_normal_word(stk).await.is_ok() {
                 any = true;
             } else {
                 if self.idx != wm.idx {
@@ -195,7 +195,7 @@ impl Parser {
     /// `tryParseWordToken`: a keyword in the wrong case is recognised and
     /// reported, then rejected — inside a `try`, so the word goes on to parse
     /// as an ordinary one while the problem stands.
-    pub(super) fn miscased_keyword(&mut self, kw: &str) {
+    pub(super) async fn miscased_keyword(&mut self, stk: &mut Stk, kw: &str) {
         let Some(written) = self.word_matches_anycase(kw) else {
             return;
         };
@@ -203,7 +203,7 @@ impl Parser {
         // whatever `anycaseString` matched, before it looks at the separator or
         // at the casing: `IF[` gets SC1069 as much as `if[` does.
         self.warn_keyword_needs_space(kw);
-        if written == kw || !self.at_keyword_separator(kw.chars().count()) {
+        if written == kw || !self.at_keyword_separator(stk, kw.chars().count()).await {
             return;
         }
         let pos = self.pos();
@@ -219,8 +219,8 @@ impl Parser {
     }
 
     /// True if the upcoming token is exactly `kw` followed by a word boundary.
-    pub(super) fn keyword_ahead(&mut self, kw: &str) -> bool {
-        self.word_matches(kw) && self.at_keyword_separator(kw.chars().count())
+    pub(super) async fn keyword_ahead(&mut self, stk: &mut Stk, kw: &str) -> bool {
+        self.word_matches(kw) && self.at_keyword_separator(stk, kw.chars().count()).await
     }
 
     /// `keywordSeparator = eof <|> void (try allspacingOrFail) <|> void (oneOf
@@ -232,7 +232,7 @@ impl Parser {
     /// the way, and a body that never terminates fails it -- inside the
     /// `try`, which keeps nothing but the diagnostics. The keyword is then
     /// not a keyword: `done` before such a body is a word, with SC1010.
-    pub(super) fn at_keyword_separator(&mut self, offset: usize) -> bool {
+    pub(super) async fn at_keyword_separator(&mut self, stk: &mut Stk, offset: usize) -> bool {
         let Some(c) = self.peek_at(offset) else {
             return true;
         };
@@ -269,7 +269,7 @@ impl Parser {
         for _ in 0..offset {
             self.bump();
         }
-        let read = !self.allspacing().is_empty();
+        let read = !self.allspacing(stk).await.is_empty();
         if !read {
             self.record_failure_as("Expected whitespace", true, true);
         }
@@ -319,11 +319,11 @@ impl Parser {
         );
     }
 
-    pub(super) fn consume_keyword(&mut self, kw: &str) -> PResult<()> {
+    pub(super) async fn consume_keyword(&mut self, stk: &mut Stk, kw: &str) -> PResult<()> {
         if self.word_matches(kw) {
             self.warn_keyword_needs_space(kw);
         }
-        if self.keyword_ahead(kw) {
+        if self.keyword_ahead(stk, kw).await {
             for _ in 0..kw.chars().count() {
                 self.bump();
             }
@@ -361,21 +361,24 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_subshell(&mut self) -> PResult<Token> {
-        self.called("explicit subshell", Self::read_subshell_body)
+    pub(super) async fn read_subshell(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "explicit subshell", async |p, stk| {
+            p.read_subshell_body(stk).await
+        })
+        .await
     }
 
-    fn read_subshell_body(&mut self) -> PResult<Token> {
+    async fn read_subshell_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.char('(')?;
-        self.allspacing();
+        self.allspacing(stk).await;
         // `list <- readCompoundList`, which is `readTerm`: a non-empty term, so
         // `()` is not an empty subshell but a subshell with no command in it,
         // and the failure reported is the one from inside.
-        let Some(list) = self.read_term() else {
+        let Some(list) = self.read_term(stk).await else {
             return Err(());
         };
-        self.allspacing();
+        self.allspacing(stk).await;
         if self.char(')').is_err() {
             return self.fail_with("Expected ) closing the subshell");
         }
@@ -386,11 +389,14 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Subshell(list)))
     }
 
-    pub(super) fn read_brace_group(&mut self) -> PResult<Token> {
-        self.called("brace group", Self::read_brace_group_body)
+    pub(super) async fn read_brace_group(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "brace group", async |p, stk| {
+            p.read_brace_group_body(stk).await
+        })
+        .await
     }
 
-    fn read_brace_group_body(&mut self) -> PResult<Token> {
+    async fn read_brace_group_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.char('{')?;
         // `void allspacingOrFail <|> optional (lookAhead (noneOf "(") >> ..)`:
@@ -398,7 +404,7 @@ impl Parser {
         // straight after the `{` reads as none -- and having consumed it,
         // the `fail "Expected whitespace"` is one the `<|>` cannot recover.
         let before = self.idx;
-        if self.allspacing().is_empty() {
+        if self.allspacing(stk).await.is_empty() {
             if self.idx != before {
                 return self.fail_with("Expected whitespace");
             }
@@ -425,8 +431,8 @@ impl Parser {
                 "You need at least one command here. Use 'true;' as a no-op.",
             );
         }
-        let list = self.read_term().ok_or(())?;
-        self.allspacing();
+        let list = self.read_term(stk).await.ok_or(())?;
+        self.allspacing(stk).await;
         if self.has_committed_failure() {
             return Err(());
         }
@@ -472,11 +478,15 @@ impl Parser {
 
     /// `readBraced <|> readDoGroup`: `for` also accepts a brace group as its
     /// body, as ksh does.
-    fn read_braced_or_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
-        self.allspacing();
+    async fn read_braced_or_do_group(
+        &mut self,
+        stk: &mut Stk,
+        kw: &(Position, Position),
+    ) -> PResult<Vec<Token>> {
+        self.allspacing(stk).await;
         if self.peek() == Some('{') {
             let m = self.mark();
-            if let Ok(t) = self.read_brace_group() {
+            if let Ok(t) = self.read_brace_group(stk).await {
                 let InnerToken::T_BraceGroup(list) = t.inner() else {
                     unreachable!("readBraceGroup returns a T_BraceGroup")
                 };
@@ -487,17 +497,21 @@ impl Parser {
             }
             self.reset(m);
         }
-        self.read_do_group(kw)
+        self.read_do_group(stk, kw).await
     }
 
     /// `readDoGroup`: the `do .. done` body every loop shares. `kw` is where
     /// the loop keyword was, so a missing `do`/`done` can point back at it.
-    fn read_do_group(&mut self, kw: &(Position, Position)) -> PResult<Vec<Token>> {
-        self.allspacing();
+    async fn read_do_group(
+        &mut self,
+        stk: &mut Stk,
+        kw: &(Position, Position),
+    ) -> PResult<Vec<Token>> {
+        self.allspacing(stk).await;
         // `optional (try . lookAhead $ g_Done; SC1057)`: the attempt is made
         // whatever is there, and `don` leaves its error past the `n`.
-        self.keyword_attempt_failure("done");
-        if self.keyword_ahead("done") {
+        self.keyword_attempt_failure(stk, "done").await;
+        if self.keyword_ahead(stk, "done").await {
             self.problem_at(
                 kw.0.clone(),
                 kw.1.clone(),
@@ -510,7 +524,7 @@ impl Parser {
         if self.has_committed_failure() {
             return Err(());
         }
-        if self.consume_keyword("do").is_err() {
+        if self.consume_keyword(stk, "do").await.is_err() {
             let here = self.pos();
             self.problem_at(here.clone(), here, Severity::ErrorC, 1058, "Expected 'do'.");
             return self.fail_with("Expected 'do'");
@@ -521,9 +535,9 @@ impl Parser {
             1059,
             "Semicolon is not allowed directly after 'do'. You can just delete it.",
         );
-        self.allspacing();
-        self.keyword_attempt_failure("done");
-        if self.keyword_ahead("done") {
+        self.allspacing(stk).await;
+        self.keyword_attempt_failure(stk, "done").await;
+        if self.keyword_ahead(stk, "done").await {
             self.problem_at(
                 do_pos.clone(),
                 do_end.clone(),
@@ -532,13 +546,13 @@ impl Parser {
                 "Can't have empty do clauses (use 'true' as a no-op).",
             );
         }
-        let commands = self.read_term().ok_or(())?;
-        self.allspacing();
+        let commands = self.read_term(stk).await.ok_or(())?;
+        self.allspacing(stk).await;
         if self.has_committed_failure() {
             // Something inside gave up for good; that failure is the report.
             return Err(());
         }
-        if self.consume_keyword("done").is_err() {
+        if self.consume_keyword(stk, "done").await.is_err() {
             self.problem_at(
                 do_pos,
                 do_end,
@@ -573,26 +587,30 @@ impl Parser {
         Ok(commands)
     }
 
-    pub(super) fn read_if_clause(&mut self) -> PResult<Token> {
-        self.called("if expression", Self::read_if_clause_body)
+    pub(super) async fn read_if_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "if expression", async |p, stk| {
+            p.read_if_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_if_clause_body(&mut self) -> PResult<Token> {
+    async fn read_if_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let pos = self.pos();
         let mut clauses: Vec<IfClause> = Vec::new();
-        clauses.push(self.read_if_part()?);
+        clauses.push(self.read_if_part(stk).await?);
         // `many` and `option` recover only from a failure that consumed
         // nothing: an `elif`/`else` that was started and then went wrong is
         // the if expression's failure, not an absent clause.
         let mut after_success = false;
         loop {
-            self.allspacing();
+            self.allspacing(stk).await;
             let m = self.mark();
             let r = if after_success {
-                self.many_attempt(Self::read_elif_part)
+                self.many_attempt(stk, async |p, stk| p.read_elif_part(stk).await)
+                    .await
             } else {
-                self.read_elif_part()
+                self.read_elif_part(stk).await
             };
             if let Ok(c) = r {
                 clauses.push(c);
@@ -605,9 +623,9 @@ impl Parser {
                 break;
             }
         }
-        self.allspacing();
+        self.allspacing(stk).await;
         let m = self.mark();
-        let elses = if let Ok(e) = self.read_else_part() {
+        let elses = if let Ok(e) = self.read_else_part(stk).await {
             e
         } else {
             if self.idx != m.idx {
@@ -616,11 +634,11 @@ impl Parser {
             self.reset(m);
             Vec::new()
         };
-        self.allspacing();
+        self.allspacing(stk).await;
         if self.has_committed_failure() {
             return Err(());
         }
-        if self.consume_keyword("fi").is_err() {
+        if self.consume_keyword(stk, "fi").await.is_err() {
             self.problem_at(
                 pos.clone(),
                 pos,
@@ -649,12 +667,12 @@ impl Parser {
         ))
     }
 
-    fn read_if_part(&mut self) -> PResult<IfClause> {
+    async fn read_if_part(&mut self, stk: &mut Stk) -> PResult<IfClause> {
         let pos = self.pos();
-        self.consume_keyword("if")?;
-        self.allspacing();
-        let condition = self.read_condition_list()?;
-        if self.at_if_branch_keyword() {
+        self.consume_keyword(stk, "if").await?;
+        self.allspacing(stk).await;
+        let condition = self.read_condition_list(stk).await?;
+        if self.at_if_branch_keyword(stk).await {
             self.problem_at(
                 pos.clone(),
                 pos,
@@ -663,12 +681,12 @@ impl Parser {
                 "Did you forget the 'then' for this 'if'?",
             );
         }
-        self.called("then clause", |p| {
-            p.allspacing();
+        self.called(stk, "then clause", async |p, stk| {
+            p.allspacing(stk).await;
             if p.has_committed_failure() {
                 return Err(());
             }
-            if p.consume_keyword("then").is_err() {
+            if p.consume_keyword(stk, "then").await.is_err() {
                 let here = p.pos();
                 p.problem_at(
                     here.clone(),
@@ -680,20 +698,21 @@ impl Parser {
                 return p.fail_with("Expected 'then'");
             }
             p.accept_but_warn_semi(1051, "then");
-            p.allspacing();
-            p.verify_not_empty_if("then");
-            let action = p.read_term().ok_or(())?;
+            p.allspacing(stk).await;
+            p.verify_not_empty_if(stk, "then").await;
+            let action = p.read_term(stk).await.ok_or(())?;
             Ok((condition, action))
         })
+        .await
     }
 
-    fn read_elif_part(&mut self) -> PResult<IfClause> {
-        self.called("elif clause", |p| {
+    async fn read_elif_part(&mut self, stk: &mut Stk) -> PResult<IfClause> {
+        self.called(stk, "elif clause", async |p, stk| {
             let pos = p.pos();
-            p.consume_keyword("elif")?;
-            p.allspacing();
-            let condition = p.read_condition_list()?;
-            if p.at_if_branch_keyword() {
+            p.consume_keyword(stk, "elif").await?;
+            p.allspacing(stk).await;
+            let condition = p.read_condition_list(stk).await?;
+            if p.at_if_branch_keyword(stk).await {
                 p.problem_at(
                     pos.clone(),
                     pos,
@@ -702,25 +721,26 @@ impl Parser {
                     "Did you forget the 'then' for this 'elif'?",
                 );
             }
-            p.allspacing();
-            p.consume_keyword("then")?;
+            p.allspacing(stk).await;
+            p.consume_keyword(stk, "then").await?;
             p.accept_but_warn_semi(1052, "then");
-            p.allspacing();
-            p.verify_not_empty_if("then");
-            let action = p.read_term().ok_or(())?;
+            p.allspacing(stk).await;
+            p.verify_not_empty_if(stk, "then").await;
+            let action = p.read_term(stk).await.ok_or(())?;
             Ok((condition, action))
         })
+        .await
     }
 
-    fn read_else_part(&mut self) -> PResult<Vec<Token>> {
-        self.called("else clause", |p| {
+    async fn read_else_part(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
+        self.called(stk, "else clause", async |p, stk| {
             let pos = p.pos();
-            p.consume_keyword("else")?;
+            p.consume_keyword(stk, "else").await?;
             // `else if` is a nested `if` needing its own `fi`, which is almost
             // always a typo for `elif`.
             let m = p.mark();
             p.spacing();
-            let nested_if = p.keyword_ahead("if");
+            let nested_if = p.keyword_ahead(stk, "if").await;
             p.reset(m);
             if nested_if {
                 p.problem_at(
@@ -732,33 +752,34 @@ impl Parser {
                 );
             }
             p.accept_but_warn_semi(1053, "else");
-            p.allspacing();
-            p.verify_not_empty_if("else");
-            p.read_term().ok_or(())
+            p.allspacing(stk).await;
+            p.verify_not_empty_if(stk, "else").await;
+            p.read_term(stk).await.ok_or(())
         })
+        .await
     }
 
     /// `ifNextToken (g_Fi <|> g_Elif <|> g_Else)`, whose `try . lookAhead` is
     /// still an attempt at each of the three: `]esac` after an `if` leaves the
     /// error `g_Elif` made reading the `e` of `esac`, one past it, and that is
     /// further than the missing `then` behind it.
-    fn at_if_branch_keyword(&mut self) -> bool {
+    async fn at_if_branch_keyword(&mut self, stk: &mut Stk) -> bool {
         let failure = self.failure.clone();
         for k in ["fi", "elif", "else"] {
-            if self.keyword_ahead(k) {
+            if self.keyword_ahead(stk, k).await {
                 // The lookahead succeeded, so it replies with an unknown error
                 // at its own position and the attempts before it are given up.
                 self.failure = failure;
                 return true;
             }
-            self.keyword_attempt_failure(k);
+            self.keyword_attempt_failure(stk, k).await;
         }
         false
     }
 
     /// `verifyNotEmptyIf`: the clause runs straight into what closes it.
-    fn verify_not_empty_if(&mut self, clause: &str) {
-        if self.at_if_branch_keyword() {
+    async fn verify_not_empty_if(&mut self, stk: &mut Stk, clause: &str) {
+        if self.at_if_branch_keyword(stk).await {
             let pos = self.pos();
             self.problem_at(
                 pos.clone(),
@@ -789,24 +810,27 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_condition_list(&mut self) -> PResult<Vec<Token>> {
-        self.allspacing();
-        let first = self.read_and_or()?;
-        self.read_term_more(first)
+    pub(super) async fn read_condition_list(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
+        self.allspacing(stk).await;
+        let first = self.read_and_or(stk).await?;
+        self.read_term_more(stk, first).await
     }
 
-    pub(super) fn read_while_clause(&mut self) -> PResult<Token> {
-        self.called("while loop", Self::read_while_clause_body)
+    pub(super) async fn read_while_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "while loop", async |p, stk| {
+            p.read_while_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_while_clause_body(&mut self) -> PResult<Token> {
+    async fn read_while_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         // `parseProblemAtId kwId`: the loop keyword's own span.
         let kw_start = self.pos();
-        self.consume_keyword("while")?;
+        self.consume_keyword(stk, "while").await?;
         let kw = (kw_start, self.pos());
-        let cond = self.read_condition_list()?;
-        let body = self.read_do_group(&kw)?;
+        let cond = self.read_condition_list(stk).await?;
+        let body = self.read_do_group(stk, &kw).await?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -817,17 +841,20 @@ impl Parser {
         ))
     }
 
-    pub(super) fn read_until_clause(&mut self) -> PResult<Token> {
-        self.called("until loop", Self::read_until_clause_body)
+    pub(super) async fn read_until_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "until loop", async |p, stk| {
+            p.read_until_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_until_clause_body(&mut self) -> PResult<Token> {
+    async fn read_until_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let kw_start = self.pos();
-        self.consume_keyword("until")?;
+        self.consume_keyword(stk, "until").await?;
         let kw = (kw_start, self.pos());
-        let cond = self.read_condition_list()?;
-        let body = self.read_do_group(&kw)?;
+        let cond = self.read_condition_list(stk).await?;
+        let body = self.read_do_group(stk, &kw).await?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
@@ -838,13 +865,16 @@ impl Parser {
         ))
     }
 
-    pub(super) fn read_for_clause(&mut self) -> PResult<Token> {
-        self.called("for loop", Self::read_for_clause_body)
+    pub(super) async fn read_for_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "for loop", async |p, stk| {
+            p.read_for_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_for_clause_body(&mut self) -> PResult<Token> {
+    async fn read_for_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
-        self.consume_keyword("for")?;
+        self.consume_keyword(stk, "for").await?;
         let kw = (start.clone(), self.pos());
         // ShellCheck reuses the `for` keyword id for the whole T_ForIn/T_ForArithmetic
         // node, so SC2034 (and others) point at `for`, not the entire loop.
@@ -853,44 +883,46 @@ impl Parser {
         // arithmetic for: for ((init; cond; step))
         if self.peek() == Some('(') {
             let id_span = (start, for_end);
-            return self.called("arithmetic for condition", |p| {
-                p.read_arithmetic_delimiter(
-                    '(',
-                    "Missing second '(' to start arithmetic for ((;;)) loop",
-                )?;
-                let init = p.read_arithmetic_contents()?;
-                p.char(';')?;
-                p.spacing();
-                let cond = p.read_arithmetic_contents()?;
-                p.char(';')?;
-                p.spacing();
-                let step = p.read_arithmetic_contents()?;
-                p.spacing();
-                p.read_arithmetic_delimiter(
-                    ')',
-                    "Missing second ')' to terminate 'for ((;;))' loop condition",
-                )?;
-                p.spacing();
-                // `optional $ readSequentialSep >> spacing`, where
-                // `readSequentialSep = (g_Semi >> readLineBreak) <|> readNewlineList`.
-                if p.g_semi().is_ok() {
-                    p.line_break();
-                } else {
-                    p.newline_list();
-                }
-                p.spacing();
-                let body = p.read_braced_or_do_group(&kw)?;
-                let id = p.next_id_between(id_span.0, id_span.1);
-                Ok(Token::new(
-                    id,
-                    InnerToken::T_ForArithmetic {
-                        init,
-                        cond,
-                        step,
-                        body,
-                    },
-                ))
-            });
+            return self
+                .called(stk, "arithmetic for condition", async |p, stk| {
+                    p.read_arithmetic_delimiter(
+                        '(',
+                        "Missing second '(' to start arithmetic for ((;;)) loop",
+                    )?;
+                    let init = p.read_arithmetic_contents(stk).await?;
+                    p.char(';')?;
+                    p.spacing();
+                    let cond = p.read_arithmetic_contents(stk).await?;
+                    p.char(';')?;
+                    p.spacing();
+                    let step = p.read_arithmetic_contents(stk).await?;
+                    p.spacing();
+                    p.read_arithmetic_delimiter(
+                        ')',
+                        "Missing second ')' to terminate 'for ((;;))' loop condition",
+                    )?;
+                    p.spacing();
+                    // `optional $ readSequentialSep >> spacing`, where
+                    // `readSequentialSep = (g_Semi >> readLineBreak) <|> readNewlineList`.
+                    if p.g_semi().is_ok() {
+                        p.line_break(stk).await;
+                    } else {
+                        p.newline_list(stk).await;
+                    }
+                    p.spacing();
+                    let body = p.read_braced_or_do_group(stk, &kw).await?;
+                    let id = p.next_id_between(id_span.0, id_span.1);
+                    Ok(Token::new(
+                        id,
+                        InnerToken::T_ForArithmetic {
+                            init,
+                            cond,
+                            step,
+                            body,
+                        },
+                    ))
+                })
+                .await;
         }
         // `readRegular`: `acceptButWarn (char '$')`, the name, then
         // `allspacing` -- so the `in` may be on the next line.
@@ -908,9 +940,9 @@ impl Parser {
             self.reset(m);
         }
         let var = self.read_variable_name()?;
-        self.allspacing();
+        self.allspacing(stk).await;
         let in_start = self.idx;
-        let items = match self.read_in_clause() {
+        let items = match self.read_in_clause(stk).await {
             Ok(v) => v,
             // `readInClause <|> ...`: `g_In` is a `tryWordToken`, so a missing
             // `in` backs out consuming nothing and the alternative runs. Once
@@ -921,36 +953,36 @@ impl Parser {
                 // `optional readSequentialSep >> return []`
                 let m = self.mark();
                 if self.char(';').is_ok() {
-                    self.line_break();
+                    self.line_break(stk).await;
                 } else {
                     self.reset(m);
-                    self.allspacing();
+                    self.allspacing(stk).await;
                 }
                 Vec::new()
             }
         };
-        let body = self.read_braced_or_do_group(&kw)?;
+        let body = self.read_braced_or_do_group(stk, &kw).await?;
         let id = self.next_id_between(start, for_end);
         Ok(Token::new(id, InnerToken::T_ForIn { var, items, body }))
     }
 
     /// `readInClause`: `in`, the words up to the first `;`, linefeed or `do`,
     /// and then the separator that ends the list.
-    pub(super) fn read_in_clause(&mut self) -> PResult<Vec<Token>> {
+    pub(super) async fn read_in_clause(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         // `g_In` is a `tryWordToken`, so it backs out without consuming, and
         // takes the spacing after the keyword with it.
-        self.consume_keyword("in")?;
+        self.consume_keyword(stk, "in").await?;
         self.spacing();
         self.skip_annotation_and_warn();
         let mut items = Vec::new();
         // `readCmdWord `reluctantlyTill` (g_Semi <|> linefeed <|> g_Do)`
         loop {
-            if self.eof() || self.at_in_clause_end() {
+            if self.eof() || self.at_in_clause_end(stk).await {
                 break;
             }
             let m = self.mark();
             self.skip_annotation_and_warn();
-            if let Ok(w) = self.read_normal_word() {
+            if let Ok(w) = self.read_normal_word(stk).await {
                 items.push(w);
                 self.spacing();
             } else {
@@ -963,7 +995,7 @@ impl Parser {
                 break;
             }
         }
-        if self.keyword_ahead("do") {
+        if self.keyword_ahead(stk, "do").await {
             let pos = self.pos();
             self.note_at(
                 pos.clone(),
@@ -980,28 +1012,31 @@ impl Parser {
             if self.g_semi().is_err() {
                 self.reset(m);
             }
-            self.allspacing();
+            self.allspacing(stk).await;
         }
         Ok(items)
     }
 
     /// The `reluctantlyTill` end condition of `readInClause`: a `;` that is not
     /// a `;;`, a linefeed, or the `do` keyword.
-    fn at_in_clause_end(&mut self) -> bool {
+    async fn at_in_clause_end(&mut self, stk: &mut Stk) -> bool {
         match self.peek() {
             Some(';') => self.peek_at(1) != Some(';'),
             Some('\n' | '\r') => true,
-            _ => self.keyword_ahead("do"),
+            _ => self.keyword_ahead(stk, "do").await,
         }
     }
 
     /// `readBatsTest`: `@test <name> { ... }`, where <name> is everything on the
     /// line up to the last ` {`.
-    pub(super) fn read_bats_test(&mut self) -> PResult<Token> {
-        self.called("bats @test", Self::read_bats_test_body)
+    pub(super) async fn read_bats_test(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "bats @test", async |p, stk| {
+            p.read_bats_test_body(stk).await
+        })
+        .await
     }
 
-    fn read_bats_test_body(&mut self) -> PResult<Token> {
+    async fn read_bats_test_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.string("@test ")?;
         self.spacing();
@@ -1018,18 +1053,21 @@ impl Parser {
             self.bump();
         }
         self.spacing();
-        let body = self.read_brace_group()?;
+        let body = self.read_brace_group(stk).await?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_BatsTest { name, body }))
     }
 
-    pub(super) fn read_select_clause(&mut self) -> PResult<Token> {
-        self.called("select loop", Self::read_select_clause_body)
+    pub(super) async fn read_select_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "select loop", async |p, stk| {
+            p.read_select_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_select_clause_body(&mut self) -> PResult<Token> {
+    async fn read_select_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
-        self.consume_keyword("select")?;
+        self.consume_keyword(stk, "select").await?;
         let kw = (start.clone(), self.pos());
         // ShellCheck reuses the `select` keyword id for the whole T_SelectIn node.
         let sel_end = self.pos();
@@ -1037,7 +1075,7 @@ impl Parser {
         let var = self.read_variable_name()?;
         self.spacing();
         let in_start = self.idx;
-        let items = match self.read_in_clause() {
+        let items = match self.read_in_clause(stk).await {
             Ok(v) => v,
             // As in the `for` loop: `<|>` recovers only the `in`-less case.
             Err(()) if self.idx != in_start => return Err(()),
@@ -1046,49 +1084,53 @@ impl Parser {
                 // `for` loop's optional one.
                 let m = self.mark();
                 if self.char(';').is_ok() {
-                    self.line_break();
+                    self.line_break(stk).await;
                 } else {
                     self.reset(m);
-                    if self.linefeed_or_carriage_return().is_err() {
+                    if self.linefeed_or_carriage_return(stk).await.is_err() {
                         return Err(());
                     }
-                    self.allspacing();
+                    self.allspacing(stk).await;
                 }
                 Vec::new()
             }
         };
-        let body = self.read_do_group(&kw)?;
+        let body = self.read_do_group(stk, &kw).await?;
         let id = self.next_id_between(start, sel_end);
         Ok(Token::new(id, InnerToken::T_SelectIn { var, items, body }))
     }
 
-    pub(super) fn read_case_clause(&mut self) -> PResult<Token> {
-        self.called("case expression", Self::read_case_clause_body)
+    pub(super) async fn read_case_clause(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "case expression", async |p, stk| {
+            p.read_case_clause_body(stk).await
+        })
+        .await
     }
 
-    fn read_case_clause_body(&mut self) -> PResult<Token> {
+    async fn read_case_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
-        self.consume_keyword("case")?;
+        self.consume_keyword(stk, "case").await?;
         self.spacing();
-        let word = self.read_normal_word()?;
-        self.allspacing();
-        if self.consume_keyword("in").is_err() {
+        let word = self.read_normal_word(stk).await?;
+        self.allspacing(stk).await;
+        if self.consume_keyword(stk, "in").await.is_err() {
             return self.fail_with("Expected 'in'");
         }
         self.spacing();
         self.skip_annotation_and_warn();
-        self.allspacing();
+        self.allspacing(stk).await;
         // `many readCaseItem`: an item that failed after consuming input is the
         // case expression's failure, not the end of the list.
         let mut cases: Vec<CaseClause> = Vec::new();
         let mut after_success = false;
         loop {
-            self.allspacing();
+            self.allspacing(stk).await;
             let m = self.mark();
             let r = if after_success {
-                self.many_attempt(Self::read_case_item)
+                self.many_attempt(stk, async |p, stk| p.read_case_item(stk).await)
+                    .await
             } else {
-                self.read_case_item()
+                self.read_case_item(stk).await
             };
             if let Ok(c) = r {
                 cases.push(c);
@@ -1101,11 +1143,11 @@ impl Parser {
                 break;
             }
         }
-        self.allspacing();
+        self.allspacing(stk).await;
         if self.has_committed_failure() {
             return Err(());
         }
-        if self.consume_keyword("esac").is_err() {
+        if self.consume_keyword(stk, "esac").await.is_err() {
             return self.fail_with("Expected 'esac' to close the case statement");
         }
         // `g_Esac` is a `tryWordToken` too: skip the spacing after it, as `fi`
@@ -1115,14 +1157,14 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_CaseExpression { word, cases }))
     }
 
-    fn read_case_item(&mut self) -> PResult<CaseClause> {
-        self.called("case item", |p| {
+    async fn read_case_item(&mut self, stk: &mut Stk) -> PResult<CaseClause> {
+        self.called(stk, "case item", async |p, stk| {
             // g_Esac reports glued punctuation even when the keyword is rejected.
             if p.word_matches("esac") {
                 p.warn_keyword_needs_space("esac");
             }
             // `notFollowedBy2 g_Esac`
-            if p.keyword_ahead("esac") {
+            if p.keyword_ahead(stk, "esac").await {
                 return Err(());
             }
             if p.at_annotation_prefix() {
@@ -1141,11 +1183,11 @@ impl Parser {
             // `readPattern`: words separated by `|`.
             // `readPattern` is a `sepBy1`: a case item needs at least one
             // pattern word, and without one it is not an item at all.
-            let mut pats = vec![p.read_pattern_word()?];
+            let mut pats = vec![p.read_pattern_word(stk).await?];
             p.spacing();
             while p.char('|').is_ok() {
                 p.spacing();
-                pats.push(p.read_pattern_word()?);
+                pats.push(p.read_pattern_word(stk).await?);
                 p.spacing();
             }
             if p.char(')').is_err() {
@@ -1162,7 +1204,7 @@ impl Parser {
                 );
                 return p.fail_with("Expected ) to open a new case item");
             }
-            let body = p.read_case_body()?;
+            let body = p.read_case_body(stk).await?;
             // `readCaseSeparator`: the `;;` arm and the no-separator-before-esac
             // arm both yield CaseBreak. They are NOT interchangeable — the `;;`
             // condition consumes the separator, the fallback consumes nothing.
@@ -1191,8 +1233,8 @@ impl Parser {
                 // `esac` ends the item without one. Anything else is a failure
                 // Parsec records where the `lookAhead` gave up, past the line
                 // break it read.
-                p.allspacing();
-                let at_esac = p.keyword_ahead("esac");
+                p.allspacing(stk).await;
+                let at_esac = p.keyword_ahead(stk, "esac").await;
                 if !at_esac {
                     p.fail_implicitly();
                     p.reset(m);
@@ -1202,7 +1244,7 @@ impl Parser {
                 CaseType::CaseBreak
             };
             Ok((ctype, pats, body))
-        })
+        }).await
     }
 
     /// True at a case-clause terminator: `;;`, `;&`, or `;;&`.
@@ -1217,13 +1259,13 @@ impl Parser {
     /// line feed back -- so what fails after it fails where it stands, and a
     /// `case` item whose last command is followed by nothing reports the
     /// "Expected a command" that ended the term rather than an empty message.
-    pub(super) fn read_case_body(&mut self) -> PResult<Vec<Token>> {
-        self.allspacing();
-        if self.keyword_ahead("esac") || self.at_case_terminator() {
+    pub(super) async fn read_case_body(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
+        self.allspacing(stk).await;
+        if self.keyword_ahead(stk, "esac").await || self.at_case_terminator() {
             return Ok(Vec::new());
         }
         let m = self.mark();
-        if let Some(list) = self.read_term() {
+        if let Some(list) = self.read_term(stk).await {
             Ok(list)
         } else {
             if self.idx != m.idx {
@@ -1270,11 +1312,14 @@ impl Parser {
     /// `readWithoutFunction`: `name ( )` then a brace-group or subshell body.
     /// Both this and the `function` keyword form are one `called "function"`
     /// production in Haskell, so both name the function in SC1073/SC1009.
-    pub(super) fn read_posix_function(&mut self) -> PResult<Token> {
-        self.called("function", Self::read_posix_function_body)
+    pub(super) async fn read_posix_function(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "function", async |p, stk| {
+            p.read_posix_function_body(stk).await
+        })
+        .await
     }
 
-    fn read_posix_function_body(&mut self) -> PResult<Token> {
+    async fn read_posix_function_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         // `readWithoutFunction` is a `try`: the signature either parses or
         // leaves nothing consumed, whatever `readParens` reported on the way.
@@ -1293,11 +1338,11 @@ impl Parser {
             self.reset(sm);
             return Err(());
         };
-        self.allspacing();
+        self.allspacing(stk).await;
         let body = if self.peek() == Some('{') {
-            self.read_brace_group()?
+            self.read_brace_group(stk).await?
         } else if self.peek() == Some('(') {
-            self.read_subshell()?
+            self.read_subshell(stk).await?
         } else {
             let pos = self.pos();
             self.problem_at(
@@ -1343,11 +1388,14 @@ impl Parser {
         self.char(')').map(|_| ())
     }
 
-    pub(super) fn read_function_def(&mut self) -> PResult<Token> {
-        self.called("function", Self::read_function_def_body)
+    pub(super) async fn read_function_def(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "function", async |p, stk| {
+            p.read_function_def_body(stk).await
+        })
+        .await
     }
 
-    fn read_function_def_body(&mut self) -> PResult<Token> {
+    async fn read_function_def_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         // `functionSignature <- try readFunctionSignature`: everything up to
         // the body is one `try`, so a word that is not a function name leaves
@@ -1355,36 +1403,38 @@ impl Parser {
         // `function` as the ordinary command name it is in a POSIX shell.
         let sm = self.mark();
         let mut keyword_read = false;
-        let signature = self.try_parse(|p| {
-            // `try $ string "function" >> whitespace`: a plain string, with no
-            // missing-space warning of its own, and the one whitespace
-            // character it requires may be a line feed -- `function\nfoo\n{`
-            // is a function definition whose `{` is missing.
-            p.string("function")?;
-            p.whitespace()?;
-            keyword_read = true;
-            p.spacing();
-            let name = p.read_function_name_ext(true)?;
-            let had_spaces = !p.spacing().is_empty();
-            // optional ()
-            let has_parens = if p.peek() == Some('(') {
-                p.read_function_parens()?;
-                true
-            } else {
-                false
-            };
-            if !has_parens && !had_spaces && matches!(p.peek(), Some('{' | '(')) {
-                let pos = p.pos();
-                p.problem_at(
-                    pos.clone(),
-                    pos,
-                    Severity::ErrorC,
-                    1095,
-                    "You need a space or linefeed between the function name and body.",
-                );
-            }
-            Ok((name, has_parens))
-        });
+        let signature = self
+            .try_parse(stk, async |p, stk| {
+                // `try $ string "function" >> whitespace`: a plain string, with no
+                // missing-space warning of its own, and the one whitespace
+                // character it requires may be a line feed -- `function\nfoo\n{`
+                // is a function definition whose `{` is missing.
+                p.string("function")?;
+                p.whitespace(stk).await?;
+                keyword_read = true;
+                p.spacing();
+                let name = p.read_function_name_ext(true)?;
+                let had_spaces = !p.spacing().is_empty();
+                // optional ()
+                let has_parens = if p.peek() == Some('(') {
+                    p.read_function_parens()?;
+                    true
+                } else {
+                    false
+                };
+                if !has_parens && !had_spaces && matches!(p.peek(), Some('{' | '(')) {
+                    let pos = p.pos();
+                    p.problem_at(
+                        pos.clone(),
+                        pos,
+                        Severity::ErrorC,
+                        1095,
+                        "You need a space or linefeed between the function name and body.",
+                    );
+                }
+                Ok((name, has_parens))
+            })
+            .await;
         // `readFunctionSignature = readWithFunction <|> readWithoutFunction`,
         // both inside the one `called "function"`: `function(){ :; }` is a
         // function *named* `function`, since the keyword form wants whitespace
@@ -1393,17 +1443,17 @@ impl Parser {
         let (name, has_parens) = match signature {
             Ok(v) => v,
             Err(()) if self.idx == sm.idx && !keyword_read => {
-                return self.read_posix_function_body();
+                return self.read_posix_function_body(stk).await;
             }
             Err(()) => return Err(()),
         };
-        self.allspacing();
+        self.allspacing(stk).await;
         // `readBraceGroup <|> readSubshell`, after a lookahead that says which
         // it should have been.
         let body = if self.peek() == Some('{') {
-            self.read_brace_group()?
+            self.read_brace_group(stk).await?
         } else if self.peek() == Some('(') {
-            self.read_subshell()?
+            self.read_subshell(stk).await?
         } else {
             let pos = self.pos();
             self.problem_at(

@@ -4,6 +4,7 @@ use super::{
     Position, QUOTABLE_CHARS, Quoted, Severity, Shell, Token, ast_lib, columns,
 };
 use crate::interface::ErrorMessage;
+use reblessive::Stk;
 
 /// Which `readCmdSuffix` variant a command's arguments get: the plain one,
 /// `readModifierSuffix` (assignments stay assignments) or `readEvalSuffix`
@@ -217,7 +218,7 @@ impl Parser {
         Ok(())
     }
 
-    pub(super) fn read_separator_op(&mut self) -> Option<char> {
+    pub(super) async fn read_separator_op(&mut self, stk: &mut Stk) -> Option<char> {
         // `notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)`, whose
         // last arm is `lookAhead (readLineBreak >> g_Esac)`: `g_Esac` reads as
         // much of `esac` as matches before it fails, so a command that ends
@@ -231,11 +232,13 @@ impl Parser {
         // to stays, merged into the `<|> return ()` that follows -- which is
         // how an unparsable here document ends the parse where the *body*
         // gave up rather than at the line feed.
-        let _: PResult<()> = self.try_parse(|p| {
-            p.line_break();
-            p.keyword_attempt_failure("esac");
-            Err(())
-        });
+        let _: PResult<()> = self
+            .try_parse(stk, async |p, stk| {
+                p.line_break(stk).await;
+                p.keyword_attempt_failure(stk, "esac").await;
+                Err(())
+            })
+            .await;
         match self.peek() {
             Some('&') if self.peek_at(1) != Some('&') => {
                 let pos = self.pos();
@@ -302,11 +305,14 @@ impl Parser {
     }
 
     /// Returns (`separator_char`, (start,end)) or None.
-    pub(super) fn read_separator(&mut self) -> Option<(char, (Position, Position))> {
+    pub(super) async fn read_separator(
+        &mut self,
+        stk: &mut Stk,
+    ) -> Option<(char, (Position, Position))> {
         let start = self.pos();
-        if let Some(op) = self.read_separator_op() {
+        if let Some(op) = self.read_separator_op(stk).await {
             let end = self.pos();
-            self.line_break();
+            self.line_break(stk).await;
             Some((op, (start, end)))
         } else {
             // newline separator
@@ -314,7 +320,7 @@ impl Parser {
             self.spacing();
             if self.peek() == Some('\n') || self.peek() == Some('\r') {
                 let s2 = self.pos();
-                self.newline_list();
+                self.newline_list(stk).await;
                 let e2 = self.pos();
                 Some(('\n', (s2, e2)))
             } else {
@@ -324,7 +330,7 @@ impl Parser {
         }
     }
 
-    pub(super) fn newline_list(&mut self) {
+    pub(super) async fn newline_list(&mut self, stk: &mut Stk) {
         // `many1 ((linefeed <|> carriageReturn) `thenSkip` spacing) <*
         // checkBadBreak`: the spacing comes after each newline, so it takes a
         // comment on the following line with it, and the check only runs once
@@ -332,7 +338,7 @@ impl Parser {
         let mut any = false;
         loop {
             let m = self.mark();
-            if self.linefeed_or_carriage_return().is_err() {
+            if self.linefeed_or_carriage_return(stk).await.is_err() {
                 if self.idx != m.idx {
                     self.commit();
                     return;
@@ -350,14 +356,14 @@ impl Parser {
 
     // ---- terms / and-or / pipelines ---------------------------------------
 
-    pub(super) fn read_compound_list_or_empty(&mut self) -> Vec<Token> {
-        self.read_compound_list(false)
+    pub(super) async fn read_compound_list_or_empty(&mut self, stk: &mut Stk) -> Vec<Token> {
+        self.read_compound_list(stk, false).await
     }
 
-    fn read_compound_list(&mut self, top_level: bool) -> Vec<Token> {
-        self.allspacing();
+    async fn read_compound_list(&mut self, stk: &mut Stk, top_level: bool) -> Vec<Token> {
+        self.allspacing(stk).await;
         let m = self.mark();
-        if let Some(t) = self.read_term_inner(top_level) {
+        if let Some(t) = self.read_term_inner(stk, top_level).await {
             t
         } else {
             // `readTerm <|> return []` only recovers a failure that
@@ -371,24 +377,33 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_term(&mut self) -> Option<Vec<Token>> {
-        self.read_term_inner(false)
+    pub(super) async fn read_term(&mut self, stk: &mut Stk) -> Option<Vec<Token>> {
+        self.read_term_inner(stk, false).await
     }
 
-    fn read_term_inner(&mut self, top_level: bool) -> Option<Vec<Token>> {
-        self.allspacing();
-        let first = self.read_and_or().ok()?;
-        self.read_term_more_inner(first, top_level).ok()
+    async fn read_term_inner(&mut self, stk: &mut Stk, top_level: bool) -> Option<Vec<Token>> {
+        self.allspacing(stk).await;
+        let first = self.read_and_or(stk).await.ok()?;
+        self.read_term_more_inner(stk, first, top_level).await.ok()
     }
 
-    pub(super) fn read_term_more(&mut self, current: Token) -> PResult<Vec<Token>> {
-        self.read_term_more_inner(current, false)
+    pub(super) async fn read_term_more(
+        &mut self,
+        stk: &mut Stk,
+        current: Token,
+    ) -> PResult<Vec<Token>> {
+        self.read_term_more_inner(stk, current, false).await
     }
 
-    fn read_term_more_inner(&mut self, mut current: Token, top_level: bool) -> PResult<Vec<Token>> {
+    async fn read_term_more_inner(
+        &mut self,
+        stk: &mut Stk,
+        mut current: Token,
+        top_level: bool,
+    ) -> PResult<Vec<Token>> {
         let mut terms = Vec::new();
         loop {
-            let Some((sep, (start, end))) = self.read_separator() else {
+            let Some((sep, (start, end))) = self.read_separator(stk).await else {
                 terms.push(current);
                 return Ok(terms);
             };
@@ -406,7 +421,7 @@ impl Parser {
             // try to read another and-or
             let m = self.mark();
             terms.push(node);
-            if let Ok(next) = self.read_and_or() {
+            if let Ok(next) = self.read_and_or(stk).await {
                 current = next;
             } else {
                 // `option (T_EOF id) readAndOr`: a failure that consumed
@@ -421,16 +436,16 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_and_or(&mut self) -> PResult<Token> {
+    pub(super) async fn read_and_or(&mut self, stk: &mut Stk) -> PResult<Token> {
         let ann_start = self.pos();
-        let annotations = self.read_annotations();
+        let annotations = self.read_annotations(stk).await;
         self.allspacing_no_newline();
         // `withAnnotations annotations $ chainl1 readPipeline ..`: the
         // directives cover the command they precede, and what it reports.
         // `unless (null annotations) $ optional $ do { try . lookAhead $
         // readKeyword; SC1123 }`: a directive in front of a keyword is in front
         // of half a compound command.
-        if !annotations.is_empty() && self.keyword_len().is_some() {
+        if !annotations.is_empty() && self.keyword_len(stk).await.is_some() {
             self.problem_at(
                 ann_start.clone(),
                 ann_start.clone(),
@@ -439,7 +454,11 @@ impl Parser {
                 "ShellCheck directives are only valid in front of complete compound commands, like 'if', not e.g. individual 'elif' branches.",
             );
         }
-        let left = self.with_annotations(&annotations, Self::read_and_or_chain)?;
+        let left = self
+            .with_annotations(stk, &annotations, async |p, stk| {
+                p.read_and_or_chain(stk).await
+            })
+            .await?;
         if annotations.is_empty() {
             Ok(left)
         } else {
@@ -456,8 +475,8 @@ impl Parser {
     }
 
     /// `chainl1 readPipeline (g_AND_IF <|> g_OR_IF)`.
-    fn read_and_or_chain(&mut self) -> PResult<Token> {
-        let mut left = self.read_pipeline()?;
+    async fn read_and_or_chain(&mut self, stk: &mut Stk) -> PResult<Token> {
+        let mut left = self.read_pipeline(stk).await?;
         loop {
             let m = self.mark();
             self.spacing();
@@ -478,8 +497,8 @@ impl Parser {
                 // ShellCheck's g_AND_IF / g_OR_IF ids), so checks that emit on
                 // the node land on the `&&` / `||`.
                 let op_end = self.pos();
-                self.line_break();
-                let right = self.read_pipeline()?;
+                self.line_break(stk).await;
+                let right = self.read_pipeline(stk).await?;
                 let id = self.next_id_between(op_start, op_end);
                 left = if is_and {
                     Token::new(
@@ -510,12 +529,12 @@ impl Parser {
         self.spacing();
     }
 
-    pub(super) fn read_pipeline(&mut self) -> PResult<Token> {
+    pub(super) async fn read_pipeline(&mut self, stk: &mut Stk) -> PResult<Token> {
         // `unexpecting "keyword/token" readKeyword`: a word that closes a
         // compound command cannot start one. The keyword is read and then
         // rejected, so the error lands past it, and the whole thing sits in a
         // `try`, so an enclosing alternative can still take over.
-        if let Some(n) = self.keyword_end() {
+        if let Some(n) = self.keyword_end(stk).await {
             let m = self.mark();
             // The `fail` inside the inner `try` happens from where the keyword
             // token left off -- before the outer one rewinds -- so that is
@@ -527,7 +546,7 @@ impl Parser {
             self.reset(m);
             return r;
         }
-        self.read_banged()
+        self.read_banged(stk).await
     }
 
     /// How far past the closing keyword ahead `readKeyword` leaves the cursor:
@@ -536,8 +555,8 @@ impl Parser {
     /// bare `char '}'`, handled specially so ksh's `${ foo; }bar` closes where
     /// it should. A caller that reads the keyword only to reject it still has
     /// to stop where Parsec would, since that is where the error is reported.
-    pub(super) fn keyword_end(&mut self) -> Option<usize> {
-        let n = self.keyword_len()?;
+    pub(super) async fn keyword_end(&mut self, stk: &mut Stk) -> Option<usize> {
+        let n = self.keyword_len(stk).await?;
         let takes_spacing = self.peek() != Some('}');
         let m = self.mark();
         for _ in 0..n {
@@ -560,7 +579,7 @@ impl Parser {
     /// full match still has `lookAhead keywordSeparator` to fail on past the
     /// word. Parsec's error sits there either way, and the `try` around the
     /// token keeps that position.
-    pub(super) fn keyword_attempt_failure(&mut self, w: &str) {
+    pub(super) async fn keyword_attempt_failure(&mut self, stk: &mut Stk, w: &str) {
         let prefix = w
             .chars()
             .enumerate()
@@ -571,7 +590,7 @@ impl Parser {
         }
         if prefix < w.chars().count() {
             self.fail_past(prefix, "");
-        } else if !self.at_keyword_separator(prefix) {
+        } else if !self.at_keyword_separator(stk, prefix).await {
             // The whole word is there and what refused is `keywordSeparator`,
             // whose `allspacingOrFail` is the only alternative in it with
             // anything to say.
@@ -579,18 +598,18 @@ impl Parser {
         }
     }
 
-    pub(super) fn keyword_len(&mut self) -> Option<usize> {
+    pub(super) async fn keyword_len(&mut self, stk: &mut Stk) -> Option<usize> {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
         // Every alternative in the `choice` is attempted, so a longer keyword
         // sharing a prefix with a shorter one still gets its own warning.
         let mut found = None;
         for w in WORDS {
             if !self.word_matches(w) {
-                self.keyword_attempt_failure(w);
+                self.keyword_attempt_failure(stk, w).await;
                 continue;
             }
             self.warn_keyword_needs_space(w);
-            if !self.at_keyword_separator(w.len()) {
+            if !self.at_keyword_separator(stk, w.len()).await {
                 // `lookAhead keywordSeparator` fails past the word.
                 self.fail_past(w.len(), "Expected whitespace");
             } else if found.is_none() {
@@ -598,7 +617,7 @@ impl Parser {
             }
         }
         for w in WORDS {
-            self.miscased_keyword(w);
+            self.miscased_keyword(stk, w).await;
         }
         if found.is_some() {
             return found;
@@ -638,13 +657,13 @@ impl Parser {
         Ok(id)
     }
 
-    pub(super) fn read_banged(&mut self) -> PResult<Token> {
+    pub(super) async fn read_banged(&mut self, stk: &mut Stk) -> PResult<Token> {
         // `readBanged parser = (g_Bang >> readBanged parser) <|> parser`: past
         // the `!` there is no alternative left.
         if self.peek() == Some('!') {
             let bang_id = self.g_bang()?;
             let m = self.mark();
-            if let Ok(inner) = self.read_banged() {
+            if let Ok(inner) = stk.run(|stk| self.read_banged(stk)).await {
                 return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
             }
             if self.idx != m.idx || self.has_committed_failure() || !self.empty_negation_ok() {
@@ -666,7 +685,7 @@ impl Parser {
             );
             return Ok(Token::new(bang_id, InnerToken::T_Banged(nothing)));
         }
-        self.read_pipe_sequence()
+        self.read_pipe_sequence(stk).await
     }
 
     /// May a `!` stand with nothing to negate here?
@@ -700,20 +719,20 @@ impl Parser {
     /// prefixed by one or more `!` (e.g. `true | ! true`, `! ! true`). Unlike
     /// `read_banged`, the fallback reads a single command, not a whole pipe
     /// sequence, so it can be used per-stage inside `read_pipe_sequence`.
-    pub(super) fn read_banged_command(&mut self) -> PResult<Token> {
+    pub(super) async fn read_banged_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         if self.peek() == Some('!') {
             let bang_id = self.g_bang()?;
-            let inner = self.read_banged_command()?;
+            let inner = stk.run(|stk| self.read_banged_command(stk)).await?;
             return Ok(Token::new(bang_id, InnerToken::T_Banged(inner)));
         }
-        self.read_command()
+        self.read_command(stk).await
     }
 
-    pub(super) fn read_pipe_sequence(&mut self) -> PResult<Token> {
+    pub(super) async fn read_pipe_sequence(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let mut cmds = Vec::new();
         let mut pipes = Vec::new();
-        let first = self.read_banged_command()?;
+        let first = self.read_banged_command(stk).await?;
         cmds.push(first);
         loop {
             let m = self.mark();
@@ -728,10 +747,10 @@ impl Parser {
                 let pid = self.next_id_between(pstart, self.pos());
                 pipes.push(Token::new(pid, InnerToken::T_Pipe(op)));
                 self.spacing();
-                self.line_break();
+                self.line_break(stk).await;
                 // `chainl1`: the separator has consumed, so a command that
                 // fails after it takes the pipeline down with it (`d|`).
-                cmds.push(self.read_banged_command()?);
+                cmds.push(self.read_banged_command(stk).await?);
             } else {
                 self.reset(m);
                 break;
@@ -752,13 +771,13 @@ impl Parser {
         ))
     }
 
-    pub(super) fn read_command(&mut self) -> PResult<Token> {
+    pub(super) async fn read_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         // `choice` is a fold of bare `<|>`: once a compound command has
         // consumed input there is no going back to a simple one, so `((`
         // reports an unfinished arithmetic command rather than quietly
         // becoming a word.
         let m = self.mark();
-        match self.read_compound_command() {
+        match self.read_compound_command(stk).await {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
@@ -767,7 +786,7 @@ impl Parser {
                 }
             }
         }
-        match self.read_condition_command() {
+        match self.read_condition_command(stk).await {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
@@ -776,7 +795,7 @@ impl Parser {
                 }
             }
         }
-        match self.read_coproc() {
+        match self.read_coproc(stk).await {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
@@ -787,7 +806,7 @@ impl Parser {
         }
         // The last alternative in the `choice`: nothing can take over from a
         // simple command that failed after consuming input.
-        let r = self.read_simple_command();
+        let r = self.read_simple_command(stk).await;
         if r.is_err() && self.idx != m.idx {
             self.commit();
         }
@@ -797,11 +816,12 @@ impl Parser {
     /// Faithful port of `readCoProc` (Parser.hs). `coproc` + spacing, then either
     /// a compound form (optional name word + compound command body) or a simple
     /// form (a simple-command body). The body is wrapped in `T_CoProcBody`.
-    pub(super) fn read_coproc(&mut self) -> PResult<Token> {
-        self.called("coproc", Self::read_coproc_inner)
+    pub(super) async fn read_coproc(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "coproc", async |p, stk| p.read_coproc_inner(stk).await)
+            .await
     }
 
-    fn read_coproc_inner(&mut self) -> PResult<Token> {
+    async fn read_coproc_inner(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let m = self.mark();
         // try { string "coproc"; spacing1 }
@@ -814,29 +834,41 @@ impl Parser {
             return Err(());
         }
         // choice [ try readCompoundCoProc, readSimpleCoProc ]
-        if let Ok(t) = self.try_parse(|p| p.read_compound_coproc(start.clone())) {
+        if let Ok(t) = self
+            .try_parse(stk, async |p, stk| {
+                p.read_compound_coproc(stk, start.clone()).await
+            })
+            .await
+        {
             return Ok(t);
         }
-        self.read_simple_coproc(start)
+        self.read_simple_coproc(stk, start).await
     }
 
-    pub(super) fn read_compound_coproc(&mut self, start: Position) -> PResult<Token> {
+    pub(super) async fn read_compound_coproc(
+        &mut self,
+        stk: &mut Stk,
+        start: Position,
+    ) -> PResult<Token> {
         // notFollowedBy2 readAssignmentWord
         let ma = self.mark();
-        let is_assign = self.read_assignment_word().is_ok();
+        let is_assign = self.read_assignment_word(stk).await.is_ok();
         self.reset(ma);
         if is_assign {
             return Err(());
         }
         // choice [ try (body only, no name), try (name word + body) ]
-        if let Ok(body) = self.try_parse(|p| p.read_coproc_body(true)) {
+        if let Ok(body) = self
+            .try_parse(stk, async |p, stk| p.read_coproc_body(stk, true).await)
+            .await
+        {
             let id = self.next_id_between(start.clone(), self.pos());
             return Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }));
         }
-        self.try_parse(|p| {
-            let var = p.read_normal_word()?;
+        self.try_parse(stk, async |p, stk| {
+            let var = p.read_normal_word(stk).await?;
             p.spacing();
-            let body = p.read_coproc_body(true)?;
+            let body = p.read_coproc_body(stk, true).await?;
             let id = p.next_id_between(start, p.pos());
             Ok(Token::new(
                 id,
@@ -846,21 +878,30 @@ impl Parser {
                 },
             ))
         })
+        .await
     }
 
-    pub(super) fn read_simple_coproc(&mut self, start: Position) -> PResult<Token> {
-        let body = self.read_coproc_body(false)?;
+    pub(super) async fn read_simple_coproc(
+        &mut self,
+        stk: &mut Stk,
+        start: Position,
+    ) -> PResult<Token> {
+        let body = self.read_coproc_body(stk, false).await?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }))
     }
 
     /// `readBody parser`: run `parser`, wrap its result in `T_CoProcBody`.
-    pub(super) fn read_coproc_body(&mut self, compound: bool) -> PResult<Token> {
+    pub(super) async fn read_coproc_body(
+        &mut self,
+        stk: &mut Stk,
+        compound: bool,
+    ) -> PResult<Token> {
         let start = self.pos();
         let body = if compound {
-            self.read_compound_command()?
+            self.read_compound_command(stk).await?
         } else {
-            self.read_simple_command()?
+            self.read_simple_command(stk).await?
         };
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_CoProcBody(body)))
@@ -868,14 +909,17 @@ impl Parser {
 
     // ---- compound commands -------------------------------------------------
 
-    pub(super) fn read_arithmetic_command(&mut self) -> PResult<Token> {
-        self.called("((..)) command", Self::read_arithmetic_command_body)
+    pub(super) async fn read_arithmetic_command(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "((..)) command", async |p, stk| {
+            p.read_arithmetic_command_body(stk).await
+        })
+        .await
     }
 
-    fn read_arithmetic_command_body(&mut self) -> PResult<Token> {
+    async fn read_arithmetic_command_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.string("((")?;
-        let c = self.read_arithmetic_contents()?;
+        let c = self.read_arithmetic_contents(stk).await?;
         self.string("))")?;
         // `endSpan` comes before the trailing `spacing`, so the node does not
         // stretch over it.
@@ -886,15 +930,18 @@ impl Parser {
 
     // ---- simple command ----------------------------------------------------
 
-    pub(super) fn read_simple_command(&mut self) -> PResult<Token> {
-        self.called("simple command", Self::read_simple_command_body)
+    pub(super) async fn read_simple_command(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "simple command", async |p, stk| {
+            p.read_simple_command_body(stk).await
+        })
+        .await
     }
 
-    fn read_simple_command_body(&mut self) -> PResult<Token> {
-        let prefix = self.read_cmd_prefix();
+    async fn read_simple_command_body(&mut self, stk: &mut Stk) -> PResult<Token> {
+        let prefix = self.read_cmd_prefix(stk).await;
         self.spacing();
         self.skip_annotation_and_warn();
-        let cmd = self.read_cmd_name()?;
+        let cmd = self.read_cmd_name(stk).await?;
         if prefix.is_empty() && cmd.is_none() {
             return self.fail_with("Expected a command");
         }
@@ -916,12 +963,13 @@ impl Parser {
                 // that, a word that failed after consuming (a `` ` `` with no
                 // closing one) leaves its frame on the stack and the real
                 // failure names it twice.
-                self.peek_ahead(|p| {
+                self.peek_ahead(stk, async |p, stk| {
                     p.spacing();
                     p.skip_annotation_and_warn();
-                    let w = p.read_normal_word()?;
+                    let w = p.read_normal_word(stk).await?;
                     Ok(Self::command_literal_name(&w))
                 })
+                .await
                 .flatten()
             } else {
                 name
@@ -931,17 +979,18 @@ impl Parser {
                 Some("declare" | "export" | "local" | "readonly" | "typeset")
             );
             if effective.as_deref() == Some("let") {
-                suffix = self.read_let_suffix()?;
+                suffix = self.read_let_suffix(stk).await?;
             } else if effective.as_deref() == Some("time") {
-                suffix = self.read_time_suffix()?;
+                suffix = self.read_time_suffix(stk).await?;
             } else {
-                suffix = self.read_cmd_suffix(if is_modifier {
+                let kind = if is_modifier {
                     CmdSuffix::Modifier
                 } else if effective.as_deref() == Some("eval") {
                     CmdSuffix::Eval
                 } else {
                     CmdSuffix::Plain
-                })?;
+                };
+                suffix = self.read_cmd_suffix(stk, kind).await?;
             }
         }
         // assemble
@@ -996,8 +1045,8 @@ impl Parser {
         );
         // `case () of _ | isCommand ["source", "."] cmd -> readSource result ..`
         match Self::command_literal_name_of(&result).as_deref() {
-            Some("source" | ".") => return Ok(self.read_source(result)),
-            Some("trap") => self.syntax_check_trap(&result),
+            Some("source" | ".") => return Ok(self.read_source(stk, result).await),
+            Some("trap") => self.syntax_check_trap(stk, &result).await,
             _ => {}
         }
         Ok(result)
@@ -1009,7 +1058,7 @@ impl Parser {
     /// Every way of not following ends with the original command and a note:
     /// SC1090 (the name is not constant), SC1093 (already being sourced),
     /// SC1091 (the interface would not read it) or SC1094 (it did not parse).
-    fn read_source(&mut self, t: Token) -> Token {
+    async fn read_source(&mut self, stk: &mut Stk, t: Token) -> Token {
         let (cmd_id, cmd, args) = {
             let InnerToken::T_Redirecting { cmd: simple, .. } = &*t.inner else {
                 return t;
@@ -1080,7 +1129,7 @@ impl Parser {
                 let (start, end) = self.span_for(cmd_id);
                 let id1 = self.next_id_between(start.clone(), end.clone());
                 let id2 = self.next_id_between(start, end);
-                if let Some(src) = self.sub_read(&resolved, &script) {
+                if let Some(src) = self.sub_read(stk, &resolved, &script).await {
                     let included = Token::new(id2, InnerToken::T_Include(src));
                     Token::new(
                         id1,
@@ -1147,7 +1196,7 @@ impl Parser {
     /// recursion guard looks at. `inSeparateContext` throws away the sourced
     /// file's parse *problems* either way -- only its notes, which the frame
     /// filters, can reach the caller.
-    fn sub_read(&mut self, name: &str, script: &str) -> Option<Token> {
+    async fn sub_read(&mut self, stk: &mut Stk, name: &str, script: &str) -> Option<Token> {
         let mut sub = Self::with_shell_flag(
             name,
             script,
@@ -1168,7 +1217,7 @@ impl Parser {
         sub.root_filename.clone_from(&self.root_filename);
         // `pendingHereDocs = []`: the caller's unread here documents are not the
         // sourced file's business, and are put back afterwards.
-        let root = sub.read_script_file();
+        let root = sub.read_script_file(stk).await;
         for nested in std::mem::take(&mut sub.sources) {
             self.record_source(&nested);
         }
@@ -1182,10 +1231,13 @@ impl Parser {
         // `readScriptFile` finishes each file itself: here documents reattached
         // and array indices reparsed, within that file's own state.
         let root = root.map(|r| super::reattach_heredocs(r, &sub.heredoc_bodies));
-        let root = root.map(|r| {
-            let assoc = super::get_associative_arrays(&r);
-            sub.reparse_indices_root(r, &assoc)
-        });
+        let root = match root {
+            Some(r) => {
+                let assoc = super::get_associative_arrays(&r);
+                Some(sub.reparse_indices_root(stk, r, &assoc).await)
+            }
+            None => None,
+        };
         self.next_id = sub.next_id;
         self.next_serial = sub.next_serial;
         for (k, v) in sub.positions {
@@ -1266,7 +1318,7 @@ impl Parser {
     /// `syntaxCheckTrap`: a trap action is shell code, so it is parsed too --
     /// with its failures reported rather than propagated, since the trap itself
     /// parsed fine.
-    fn syntax_check_trap(&mut self, t: &Token) {
+    async fn syntax_check_trap(&mut self, stk: &mut Stk, t: &Token) {
         let arg = {
             let InnerToken::T_Redirecting { cmd, .. } = &*t.inner else {
                 return;
@@ -1287,7 +1339,7 @@ impl Parser {
             return;
         }
         let (start, _) = self.span_for(arg.id());
-        self.subparse_commands(&str, &start);
+        self.subparse_commands(stk, &str, &start).await;
     }
 
     /// `readTimeSuffix`: `time [-p ...] <pipeline>`. Reads optional flag words
@@ -1295,7 +1347,7 @@ impl Parser {
     /// suffix of the `time` simple command (Parser.hs `readTimeSuffix`). If no
     /// pipeline follows, nothing is consumed and the suffix is empty (mirroring
     /// `option []` over a non-consuming failure).
-    pub(super) fn read_time_suffix(&mut self) -> PResult<Vec<Token>> {
+    pub(super) async fn read_time_suffix(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         // `readCmdWord` ends with `<* spacing`, so the space after the command
         // name is gone before `readTimeSuffix` begins. The port reads the name
         // without it, so take it here -- and before the mark, or the suffix
@@ -1309,7 +1361,7 @@ impl Parser {
             self.spacing();
             if self.peek() == Some('-') {
                 let wm = self.mark();
-                match self.read_normal_word() {
+                match self.read_normal_word(stk).await {
                     Ok(w) => {
                         out.push(w);
                         continue;
@@ -1330,7 +1382,7 @@ impl Parser {
             break;
         }
         self.spacing();
-        if let Ok(p) = self.read_pipeline() {
+        if let Ok(p) = self.read_pipeline(stk).await {
             out.push(p);
             Ok(out)
         } else {
@@ -1345,18 +1397,18 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_cmd_prefix(&mut self) -> Vec<Token> {
+    pub(super) async fn read_cmd_prefix(&mut self, stk: &mut Stk) -> Vec<Token> {
         let mut out = Vec::new();
         loop {
             self.spacing();
             // redirect?
-            if let Ok(r) = self.read_io_redirect() {
+            if let Ok(r) = self.read_io_redirect(stk).await {
                 out.push(r);
                 continue;
             }
             // assignment?
             let m = self.mark();
-            if let Ok(a) = self.read_assignment_word() {
+            if let Ok(a) = self.read_assignment_word(stk).await {
                 out.push(a);
                 continue;
             }
@@ -1376,7 +1428,7 @@ impl Parser {
     /// to read, an error when reading one failed after consuming input, since
     /// `option` recovers only from a failure that consumed nothing and the
     /// cursor stays where that failure left it.
-    pub(super) fn read_cmd_name(&mut self) -> PResult<Option<Token>> {
+    pub(super) async fn read_cmd_name(&mut self, stk: &mut Stk) -> PResult<Option<Token>> {
         // `optional . try $ char '\\' >> lookAhead (variableChars <|> oneOf ":.")`:
         // a leading backslash here suppresses alias expansion, so it is not an
         // escape and reports nothing.
@@ -1395,7 +1447,7 @@ impl Parser {
         let m = self.mark();
         self.skip_annotation_and_warn();
         // don't treat keywords as command names in command position handled by caller
-        if let Ok(w) = self.read_normal_word() {
+        if let Ok(w) = self.read_normal_word(stk).await {
             Ok(Some(w))
         } else {
             // `readCmdName` is not behind a `try`, so a word that failed
@@ -1419,12 +1471,16 @@ impl Parser {
     /// character fails the command, and the cursor stays where it failed: a
     /// command that "succeeded" with a shorter suffix would pop a frame the
     /// failure left behind, and name the wrong production.
-    pub(super) fn read_cmd_suffix(&mut self, kind: CmdSuffix) -> PResult<Vec<Token>> {
+    pub(super) async fn read_cmd_suffix(
+        &mut self,
+        stk: &mut Stk,
+        kind: CmdSuffix,
+    ) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
             self.spacing();
             let rm = self.mark();
-            match self.read_io_redirect() {
+            match self.read_io_redirect(stk).await {
                 Ok(r) => {
                     out.push(r);
                     continue;
@@ -1439,7 +1495,7 @@ impl Parser {
             // well-formed assignments as T_Assignment (readModifierSuffix).
             if kind == CmdSuffix::Modifier {
                 let am = self.mark();
-                if let Ok(a) = self.read_well_formed_assignment() {
+                if let Ok(a) = self.read_well_formed_assignment(stk).await {
                     out.push(a);
                     continue;
                 }
@@ -1454,7 +1510,7 @@ impl Parser {
             }
             let m = self.mark();
             self.skip_annotation_and_warn();
-            if let Ok(w) = self.read_normal_word() {
+            if let Ok(w) = self.read_normal_word(stk).await {
                 out.push(w);
             } else {
                 // `many` stops on a failure that consumed nothing; one that
@@ -1490,17 +1546,37 @@ impl Parser {
 
     /// `reparseIndices`: reparse each `T_UnparsedIndex` as arithmetic (indexed
     /// arrays) or an index word (associative arrays), matching ShellCheck.
-    pub(super) fn reparse_indices_root(
+    pub(super) async fn reparse_indices_root(
         &mut self,
+        stk: &mut Stk,
         mut root: Token,
         assoc: &std::collections::HashSet<String>,
     ) -> Token {
-        self.reparse_walk(&mut root, assoc);
+        self.reparse_walk(stk, &mut root, assoc).await;
         root
     }
 
-    pub(super) fn reparse_walk(
+    /// Visits every node, parents before children, left to right. The order
+    /// of the sub-parses decides the ids they hand out.
+    pub(super) async fn reparse_walk(
         &mut self,
+        stk: &mut Stk,
+        t: &mut Token,
+        assoc: &std::collections::HashSet<String>,
+    ) {
+        let mut pending: Vec<&mut Token> = vec![t];
+        while let Some(t) = pending.pop() {
+            self.reparse_node(stk, t, assoc).await;
+            let mut children = t.inner_mut().children_mut();
+            children.reverse();
+            pending.extend(children);
+        }
+    }
+
+    /// Reparse the indices of one assignment or arithmetic variable.
+    async fn reparse_node(
+        &mut self,
+        stk: &mut Stk,
         t: &mut Token,
         assoc: &std::collections::HashSet<String>,
     ) {
@@ -1530,9 +1606,9 @@ impl Parser {
                     .collect();
                 for (i, pos, src) in jobs {
                     let newtok = if is_assoc {
-                        self.sub_parse_index_word(&pos, &src)
+                        self.sub_parse_index_word(stk, &pos, &src).await
                     } else {
-                        self.sub_parse_array_index(&pos, &src)
+                        self.sub_parse_array_index(stk, &pos, &src).await
                     };
                     if let Some(nt) = newtok {
                         // Re-fetch the indices vec (borrow released after sub_parse).
@@ -1552,16 +1628,18 @@ impl Parser {
                 && let InnerToken::T_Array(elems) = value.inner_mut()
             {
                 for elem in elems.iter_mut() {
-                    self.reparse_indexed_element(elem, is_assoc);
+                    self.reparse_indexed_element(stk, elem, is_assoc).await;
                 }
             }
         }
-        for c in t.inner_mut().children_mut() {
-            self.reparse_walk(c, assoc);
-        }
     }
 
-    pub(super) fn reparse_indexed_element(&mut self, elem: &mut Token, is_assoc: bool) {
+    pub(super) async fn reparse_indexed_element(
+        &mut self,
+        stk: &mut Stk,
+        elem: &mut Token,
+        is_assoc: bool,
+    ) {
         if let InnerToken::T_IndexedElement { indices, .. } = &*elem.inner {
             let jobs: Vec<(usize, Position, String)> = indices
                 .iter()
@@ -1573,9 +1651,9 @@ impl Parser {
                 .collect();
             for (i, pos, src) in jobs {
                 let newtok = if is_assoc {
-                    self.sub_parse_index_word(&pos, &src)
+                    self.sub_parse_index_word(stk, &pos, &src).await
                 } else {
-                    self.sub_parse_array_index(&pos, &src)
+                    self.sub_parse_array_index(stk, &pos, &src).await
                 };
                 if let Some(nt) = newtok
                     && let InnerToken::T_IndexedElement { indices, .. } = elem.inner_mut()
@@ -1591,13 +1669,18 @@ impl Parser {
     /// sub-parser's positions and id counter. Mirrors ShellCheck's `subParse`.
     /// `subParse newPos (readArithmeticContents <* eof) unQuoted`, the
     /// expression of a `let` argument.
-    pub(super) fn sub_parse_let_expression(&mut self, pos: &Position, src: &str) -> Option<Token> {
+    pub(super) async fn sub_parse_let_expression(
+        &mut self,
+        stk: &mut Stk,
+        pos: &Position,
+        src: &str,
+    ) -> Option<Token> {
         // `subParse` runs on the same parser state, so whatever the
         // arithmetic reports stays reported: `let $(source x)` sources a file
         // from inside its expression, and that is where SC1090 comes from.
         let mut sub = self.sub_parser(src, pos);
         // `readSequence` skips its own leading arithmetic spacing.
-        let tok = sub.read_arithmetic_contents().ok();
+        let tok = sub.read_arithmetic_contents(stk).await.ok();
         // `readArithmeticContents <* eof`, with no spacing in between: a comment
         // left over from `readCmdWord`'s `spacing` makes this fail, and the
         // argument is read as an ordinary word instead.
@@ -1617,12 +1700,19 @@ impl Parser {
     /// when `reparseIndices` gets to it. No `eof`: whatever the expression
     /// leaves unread is simply left, so `a[$(echo $))]=` has the command
     /// substitution its first `)` closes, and the checks see it.
-    pub(super) fn sub_parse_array_index(&mut self, pos: &Position, src: &str) -> Option<Token> {
+    pub(super) async fn sub_parse_array_index(
+        &mut self,
+        stk: &mut Stk,
+        pos: &Position,
+        src: &str,
+    ) -> Option<Token> {
         let mut sub = self.sub_parser(src, pos);
-        let r = sub.called("arithmetic array index expression", |p| {
-            let _ = p.one_of(" \t\n\r");
-            p.read_arithmetic_contents()
-        });
+        let r = sub
+            .called(stk, "arithmetic array index expression", async |p, stk| {
+                let _ = p.one_of(" \t\n\r");
+                p.read_arithmetic_contents(stk).await
+            })
+            .await;
         if let Ok(tok) = r {
             self.merge_sub(sub);
             Some(tok)
@@ -1646,11 +1736,19 @@ impl Parser {
     /// `subParse pos (called "associative array index" $ readIndexSpan) src`.
     /// It is a sub-parse like any other, so what the index span reports on the
     /// way -- SC1036 for a `(` that cannot start a word part -- is kept.
-    pub(super) fn sub_parse_index_word(&mut self, pos: &Position, src: &str) -> Option<Token> {
+    pub(super) async fn sub_parse_index_word(
+        &mut self,
+        stk: &mut Stk,
+        pos: &Position,
+        src: &str,
+    ) -> Option<Token> {
         let mut sub = self.sub_parser(src, pos);
         let start = sub.pos();
         let parts = sub
-            .called("associative array index", Self::read_index_span)
+            .called(stk, "associative array index", async |p, stk| {
+                p.read_index_span(stk).await
+            })
+            .await
             .ok()?;
         let id = sub.next_id_between(start, sub.pos());
         let tok = Token::new(id, InnerToken::T_NormalWord(parts));
@@ -1660,15 +1758,16 @@ impl Parser {
 
     /// `readStringForParser readCmdWord`: the raw text of one `let` argument,
     /// trailing spacing included, and the position it starts at.
-    pub(super) fn read_let_arg_raw(&mut self) -> Option<(String, Position)> {
+    pub(super) async fn read_let_arg_raw(&mut self, stk: &mut Stk) -> Option<(String, Position)> {
         let start = self.pos();
         let raw = self
-            .read_string_for_parser(|p| {
+            .read_string_for_parser(stk, async |p, stk| {
                 p.skip_annotation_and_warn();
-                p.read_normal_word()?;
+                p.read_normal_word(stk).await?;
                 p.spacing();
                 Ok(())
             })
+            .await
             .ok()?;
         if raw.is_empty() {
             return None;
@@ -1681,12 +1780,12 @@ impl Parser {
     /// expression sits behind a `try`, so a redirection or a word that failed
     /// after consuming input fails the suffix, and with it the command:
     /// `let "` is an unterminated string, not a `let` with no arguments.
-    pub(super) fn read_let_suffix(&mut self) -> PResult<Vec<Token>> {
+    pub(super) async fn read_let_suffix(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
             self.spacing();
             let rm = self.mark();
-            match self.read_io_redirect() {
+            match self.read_io_redirect(stk).await {
                 Ok(r) => {
                     out.push(r);
                     continue;
@@ -1698,7 +1797,7 @@ impl Parser {
                 }
             }
             let m = self.mark();
-            if let Some((raw, start)) = self.read_let_arg_raw() {
+            if let Some((raw, start)) = self.read_let_arg_raw(stk).await {
                 // kludgeAwayQuotes: strip matching surrounding quotes.
                 let chars: Vec<char> = raw.chars().collect();
                 let (unquoted, adj_pos) = if chars.len() >= 2
@@ -1711,7 +1810,10 @@ impl Parser {
                 } else {
                     (raw.clone(), start.clone())
                 };
-                if let Some(tok) = self.sub_parse_let_expression(&adj_pos, &unquoted) {
+                if let Some(tok) = self
+                    .sub_parse_let_expression(stk, &adj_pos, &unquoted)
+                    .await
+                {
                     out.push(tok);
                     continue;
                 }
@@ -1720,7 +1822,7 @@ impl Parser {
             // for what it is, and a failure that consumed is the command's.
             self.reset(m);
             self.skip_annotation_and_warn();
-            if let Ok(w) = self.read_normal_word() {
+            if let Ok(w) = self.read_normal_word(stk).await {
                 out.push(w);
             } else {
                 if self.idx != m.idx {
@@ -1791,12 +1893,14 @@ impl Parser {
     /// (`readStringForParser readIndexSpan`), so an unterminated quote inside
     /// fails the index instead of being swallowed as raw text; the characters
     /// themselves are kept unparsed for `reparseIndices` to revisit.
-    pub(super) fn read_array_index(&mut self) -> PResult<Token> {
+    pub(super) async fn read_array_index(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.char('[')?;
         let pos = self.pos();
         // `str <- readStringForParser readIndexSpan`.
-        let raw = self.read_string_for_parser(|p| p.read_index_span().map(|_| ()))?;
+        let raw = self
+            .read_string_for_parser(stk, async |p, stk| p.read_index_span(stk).await.map(|_| ()))
+            .await?;
         self.char(']')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
@@ -1809,7 +1913,7 @@ impl Parser {
     /// otherLiteral)`, and the parts it read -- `reparseIndices` keeps them as
     /// the index of an associative array, while `readStringForParser` wants
     /// only the text they cover.
-    fn read_index_span(&mut self) -> PResult<Vec<Token>> {
+    async fn read_index_span(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         let mut parts = Vec::new();
         loop {
             // `notFollowedBy2 (oneOf "]")`
@@ -1818,7 +1922,7 @@ impl Parser {
             }
             let before = self.idx;
             let m = self.mark();
-            match self.read_normal_word_part_end("]") {
+            match self.read_normal_word_part_end(stk, "]").await {
                 Ok(t) if self.idx != before => {
                     parts.push(t);
                     continue;
@@ -1855,26 +1959,31 @@ impl Parser {
 
     /// `readAssignmentWord = readAssignmentWordExt True`: lenient, so a
     /// leading `$` is read and reported (SC1066) before the word is rejected.
-    pub(super) fn read_assignment_word(&mut self) -> PResult<Token> {
-        self.called("variable assignment", |p| p.read_assignment_word_body(true))
+    pub(super) async fn read_assignment_word(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "variable assignment", async |p, stk| {
+            p.read_assignment_word_body(stk, true).await
+        })
+        .await
     }
 
     /// `readWellFormedAssignment = readAssignmentWordExt False`, what a
     /// modifier command's arguments are read with.
-    pub(super) fn read_well_formed_assignment(&mut self) -> PResult<Token> {
-        self.called("variable assignment", |p| {
-            p.read_assignment_word_body(false)
+    pub(super) async fn read_well_formed_assignment(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "variable assignment", async |p, stk| {
+            p.read_assignment_word_body(stk, false).await
         })
+        .await
     }
 
-    fn read_assignment_word_body(&mut self, lenient: bool) -> PResult<Token> {
+    async fn read_assignment_word_body(&mut self, stk: &mut Stk, lenient: bool) -> PResult<Token> {
         let start = self.pos();
         // Everything up to and including the `=` is read inside a `try`: a word
         // that turns out not to be an assignment must leave the cursor where it
         // started, so the enclosing `called` unwinds and leaves no context
         // behind either.
         let prefix = self.mark();
-        let Ok((name, indices, op_start, mode)) = self.read_assignment_prefix(lenient) else {
+        let Ok((name, indices, op_start, mode)) = self.read_assignment_prefix(stk, lenient).await
+        else {
             self.reset(prefix);
             return Err(());
         };
@@ -1923,14 +2032,14 @@ impl Parser {
         }
         // value: array (..) or word (possibly empty)
         let value = if self.peek() == Some('(') {
-            self.read_array()?
+            self.read_array(stk).await?
         } else {
             // `value <- readArray <|> readNormalWord`, with nothing after it:
             // there is no falling back to an empty value here, and the frame
             // `called "variable assignment"` left behind is what names the
             // failure. An assignment that really has no value took the
             // `readEmptyLiteral` branch above.
-            self.read_normal_word()?
+            self.read_normal_word(stk).await?
         };
         let id = self.next_id_between(start, op_start);
         Ok(Token::new(
@@ -1946,8 +2055,9 @@ impl Parser {
 
     /// The `try` of `readAssignmentWordExt`: the name, its indices, where the
     /// operator starts and the operator itself.
-    fn read_assignment_prefix(
+    async fn read_assignment_prefix(
         &mut self,
+        stk: &mut Stk,
         lenient: bool,
     ) -> PResult<(String, Vec<Token>, Position, AssignmentMode)> {
         // `leadingDollarPos <- optionMaybe $ getSpanPositionsFor (char '$')`:
@@ -1965,7 +2075,7 @@ impl Parser {
         // `many readArrayIndex`
         let mut indices = Vec::new();
         while self.peek() == Some('[') {
-            indices.push(self.read_array_index()?);
+            indices.push(self.read_array_index(stk).await?);
         }
         // The T_Assignment span ends here (variable name + indices), before the
         // `=` — matching ShellCheck's `id <- endSpan start` placement, so that
@@ -2025,11 +2135,14 @@ impl Parser {
         Token::new(wid, InnerToken::T_NormalWord(vec![lit]))
     }
 
-    pub(super) fn read_array(&mut self) -> PResult<Token> {
-        self.called("array assignment", Self::read_array_body)
+    pub(super) async fn read_array(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "array assignment", async |p, stk| {
+            p.read_array_body(stk).await
+        })
+        .await
     }
 
-    fn read_array_body(&mut self) -> PResult<Token> {
+    async fn read_array_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let opening = self.pos();
         self.char('(')?;
@@ -2044,7 +2157,7 @@ impl Parser {
         }
         let mut elems = Vec::new();
         loop {
-            self.allspacing();
+            self.allspacing(stk).await;
             if self.peek() == Some(')') || self.peek().is_none() {
                 break;
             }
@@ -2054,7 +2167,7 @@ impl Parser {
                 let estart = self.pos();
                 let mut indices = Vec::new();
                 while self.peek() == Some('[') {
-                    match self.read_array_index() {
+                    match self.read_array_index(stk).await {
                         Ok(i) => indices.push(i),
                         Err(()) => break,
                     }
@@ -2066,10 +2179,10 @@ impl Parser {
                         // `readArray <|> readNormalWord`, and past the `(`
                         // neither that `<|>` nor the `<|> nothing` after it can
                         // recover.
-                        self.read_array()?
+                        self.read_array(stk).await?
                     } else {
                         let before = self.idx;
-                        match self.read_normal_word() {
+                        match self.read_normal_word(stk).await {
                             Ok(w) => w,
                             // `<|> nothing` is still an `<|>`: a value that
                             // failed after consuming -- `[]=` and a backtick
@@ -2092,7 +2205,7 @@ impl Parser {
             // `readRegular = readArray <|> readNormalWord`: an element may
             // itself be an array, as in `a=(1 [2]=(3 4))`.
             if self.peek() == Some('(') {
-                elems.push(self.read_array()?);
+                elems.push(self.read_array(stk).await?);
                 continue;
             }
             // `reluctantlyTill`'s trailing `<|> return []` ends the list on a
@@ -2101,7 +2214,7 @@ impl Parser {
             // the parse, so the error reported is the element's own rather
             // than the missing `)` below.
             let before = self.idx;
-            match self.read_normal_word() {
+            match self.read_normal_word(stk).await {
                 Ok(w) => elems.push(w),
                 Err(()) if self.idx == before => break,
                 Err(()) => return Err(()),
@@ -2120,11 +2233,11 @@ impl Parser {
     /// reading anything and fails on one that read something first: `(x)<` and
     /// then a `)` is a redirection with no target, and that is the whole
     /// command's failure rather than the end of its redirection list.
-    pub(super) fn read_redirect_list(&mut self) -> PResult<Vec<Token>> {
+    pub(super) async fn read_redirect_list(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         let mut out = Vec::new();
         loop {
             let before = self.idx;
-            if let Ok(r) = self.read_io_redirect() {
+            if let Ok(r) = self.read_io_redirect(stk).await {
                 out.push(r);
                 // `readIoRedirect` ends with `spacing`, so the next attempt
                 // begins at the next token and the gap is not given back
@@ -2140,15 +2253,15 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_io_redirect(&mut self) -> PResult<Token> {
-        let r = self.read_fd_redirect();
+    pub(super) async fn read_io_redirect(&mut self, stk: &mut Stk) -> PResult<Token> {
+        let r = self.read_fd_redirect(stk).await;
         if r.is_ok() {
             self.skip_annotation_and_warn();
         }
         r
     }
 
-    fn read_fd_redirect(&mut self) -> PResult<Token> {
+    async fn read_fd_redirect(&mut self, stk: &mut Stk) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
         let fd = self.read_io_source();
@@ -2160,7 +2273,9 @@ impl Parser {
         let op_start = self.pos();
         // heredoc
         if self.peek() == Some('<') && self.peek_at(1) == Some('<') {
-            let r = self.read_heredoc_or_herestring(start, op_start, fd);
+            let r = self
+                .read_heredoc_or_herestring(stk, start, op_start, fd)
+                .await;
             if r.is_err() {
                 // The `<<` is consumed, so this is a here document whatever
                 // follows: `read -ra a<<)` is a parse error, not a word.
@@ -2196,21 +2311,23 @@ impl Parser {
         // operator, it is not something the caller can back out of.
         let (os, fdc, st) = (op_start, fd, start);
         let om = self.mark();
-        let r = self.called("redirection", move |p| {
-            let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
-            p.spacing();
-            let file = p.read_normal_word()?;
-            let iofile_id = p.next_id_between(os.clone(), p.pos());
-            let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
-            let id = p.next_id_between(st, p.pos());
-            Ok(Token::new(
-                id,
-                InnerToken::T_FdRedirect {
-                    fd: fdc,
-                    target: iofile,
-                },
-            ))
-        });
+        let r = self
+            .called(stk, "redirection", async move |p, stk| {
+                let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
+                p.spacing();
+                let file = p.read_normal_word(stk).await?;
+                let iofile_id = p.next_id_between(os.clone(), p.pos());
+                let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
+                let id = p.next_id_between(st, p.pos());
+                Ok(Token::new(
+                    id,
+                    InnerToken::T_FdRedirect {
+                        fd: fdc,
+                        target: iofile,
+                    },
+                ))
+            })
+            .await;
         if r.is_err() {
             if self.idx == om.idx {
                 // `readIoSource` is a `try`, so the fd source rolls back when
@@ -2338,8 +2455,9 @@ impl Parser {
         Some(Token::new(id, inner))
     }
 
-    pub(super) fn read_heredoc_or_herestring(
+    pub(super) async fn read_heredoc_or_herestring(
         &mut self,
+        stk: &mut Stk,
         start: Position,
         op_start: Position,
         fd: String,
@@ -2348,13 +2466,21 @@ impl Parser {
             return Err(());
         }
         if self.string_peek("<<<") {
-            return self.called("here string", |p| p.read_here_string(start, op_start, fd));
+            return self
+                .called(stk, "here string", async |p, stk| {
+                    p.read_here_string(stk, start, op_start, fd).await
+                })
+                .await;
         }
-        self.called("here document", |p| p.read_here_doc(start, op_start, fd))
+        self.called(stk, "here document", async |p, stk| {
+            p.read_here_doc(stk, start, op_start, fd).await
+        })
+        .await
     }
 
-    fn read_here_string(
+    async fn read_here_string(
         &mut self,
+        stk: &mut Stk,
         start: Position,
         op_start: Position,
         fd: String,
@@ -2364,14 +2490,15 @@ impl Parser {
         // the word is read).
         let hs_id = self.next_id_between(op_start, self.pos());
         self.spacing();
-        let word = self.read_normal_word()?;
+        let word = self.read_normal_word(stk).await?;
         let hs = Token::new(hs_id, InnerToken::T_HereString(word));
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_FdRedirect { fd, target: hs }))
     }
 
-    fn read_here_doc(
+    async fn read_here_doc(
         &mut self,
+        stk: &mut Stk,
         start: Position,
         _op_start: Position,
         fd: String,
@@ -2397,7 +2524,7 @@ impl Parser {
         // delimiter (may be quoted). `readHereDoc` captures `startSpan` here,
         // *after* `<<`/`-`/spacing, so T_HereDoc spans only the end token.
         let delim_start = self.pos();
-        let (delim, quoted) = self.read_heredoc_delim()?;
+        let (delim, quoted) = self.read_heredoc_delim(stk).await?;
         // Body is read lazily at next newline; for the slice, capture nothing now
         // and register a pending heredoc.
         let hd_id = self.next_id_between(delim_start, self.pos());
@@ -2426,15 +2553,19 @@ impl Parser {
     /// accepts, with its diagnostics forgotten, plus a trailing CR if there is
     /// one -- a here document really does work with CRLF, because the CR ends
     /// up part of the token.
-    pub(super) fn read_heredoc_delim(&mut self) -> PResult<(String, Quoted)> {
-        let mut str = self.read_string_for_parser(|p| p.read_normal_word().map(|_| ()))?;
+    pub(super) async fn read_heredoc_delim(&mut self, stk: &mut Stk) -> PResult<(String, Quoted)> {
+        let mut str = self
+            .read_string_for_parser(stk, async |p, stk| {
+                p.read_normal_word(stk).await.map(|_| ())
+            })
+            .await?;
         if self.carriage_return().is_ok() {
             str.push('\r');
         }
         Ok(unquote_here_delim(&str))
     }
 
-    pub(super) fn read_pending_heredocs(&mut self) -> PResult<()> {
+    pub(super) async fn read_pending_heredocs(&mut self, stk: &mut Stk) -> PResult<()> {
         // Past a commitment the parse is over in Parsec: a `<<` read after
         // the failure that ended it (`e<;<<x`) has no body to look for, and
         // reports nothing.
@@ -2448,7 +2579,7 @@ impl Parser {
             let outer = std::mem::replace(&mut self.contexts, hd.contexts.clone());
             let outer_disabled = std::mem::replace(&mut self.ann_contexts, hd.ann_contexts.clone());
             let from = self.idx;
-            let r = self.read_pending_here_doc(&hd);
+            let r = self.read_pending_here_doc(stk, &hd).await;
             // `parsecBracket` restores the outer stack unless the body both
             // failed and consumed: an unterminated document with no lines at
             // all leaves nothing behind to name.
@@ -2466,7 +2597,7 @@ impl Parser {
         Ok(())
     }
 
-    fn read_pending_here_doc(&mut self, hd: &PendingHereDoc) -> PResult<()> {
+    async fn read_pending_here_doc(&mut self, stk: &mut Stk, hd: &PendingHereDoc) -> PResult<()> {
         {
             // `docStartPos`: the position of the first byte of the body (this is
             // invoked right after the `<<EOF` line's newline).
@@ -2497,7 +2628,7 @@ impl Parser {
                     let lit_id = self.next_id_between(doc_start, doc_end);
                     vec![Token::new(lit_id, InnerToken::T_Literal(body))]
                 }
-                Quoted::Unquoted => self.read_here_data(&body, &doc_start)?,
+                Quoted::Unquoted => self.read_here_data(stk, &body, &doc_start).await?,
             };
             self.heredoc_bodies.insert(hd.id, tokens);
         }
@@ -2686,9 +2817,14 @@ impl Parser {
     /// same token stream a double-quoted string produces (literals, dollar
     /// expansions, backtick command substitutions), with `"` and other
     /// non-`` `$\ `` characters kept literal via `readHereLiteral`.
-    pub(super) fn read_here_data(&mut self, body: &str, start: &Position) -> PResult<Vec<Token>> {
+    pub(super) async fn read_here_data(
+        &mut self,
+        stk: &mut Stk,
+        body: &str,
+        start: &Position,
+    ) -> PResult<Vec<Token>> {
         let mut sub = self.sub_parser(body, start);
-        let r = sub.read_here_data_parts();
+        let r = sub.read_here_data_parts(stk).await;
         let failed = sub.has_committed_failure();
         // The stack the sub-parse reports from: the one it froze when it
         // committed, or the live one if nothing did.
@@ -2713,11 +2849,11 @@ impl Parser {
     }
 
     /// `many $ doubleQuotedPart <|> readHereLiteral`, on the body's own input.
-    fn read_here_data_parts(&mut self) -> PResult<Vec<Token>> {
+    async fn read_here_data_parts(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
-            if let Ok(t) = self.read_here_data_part() {
+            if let Ok(t) = self.read_here_data_part(stk).await {
                 parts.push(t);
             } else {
                 // `many`: an alternative that consumed before failing takes
@@ -2732,9 +2868,9 @@ impl Parser {
 
     /// `doubleQuotedPart <|> readHereLiteral`: outside a double quote, a `"` and
     /// the ordinary text around it are literal too.
-    fn read_here_data_part(&mut self) -> PResult<Token> {
+    async fn read_here_data_part(&mut self, stk: &mut Stk) -> PResult<Token> {
         let m = self.mark();
-        match self.read_double_quoted_part() {
+        match self.read_double_quoted_part(stk).await {
             Ok(t) => return Ok(t),
             Err(()) => {
                 if self.idx != m.idx {
@@ -2771,11 +2907,11 @@ impl Parser {
     /// fatal — ShellCheck keeps the tree it managed to build and still
     /// analyses it, which is why `r=\$(` yields SC1036/SC1088 alongside its
     /// ordinary warnings instead of a parse failure.
-    pub(super) fn verify_eof(&mut self) {
+    pub(super) async fn verify_eof(&mut self, stk: &mut Stk) {
         let p = self.pos();
         let (code, message) = if self.peek() == Some('(') {
             (1088, "Parsing stopped here. Invalid use of parentheses?")
-        } else if self.at_keyword() {
+        } else if self.at_keyword(stk).await {
             (
                 1089,
                 "Parsing stopped here. Is this keyword correctly matched up?",
@@ -2790,10 +2926,14 @@ impl Parser {
     }
 
     /// `readKeyword`: the tokens that close a compound command.
-    fn at_keyword(&mut self) -> bool {
+    async fn at_keyword(&mut self, stk: &mut Stk) -> bool {
         const WORDS: [&str; 7] = ["then", "else", "elif", "fi", "do", "done", "esac"];
-        WORDS.iter().any(|k| self.keyword_ahead(k))
-            || matches!(self.peek(), Some('}' | ')'))
+        for k in WORDS {
+            if self.keyword_ahead(stk, k).await {
+                return true;
+            }
+        }
+        matches!(self.peek(), Some('}' | ')'))
             || (self.peek() == Some(';') && self.peek_at(1) == Some(';'))
     }
 
@@ -2822,16 +2962,56 @@ impl Parser {
         }
     }
 
-    pub(super) fn read_script_file(&mut self) -> Option<Token> {
+    /// `verifyShebang`. Reports an interpreter at the start of the file that
+    /// ShellCheck does not support or does not recognise. Returns whether
+    /// ShellCheck does not support the shell. The caller then skips the body.
+    fn verify_shebang(&mut self, start: &Position, shebang: &Token) -> bool {
+        let InnerToken::T_Literal(sb) = &*shebang.inner else {
+            return false;
+        };
+        let exe = ast_lib::executable_from_shebang(sb);
+        let verdict = if crate::dialect::Dialect::from_name(&exe)
+            .is_some_and(crate::dialect::Dialect::is_added)
+        {
+            Some(true)
+        } else {
+            Self::is_valid_shell(&exe)
+        };
+        match verdict {
+            Some(true) => false,
+            Some(false) => {
+                self.problem_at(
+                    start.clone(),
+                    start.clone(),
+                    Severity::ErrorC,
+                    1071,
+                    "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
+                );
+                true
+            }
+            None => {
+                self.problem_at(
+                    start.clone(),
+                    start.clone(),
+                    Severity::ErrorC,
+                    1008,
+                    "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) async fn read_script_file(&mut self, stk: &mut Stk) -> Option<Token> {
         let start = self.pos();
         let rc_annotations = std::mem::take(&mut self.rc_annotations);
         self.push_disables(&rc_annotations);
         let has_bom = self.string("\u{FEFF}").is_ok();
         let shebang = self.read_shebang().unwrap_or_else(|| self.empty_literal());
-        self.allspacing();
+        self.allspacing(stk).await;
         // File-wide shellcheck directives after the shebang.
-        let file_annotations = self.read_annotations();
-        self.allspacing();
+        let file_annotations = self.read_annotations(stk).await;
+        self.allspacing(stk).await;
         // `withAnnotations fileAnnotations` wraps the whole file, so these
         // never go out of scope again.
         self.push_disables(&file_annotations);
@@ -2875,39 +3055,7 @@ impl Parser {
                 crate::dialect::Dialect::from_name(&ast_lib::executable_from_shebang(sb))
                     .map(crate::dialect::Dialect::floor);
         }
-        let mut unsupported_shell = false;
-        if !ignore_shebang && let InnerToken::T_Literal(sb) = &*shebang.inner {
-            let exe = ast_lib::executable_from_shebang(sb);
-            let verdict = if crate::dialect::Dialect::from_name(&exe)
-                .is_some_and(crate::dialect::Dialect::is_added)
-            {
-                Some(true)
-            } else {
-                Self::is_valid_shell(&exe)
-            };
-            match verdict {
-                Some(true) => {}
-                Some(false) => {
-                    self.problem_at(
-                        start.clone(),
-                        start.clone(),
-                        Severity::ErrorC,
-                        1071,
-                        "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
-                    );
-                    unsupported_shell = true;
-                }
-                None => {
-                    self.problem_at(
-                            start.clone(),
-                            start.clone(),
-                            Severity::ErrorC,
-                            1008,
-                            "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
-                        );
-                }
-            }
-        }
+        let unsupported_shell = !ignore_shebang && self.verify_shebang(&start, &shebang);
 
         // A shebang for a shell ShellCheck does not implement: the body is not
         // parsed at all (`many anyChar`), leaving a script whose only content
@@ -2926,16 +3074,16 @@ impl Parser {
             ));
         }
 
-        let commands = self.read_compound_list(true);
-        self.read_pending_heredocs().ok()?;
+        let commands = self.read_compound_list(stk, true).await;
+        self.read_pending_heredocs(stk).await.ok()?;
         // verify EOF: if not at end, it's a parse problem (SC1072-ish). For the
         // slice we record a generic problem but still return the tree.
-        self.allspacing();
+        self.allspacing(stk).await;
         // `verifyEof` is only reached when the grammar ran to completion: if a
         // production already failed outright, that failure propagates out of
         // `readScriptFile` and this is never evaluated.
         if !self.eof() && !self.has_committed_failure() {
-            self.verify_eof();
+            self.verify_eof(stk).await;
         }
         let script_id = self.next_id_between(start.clone(), self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });
@@ -3060,17 +3208,18 @@ mod tests {
     use super::super::tests::{is_not_ok, is_ok, is_warning};
     use super::*;
 
-    fn read_script(p: &mut Parser) -> PResult<Token> {
-        p.read_script_file().ok_or(())
+    async fn read_script(p: &mut Parser, stk: &mut Stk) -> PResult<Token> {
+        p.read_script_file(stk).await.ok_or(())
     }
 
     fn read_shebang(p: &mut Parser) -> PResult<Token> {
         p.read_shebang().ok_or(())
     }
 
-    fn read_here_string(p: &mut Parser) -> PResult<Token> {
+    async fn read_here_string(p: &mut Parser, stk: &mut Stk) -> PResult<Token> {
         let start = p.pos();
-        p.read_here_string(start.clone(), start, String::new())
+        p.read_here_string(stk, start.clone(), start, String::new())
+            .await
     }
 
     #[test]
@@ -3424,7 +3573,10 @@ mod tests {
 
     #[test]
     fn prop_readTerm() {
-        assert!(is_ok("time ( foo; bar; )", |p| p.read_term().ok_or(())));
+        assert!(is_ok("time ( foo; bar; )", async |p, stk| p
+            .read_term(stk)
+            .await
+            .ok_or(())));
     }
 
     #[test]
@@ -3528,31 +3680,38 @@ mod tests {
 
     #[test]
     fn prop_readShebang1() {
-        assert!(is_ok("#!/bin/sh\n", read_shebang));
+        assert!(is_ok("#!/bin/sh\n", async |p, _stk| read_shebang(p)));
     }
     #[test]
     fn prop_readShebang2() {
-        assert!(is_warning("!# /bin/sh\n", read_shebang));
+        assert!(is_warning("!# /bin/sh\n", async |p, _stk| read_shebang(p)));
     }
     #[test]
     fn prop_readShebang3() {
-        assert!(is_not_ok("#shellcheck shell=/bin/sh\n", read_shebang));
+        assert!(is_not_ok("#shellcheck shell=/bin/sh\n", async |p, _stk| {
+            read_shebang(p)
+        }));
     }
     #[test]
     fn prop_readShebang4() {
-        assert!(is_warning("! /bin/sh", read_shebang));
+        assert!(is_warning("! /bin/sh", async |p, _stk| read_shebang(p)));
     }
     #[test]
     fn prop_readShebang5() {
-        assert!(is_warning("\n#!/bin/sh", read_shebang));
+        assert!(is_warning("\n#!/bin/sh", async |p, _stk| read_shebang(p)));
     }
     #[test]
     fn prop_readShebang6() {
-        assert!(is_warning(" # Copyright \n!#/bin/bash", read_shebang));
+        assert!(is_warning(" # Copyright \n!#/bin/bash", async |p, _stk| {
+            read_shebang(p)
+        }));
     }
     #[test]
     fn prop_readShebang7() {
-        assert!(is_not_ok("# Copyright \nfoo\n#!/bin/bash", read_shebang));
+        assert!(is_not_ok(
+            "# Copyright \nfoo\n#!/bin/bash",
+            async |p, _stk| read_shebang(p)
+        ));
     }
 
     #[test]

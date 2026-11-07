@@ -161,19 +161,21 @@ pub(super) fn check_extra_masked_returns(params: &Parameters, root: &Token, out:
 
 /// `isTransparentCommand`: `time` passes its child's exit status through.
 fn remove_transparent_commands(t: &Token) -> Token {
-    /// `doTransform go`: every node, children first, ids preserved.
-    fn go(n: &mut Token) {
-        for c in n.inner_mut().children_mut() {
-            go(c);
-        }
+    // `doTransform go` rewrites every node and preserves ids. Upstream
+    // rewrites the children first. A `time` word is a plain literal, and
+    // nothing nested in a command changes whether its first word is `time`.
+    // Rewriting each node before its remaining children therefore gives the
+    // same tree.
+    let mut copy = t.clone();
+    let mut pending: Vec<&mut Token> = vec![&mut copy];
+    while let Some(n) = pending.pop() {
         let is_time = matches!(&*n.inner, InnerToken::T_SimpleCommand { words, .. } if !words.is_empty())
             && get_command_basename(n).as_deref() == Some("time");
         if is_time && let InnerToken::T_SimpleCommand { words, .. } = n.inner_mut() {
             words.remove(0);
         }
+        pending.extend(n.inner_mut().children_mut());
     }
-    let mut copy = t.clone();
-    go(&mut copy);
     copy
 }
 

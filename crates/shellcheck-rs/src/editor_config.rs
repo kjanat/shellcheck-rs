@@ -174,51 +174,105 @@ pub fn invalid_glob_lines(contents: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The regex body for a glob.
+///
+/// A `{a,b}` alternative is itself a glob, and braces nest. Each glob in
+/// translation is a [`Scan`] on a stack. A brace pauses its scan while the
+/// scans of its alternatives run, the first alternative first.
 fn glob_body(pattern: &[char]) -> String {
-    let mut out = String::new();
-    let mut i = 0;
-    while i < pattern.len() {
-        let c = pattern[i];
-        let rest = &pattern[i + 1..];
-        match c {
-            '*' if rest.first() == Some(&'*') => {
-                out.push_str(".*");
-                i += 2;
+    /// A brace whose alternatives are in translation. It holds the
+    /// alternatives still to do (last first), the finished ones, and the offset
+    /// past the `{` where the scan resumes.
+    struct Brace {
+        todo: Vec<Vec<char>>,
+        done: Vec<String>,
+        after: usize,
+    }
+    /// One glob being translated.
+    struct Scan {
+        pattern: Vec<char>,
+        i: usize,
+        out: String,
+        brace: Option<Brace>,
+    }
+    impl Scan {
+        const fn new(pattern: Vec<char>) -> Self {
+            Self {
+                pattern,
+                i: 0,
+                out: String::new(),
+                brace: None,
+            }
+        }
+    }
+    let mut scans = vec![Scan::new(pattern.to_vec())];
+    while let Some(scan) = scans.last_mut() {
+        if let Some(brace) = &mut scan.brace {
+            if let Some(alt) = brace.todo.pop() {
+                scans.push(Scan::new(alt));
                 continue;
             }
-            '*' => out.push_str("[^/]*"),
-            '?' => out.push_str("[^/]"),
+            let alternation = build_alternation(&brace.done);
+            scan.i += 1 + brace.after;
+            scan.out.push_str(&alternation);
+            scan.brace = None;
+            continue;
+        }
+        if scan.i >= scan.pattern.len() {
+            let out = std::mem::take(&mut scan.out);
+            scans.pop();
+            match scans.last_mut().and_then(|outer| outer.brace.as_mut()) {
+                Some(brace) => brace.done.push(out),
+                None => return out,
+            }
+            continue;
+        }
+        let c = scan.pattern[scan.i];
+        let rest = &scan.pattern[scan.i + 1..];
+        match c {
+            '*' if rest.first() == Some(&'*') => {
+                scan.out.push_str(".*");
+                scan.i += 2;
+                continue;
+            }
+            '*' => scan.out.push_str("[^/]*"),
+            '?' => scan.out.push_str("[^/]"),
             '[' => match rest.iter().position(|&c| c == ']') {
                 Some(end) => {
-                    out.push('[');
-                    out.push_str(&translate_class(&rest[..end]));
-                    out.push(']');
-                    i += end + 2;
+                    let class = translate_class(&rest[..end]);
+                    scan.out.push('[');
+                    scan.out.push_str(&class);
+                    scan.out.push(']');
+                    scan.i += end + 2;
                     continue;
                 }
-                None => out.push_str("\\["),
+                None => scan.out.push_str("\\["),
             },
             '{' => match find_matching_brace(rest) {
                 Some((body, after)) => {
-                    let alternatives: Vec<String> = brace_alternatives(&body)
+                    let mut todo: Vec<Vec<char>> = brace_alternatives(&body)
                         .iter()
-                        .map(|alt| glob_body(&alt.chars().collect::<Vec<_>>()))
+                        .map(|alt| alt.chars().collect())
                         .collect();
-                    out.push_str(&build_alternation(&alternatives));
-                    i += 1 + after;
+                    todo.reverse();
+                    scan.brace = Some(Brace {
+                        todo,
+                        done: Vec::new(),
+                        after,
+                    });
                     continue;
                 }
-                None => out.push_str("\\{"),
+                None => scan.out.push_str("\\{"),
             },
             c if ".\\+()^$|".contains(c) => {
-                out.push('\\');
-                out.push(c);
+                scan.out.push('\\');
+                scan.out.push(c);
             }
-            c => out.push(c),
+            c => scan.out.push(c),
         }
-        i += 1;
+        scan.i += 1;
     }
-    out
+    String::new()
 }
 
 /// `translateClass`: `!` negates, and a backslash is escaped.

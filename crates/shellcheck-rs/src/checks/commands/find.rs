@@ -176,14 +176,18 @@ fn find_accepts_glob(s: &str) -> bool {
     )
 }
 
-fn find_has_path(args: &[Token]) -> bool {
-    match args.split_first() {
-        None => false,
-        Some((first, rest)) => {
-            let flag = get_literal_string_def("___", first);
-            !flag.starts_with('-') || (find_is_leading_flag(&flag) && find_has_path(rest))
+fn find_has_path(mut args: &[Token]) -> bool {
+    while let Some((first, rest)) = args.split_first() {
+        let flag = get_literal_string_def("___", first);
+        if !flag.starts_with('-') {
+            return true;
         }
+        if !find_is_leading_flag(&flag) {
+            return false;
+        }
+        args = rest;
     }
+    false
 }
 
 fn find_is_leading_flag(flag: &str) -> bool {
@@ -203,28 +207,35 @@ fn injectable_pred(idx: usize, arg: &str) -> bool {
 const INJECTABLE_PATTERN_LEN: usize = 3;
 
 /// Faithful port of the recursive `match` in checkInjectableFindSh.
+///
+/// Each call either matches the head against the pattern, or fires the
+/// action once the pattern is used up. A match continues with both the next
+/// pattern element and the same one. The calls still to make wait on a
+/// stack, with the call upstream makes first on top. Every path therefore
+/// runs in the upstream order and fires the same warnings.
 fn injectable_match(test_idx: usize, items: &[(Id, String)], out: &mut Out) {
-    if items.is_empty() {
-        return;
-    }
-    if test_idx >= INJECTABLE_PATTERN_LEN {
-        // Pattern fully consumed: `action` on the current head.
-        let (id, arg) = &items[0];
-        if arg.contains("{}") {
-            warn(
-                out,
-                *id,
-                2156,
-                "Injecting filenames is fragile and insecure. Use parameters.",
-            );
+    let mut pending = vec![(test_idx, items)];
+    while let Some((test_idx, items)) = pending.pop() {
+        let Some(((id, arg), rest)) = items.split_first() else {
+            continue;
+        };
+        if test_idx >= INJECTABLE_PATTERN_LEN {
+            // The pattern is used up. Fire `action` on the current head.
+            if arg.contains("{}") {
+                warn(
+                    out,
+                    *id,
+                    2156,
+                    "Injecting filenames is fragile and insecure. Use parameters.",
+                );
+            }
+            continue;
         }
-        return;
+        pending.push((test_idx, rest));
+        if injectable_pred(test_idx, arg) {
+            pending.push((test_idx + 1, rest));
+        }
     }
-    let (_, arg) = &items[0];
-    if injectable_pred(test_idx, arg) {
-        injectable_match(test_idx + 1, &items[1..], out);
-    }
-    injectable_match(test_idx, &items[1..], out);
 }
 
 fn fap_is_param(t: &Token, strs: &[&str]) -> bool {
