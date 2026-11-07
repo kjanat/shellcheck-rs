@@ -332,11 +332,11 @@ jobs:
         run: sha256sum --check SHA256SUMS
       - name: Sign SLSA build provenance for every payload file
         id: provenance
-        uses: actions/attest@4d7d407517fe0a9f57ab8ca277dfd2efb1188c7f # main
+        uses: actions/attest@badbb428b0055a04f53d6ce00bda98cf1c04e56e # main
         with: { subject-path: dist/* }
       - name: Attest the source dependency inventory
         id: sbom
-        uses: actions/attest@4d7d407517fe0a9f57ab8ca277dfd2efb1188c7f # main
+        uses: actions/attest@badbb428b0055a04f53d6ce00bda98cf1c04e56e # main
         with:
           subject-path: dist/rshellcheck-${{ env.LABEL }}-source.tar.gz
           sbom-path: dist/source.spdx.json
@@ -446,7 +446,7 @@ jobs:
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
       - name: Attest published image
         if: env.PUBLISH == 'true'
-        uses: actions/attest@4d7d407517fe0a9f57ab8ca277dfd2efb1188c7f # main
+        uses: actions/attest@badbb428b0055a04f53d6ce00bda98cf1c04e56e # main
         with:
           subject-name: ghcr.io/kjanat/shellcheck-rs
           subject-digest: ${{ steps.image.outputs.digest }}
