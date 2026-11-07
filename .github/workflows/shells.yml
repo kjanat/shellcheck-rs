@@ -200,6 +200,19 @@ jobs:
       - name: Record outcomes
         run: cargo validity --record
 
+      - name: Check the port against the recorded outcomes
+        shell: bash -o pipefail {0}
+        env: { status: "0" }
+        run: |
+          cargo validity 2>&1 | tee validity.log || status=$?
+          {
+            echo '### Validity check'
+            echo '```text'
+            grep -E '^(validity:|DRIFT|FAIL|missing)' validity.log || true
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${status}"
+
       - name: Refresh behaviour snapshot
         run: cargo conformance-snapshot --write
 

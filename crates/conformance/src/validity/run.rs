@@ -5,6 +5,7 @@ use super::outcomes::{self, Outcome, Outcomes, Row};
 use super::spec::{self, Kind, Spec};
 use crate::port_keys;
 use shellcheck_rs::Dialect;
+use shellcheck_rs::dialect_policy::Policy;
 
 pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let matrix = matrix::load()?;
@@ -470,13 +471,25 @@ fn port_check_claim(
     };
     let on_snippet = codes(snippet)?;
     let on_fixed = codes(fixed)?;
-    if claim.agrees(spec.code, dialect, recorded, &on_snippet, &on_fixed) {
+    let floor_by_design = claim == Claim::Absent
+        && keeps_floor_by_design(dialect, snippet)
+        && !on_fixed.contains(&spec.code);
+    if floor_by_design || claim.agrees(spec.code, dialect, recorded, &on_snippet, &on_fixed) {
         return Ok((claim.outcome(), String::new()));
     }
     Ok((
         Outcome::PortMiss,
         format!("port as {dialect}: snippet {on_snippet:?} fixed {on_fixed:?}"),
     ))
+}
+
+fn keeps_floor_by_design(dialect: &str, script: &str) -> bool {
+    let Some(dialect) = Dialect::from_name(dialect) else {
+        return false;
+    };
+    shellcheck_rs::parser::parse_script("-", script)
+        .root
+        .is_some_and(|root| dialect.is_added() && Policy::of(dialect, &root) == Policy::Floor)
 }
 
 fn port_dialect<'a>(cell: &'a Cell, spec: &Spec) -> Option<&'a str> {
@@ -497,6 +510,59 @@ fn speaks(port_shell: &str, spec_shell: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_spec(snippet: &str, fixed: &str) -> Spec {
+        Spec {
+            code: 3040,
+            claim: String::new(),
+            shell: Some("sh".to_string()),
+            snippet: spec::Script {
+                script: snippet.to_string(),
+            },
+            fixed: spec::Script {
+                script: fixed.to_string(),
+            },
+            observe: vec![],
+        }
+    }
+
+    #[test]
+    fn an_option_changing_snippet_may_keep_its_floor_code_only_when_absent() {
+        let yash = cell("yash", Some("yash"));
+        let check = |claim, snippet: &str, fixed: &str| {
+            let spec = set_spec(snippet, fixed);
+            port_check_claim(
+                &yash,
+                &spec,
+                snippet,
+                fixed,
+                claim,
+                Baseline::Verify,
+                &Outcomes::default(),
+            )
+            .unwrap()
+            .0
+        };
+        let snippet = "set -o errtrace 2>/dev/null; echo ok\n";
+        let fixed = "set -o errexit; echo ok\n";
+        assert_eq!(check(Claim::Absent, snippet, fixed), Outcome::Absent);
+        assert_eq!(
+            check(Claim::Absent, snippet, "set -o errtrace; echo ok\n"),
+            Outcome::PortMiss
+        );
+        assert_eq!(
+            check(Claim::Reproduces, "set -e; echo ok\n", fixed),
+            Outcome::PortMiss
+        );
+    }
+
+    #[test]
+    fn added_dialect_scripts_that_change_options_keep_the_floor() {
+        assert!(keeps_floor_by_design("yash", "set -e; [ -o errexit ]\n"));
+        assert!(keeps_floor_by_design("yash", "set -o errtrace\n"));
+        assert!(!keeps_floor_by_design("yash", "[ -o errexit ]\n"));
+        assert!(!keeps_floor_by_design("sh", "set -e; [ -o errexit ]\n"));
+    }
 
     #[test]
     fn parallel_cells_keep_matrix_order() {
