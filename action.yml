@@ -23,13 +23,15 @@ runs:
   steps:
     - name: Install rshellcheck
       id: install
-      shell: bash
+      shell: bash -euo pipefail {0}
       env:
-        RSHELLCHECK_VERSION: ${{ inputs.version }}
         GH_TOKEN: ${{ inputs.token }}
         GH_HOST: github.com
+        binary: rshellcheck${{case(startsWith(runner.os,'windows'),'.exe','')}}
+        extension: ${{case(startsWith(runner.os,'windows'),'zip','tar.gz')}}
+        repo: kjanat/shellcheck-rs
+        version: ${{ inputs.version }}
       run: |
-        set -euo pipefail
         case "${RUNNER_ARCH}" in
           X64) arch=x86_64 ;;
           X86) arch=i686 ;;
@@ -37,22 +39,16 @@ runs:
           ARM) arch=armv7 ;;
           *) echo "::error::Unsupported runner architecture: ${RUNNER_ARCH}"; exit 1 ;;
         esac
-        binary=rshellcheck
-        extension=tar.gz
         case "${RUNNER_OS}/${arch}" in
           Linux/armv7) target=armv7-unknown-linux-musleabihf ;;
           Linux/*) target="${arch}-unknown-linux-musl" ;;
           macOS/x86_64|macOS/aarch64) target="${arch}-apple-darwin" ;;
           Windows/x86_64|Windows/i686|Windows/aarch64)
             target="${arch}-pc-windows-msvc"
-            binary=rshellcheck.exe
-            extension=zip
             ;;
           *) echo "::error::Unsupported runner platform: ${RUNNER_OS}/${RUNNER_ARCH}"; exit 1 ;;
         esac
 
-        repo=kjanat/shellcheck-rs
-        version="${RSHELLCHECK_VERSION}"
         if [[ "${version}" == latest ]]; then
           tag="$(gh release view --repo "${repo}" --json tagName --jq .tagName)"
           version="${tag#rshellcheck-v}"
