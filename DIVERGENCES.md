@@ -10,13 +10,12 @@ Reproduce the whole set (deterministic, seed 0):
 ```sh
 cargo conformance-fuzz --max-findings 40
 # fuzz: 2000 inputs checked, 0 distinct divergences
-# oracle crashed on 1 input(s) -- an upstream defect, not a divergence
 ```
 
-The crash line is not one of these: the oracle dies on it and has no answer to
-compare against (`PARITY-NOTES.md` items 4 and 5, and **Z3** below). The harness
-re-runs such a batch one script at a time, so the crash costs that one input and
-nothing else.
+When the oracle dies on an input, fuzz adds an `oracle crashed on N input(s)`
+line. Such an input has no answer to compare against (`PARITY-NOTES.md` items 4
+and 5, and **Z3** below). The harness re-runs that batch one script at a time,
+so the crash costs that one input and nothing else.
 
 A seed covers what it happens to generate, so a clean seed 0 says nothing
 about the next one. The wide runs this file has tracked are clean too:
@@ -50,10 +49,10 @@ The `gate` is clean, so none of these is exposed by the extracted upstream
 fuzzer. That is a weaker statement than "no upstream test covers them": the gate
 replays the *script* each property names through the whole pipeline, not the
 isolated helper (`verifyTree`, `verifyCodes`, …) the property originally called,
-and it only covers the properties whose script it can extract — 2026 of 2252
+and it only covers the properties whose script it can extract — 2102 of 2394
 definitions, which the gate now prints on every run rather than leaving implied.
-The other 226 test the Fixer, the Checker's IO, `ASTLib` helpers and the like,
-and have no shell snippet to replay.
+The other 292 test the Checker's IO, `ASTLib` helpers, the EditorConfig reader
+and the like, and have no shell snippet to replay.
 
 Where an entry's port-side half can be checked without the oracle, it gets a
 `#[should_panic]` test in `crates/shellcheck-rs/src/parser/tests.rs`, which
@@ -69,15 +68,15 @@ here" are separate claims, and most entries below are only the first. For a
 drop-in replacement, direction does not matter: a *nicer* message that differs
 breaks a golden file, an editor integration or a tuned `# shellcheck disable=`
 line exactly as hard as a worse one, so every entry is a defect regardless.
-Where one side is genuinely the better diagnostic, the entry says so — including
-the cases where that side is this port, listed in **Z** below. Fixing those
-means deliberately making the port's output less useful, because agreement is
-the contract.
+Where one side is genuinely the better diagnostic, the entry says so. **Z**
+below lists the cases where the port keeps its own output on purpose.
 
 ## Z. Where the port's own output is the better one
 
-Recorded so the trade is explicit, not so it is kept. Each is still a divergence
-and each is still due to be matched to upstream.
+The port keeps each of these. Upstream dies on the inputs in Z3, Z6 and Z7 and
+leaves no output to match. Z4 is a sanctioned deviation in
+`crates/conformance/src/deviations.rs`. Z5 follows the POSIX utility syntax
+guidelines.
 
 ### Z3. Two inputs that kill upstream outright
 
@@ -89,11 +88,10 @@ and the harness counts them separately as `oracle crashed on N input(s)`.
 
 ### Z4. `! # comment`
 
-The one *sanctioned* deviation: upstream declares the file unparseable, bash
-runs it, and `bash -n` agrees with the port. Unlike Z3 this one is kept, because
-the harness can justify it from a shell's verdict rather than from taste — and
-only from a shell's verdict: for `-s dash`, which rejects `! # c`, the sanction
-is refused and the divergence stands. See `PARITY-NOTES.md` item 2 and
+A *sanctioned* deviation: upstream declares the file unparseable, bash
+runs it, and `bash -n` agrees with the port. The harness accepts the difference
+only on a shell's verdict. For `-s dash`, which rejects `! # c`, the harness
+refuses the sanction and the divergence stands. See `PARITY-NOTES.md` item 2 and
 `crates/conformance/src/deviations.rs`.
 
 ### Z5. A filename that starts with `-`
@@ -138,39 +136,13 @@ Sections A through G are gone; their entries are all in **Fixed** below. The
 next batch takes the letter **H**, so a closed `A1` and an open one never
 share a name.
 
-## E. A check the port has not got
-
-### ~~E1. SC3051 on `source`~~ — fixed
-
-Closed by the source resolver: `source /dev/null` under `-s sh` now gives
-SC3046 **and** SC3051 on both sides, and the two entries this moved in
-`rust/snapshot.txt` are both that. Kept here only so the numbering does not
-shift; the original text follows for the record.
-
-<details><summary>Original entry</summary>
-
-### E1. SC3051 on `source`
-
-```sh
-printf '%s' 'source /dev/null' | shellcheck -s dash -f gcc -
-```
-
-|        |                                                                                   |
-| ------ | --------------------------------------------------------------------------------- |
-| oracle | SC3046 **and** SC3051, both "In dash, 'source' in place of '.' is not supported." |
-| port   | SC3046 only                                                                       |
-
-Upstream emits the same text twice, from two different checks: `checkBashisms`
-(SC3046) and the source-following path (SC3051), which needs `T_SourceCommand`
-— i.e. the source resolver (`-x`/`-P`/`-a`), tracked as task #24 and not yet
-ported. Not a parser bug.
-
-</details>
-
 ## Fixed since this file was started
 
 Kept so a reader can tell a closed entry from a missed one.
 
+- `source /dev/null` under `-s dash` (was **E1**) — upstream gives SC3046 and
+  SC3051, the second from the source-following path. The port gave SC3046 only
+  until the source resolver landed (`6ae02a9f`).
 - `t<<foo\n$((\nfoo` and `t<<foo\n$(\nfoo` — the port recovered inside a here
   document body where `many doubleQuotedPart` must fail. Fixed by making the
   three hand-rolled `many doubleQuotedPart` loops a real alternation (`84bd3ad`).

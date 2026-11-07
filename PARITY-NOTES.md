@@ -576,8 +576,8 @@ they belong here rather than in an upstream issue.
 ## SC2164: function-tail directory changes
 
 Rust deliberately warns when a failed `cd` inside a final compound statement can
-be followed by another command or loop iteration. The pinned upstream source
-(`c36c85a05ed3a1560e31bf7d89db040f84ef4556`) suppresses some of these warnings by
+be followed by another command or loop iteration. Upstream at the revision
+pinned in `UPSTREAM.md` suppresses some of these warnings by
 checking only whether the enclosing compound statement is last in a function.
 For example, `f() { if true; then cd /missing; echo continued; fi; }` must warn.
 A direct final `cd`, or a final `cd` in a status-preserving branch, stays exempt.

@@ -274,9 +274,10 @@ cargo validity [--record] [--cell <shell>[:<version>]] [--code <n>]
 The runner reuses one isolated container per cell. Scripts arrive on stdin
 and have a five-second limit. Nothing is mounted; the network and Linux
 capabilities are disabled; the filesystem is read-only except for a temporary
-directory. The runner uses the image digest recorded in `matrix.toml`, then a
-local build of the cell's tag if that digest is unavailable. A cell with
-neither is reported as `missing`. Explicit `--cell` runs can continue partially;
+directory. The runner uses the image digest recorded in `matrix.toml`, from
+the local image store or pulled from the registry. A cell with no recorded
+digest runs its tag only from a local build. A cell with neither image is
+reported as `missing`. Explicit `--cell` runs can continue partially;
 an unfiltered run fails without writing generated files.
 
 Parsing happens with the shell's `-n` first where the shell has one. For

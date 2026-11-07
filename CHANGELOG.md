@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Upstream: ShellCheck 0.11.0 at `c36c85a05ed3`.
+Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 
 ### Added
 
@@ -14,11 +14,23 @@ Upstream: ShellCheck 0.11.0 at `c36c85a05ed3`.
   SC2086 for zsh
 - JSON Schemas in `schemas/` for json1 output, the WASM request, `tools/oracle.json`
   and the validity files, generated from the Rust types by `cargo schemas`
+- SC2236/SC2237 report `test ! -n ...` and `! test -z ...`
+- SC2114 covers `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys` and
+  more of `/usr`, and globs such as `rm -rf /boot/*`
+- `--list-optional` prints `id:` and `wiki:` for each optional check
 
 ### Fixed
 
 - The SC2292 fix adds no second `]` when the test was closed with `]]`
   (upstream #3558)
+- SC2030/SC2031 check a function body apart from the subshells around its
+  definition
+- SC2218 accepts a Bats test that calls a function defined later outside tests
+- SC2016 accepts a single-quoted script passed through a wrapper to `sh -c`
+- Bats `run` sets `status`, `output` and `lines`, plus `stderr` and
+  `stderr_lines` under `--separate-stderr`, so SC2034 and SC2154 treat them as
+  assigned
+- SC2312 accepts `command || echo ...` as handling the return status
 
 ## v1.0.0 - 2026-10-15
 
