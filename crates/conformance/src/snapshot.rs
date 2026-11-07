@@ -102,12 +102,19 @@ fn record(script: &str) -> Result<Entry, String> {
     })
 }
 
-fn build(args: &Args) -> Result<BTreeMap<String, Entry>, String> {
-    let mut map = BTreeMap::new();
-    for (label, script) in corpus_for(args)? {
+/// Every corpus input under the key its snapshot line carries.
+pub fn inputs(args: &Args) -> Result<Vec<(String, String)>, String> {
+    Ok(corpus_for(args)?
+        .into_iter()
         // The script is part of the key: an input that changed is a different
         // input, reported as added/removed rather than as a behaviour change.
-        let key = format!("{label} {}", fnv(&script));
+        .map(|(label, script)| (format!("{label} {}", fnv(&script)), script))
+        .collect())
+}
+
+fn build(args: &Args) -> Result<BTreeMap<String, Entry>, String> {
+    let mut map = BTreeMap::new();
+    for (key, script) in inputs(args)? {
         map.insert(key, record(&script)?);
     }
     Ok(map)
@@ -154,6 +161,13 @@ fn parse(text: &str) -> BTreeMap<String, (String, String)> {
 /// Write or check the snapshot. `--write` re-freezes; otherwise any difference
 /// is an error, with the changed entries spelled out.
 pub fn run(args: &Args) -> Result<bool, String> {
+    if let Some(path) = &args.snapshot.findings {
+        return crate::delta::write(args, path).map(|()| true);
+    }
+    if let Some(path) = &args.snapshot.explain {
+        print!("{}", crate::delta::explain_since(args, path)?);
+        return Ok(true);
+    }
     let current = build(args)?;
     let file = path(args);
     if args.snapshot.write {
