@@ -31,6 +31,8 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   `stderr_lines` under `--separate-stderr`, so SC2034 and SC2154 treat them as
   assigned
 - SC2312 accepts `command || echo ...` as handling the return status
+- SC2333 and SC2252 look through their own operator only, so
+  `[ "$a" = 1 ] || x && [ "$a" = 2 ]` gives no SC2333, as upstream gives none
 - A script with tens of thousands of statements no longer overflows the stack
 - Nesting of any depth no longer overflows the stack: subshells, groups,
   `if`/loops, functions, `$(..)`, `${..}`, `$((..))`, `[[ .. ]]` and long

@@ -480,7 +480,7 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
         // Command-level "and": [ x = y ] && [ x = z ]
         T_AndIf { lhs, rhs } => {
             if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
-                (cmd_level_get_expr(lhs), cmd_level_get_expr(rhs))
+                (and_get_expr(lhs), and_get_expr(rhs))
                 && op1 == op2
                 && lhs1 == lhs2
                 && rhs1 != rhs2
@@ -1920,16 +1920,36 @@ fn words_can_be_equal(x: &Token, y: &Token) -> bool {
     pseudo_globs_can_overlap(&word_to_pseudo_glob(x), &word_to_pseudo_glob(y))
 }
 
-/// getExpr + orient for command-level and/or checks.
+/// `getExpr` of `checkOrNeq`: fetches x and y in `T_OrIf x (T_OrIf y z)`.
 fn or_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    cmd_level_get_expr(x)
+    cmd_level_get_expr(x, |t| match t {
+        InnerToken::T_OrIf { lhs, .. } => Some(lhs),
+        _ => None,
+    })
 }
 
-fn cmd_level_get_expr(mut x: &Token) -> Option<(Token, String, Token)> {
-    use InnerToken::{T_AndIf, T_Condition, T_OrIf, T_Pipeline, T_Redirecting, TC_Binary};
+/// `getExpr` of `checkAndEq`: fetches x and y in `T_AndIf x (T_AndIf y z)`.
+fn and_get_expr(x: &Token) -> Option<(Token, String, Token)> {
+    cmd_level_get_expr(x, |t| match t {
+        InnerToken::T_AndIf { lhs, .. } => Some(lhs),
+        _ => None,
+    })
+}
+
+/// The shared part of the `getExpr` of `checkOrNeq` and `checkAndEq`. The
+/// two differ only in the list operator they look through, and `list_lhs`
+/// returns the left side of that operator.
+fn cmd_level_get_expr(
+    mut x: &Token,
+    list_lhs: fn(&InnerToken) -> Option<&Token>,
+) -> Option<(Token, String, Token)> {
+    use InnerToken::{T_Condition, T_Pipeline, T_Redirecting, TC_Binary};
     loop {
+        if let Some(lhs) = list_lhs(&x.inner) {
+            x = lhs;
+            continue;
+        }
         x = match &*x.inner {
-            T_OrIf { lhs, .. } | T_AndIf { lhs, .. } => lhs,
             T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
             T_Redirecting { cmd, .. } => cmd,
             T_Condition { token, .. } => token,
@@ -3599,6 +3619,18 @@ mod tests {
         assert!(!emits(check_or_neq, "[ 0 -ne $FOO ] || [ 0 -ne $BAR ]"));
     }
 
+    #[test]
+    fn or_neq_does_not_look_through_and() {
+        assert!(!emits(
+            check_or_neq,
+            "[ \"$a\" != 1 ] && x || [ \"$a\" != 2 ]"
+        ));
+        assert!(emits(
+            check_or_neq,
+            "[ \"$a\" != 1 ] || x || [ \"$a\" != 2 ]"
+        ));
+    }
+
     // ---- SC2333/2334 checkAndEq ----
 
     #[test]
@@ -3675,6 +3707,15 @@ mod tests {
     #[test]
     fn prop_checkAndEq14() {
         assert!(!emits(check_and_eq, "[ $a = $b ] && [ $a = $c ]"));
+    }
+
+    #[test]
+    fn and_eq_does_not_look_through_or() {
+        assert!(!emits(
+            check_and_eq,
+            "[ \"$a\" = 1 ] || x && [ \"$a\" = 2 ]"
+        ));
+        assert!(emits(check_and_eq, "[ \"$a\" = 1 ] && x && [ \"$a\" = 2 ]"));
     }
 
     // ---- SC2204/2205 checkSubshellAsTest ----
