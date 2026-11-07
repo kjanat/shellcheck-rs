@@ -463,9 +463,6 @@ fn port_check_claim(
     if claim == Claim::Reproduces && spec.shell.as_deref().is_some_and(|s| !speaks(dialect, s)) {
         return Ok((claim.outcome(), String::new()));
     }
-    if keeps_floor_by_design(dialect, snippet) {
-        return Ok((claim.outcome(), String::new()));
-    }
     let codes = |script: &str| -> Result<Vec<i64>, String> {
         Ok(port_keys(script, "-", Some(dialect))?
             .iter()
@@ -474,7 +471,10 @@ fn port_check_claim(
     };
     let on_snippet = codes(snippet)?;
     let on_fixed = codes(fixed)?;
-    if claim.agrees(spec.code, dialect, recorded, &on_snippet, &on_fixed) {
+    let floor_by_design = claim == Claim::Absent
+        && keeps_floor_by_design(dialect, snippet)
+        && !on_fixed.contains(&spec.code);
+    if floor_by_design || claim.agrees(spec.code, dialect, recorded, &on_snippet, &on_fixed) {
         return Ok((claim.outcome(), String::new()));
     }
     Ok((
@@ -511,8 +511,53 @@ fn speaks(port_shell: &str, spec_shell: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn set_spec(snippet: &str, fixed: &str) -> Spec {
+        Spec {
+            code: 3040,
+            claim: String::new(),
+            shell: Some("sh".to_string()),
+            snippet: spec::Script {
+                script: snippet.to_string(),
+            },
+            fixed: spec::Script {
+                script: fixed.to_string(),
+            },
+            observe: vec![],
+        }
+    }
+
     #[test]
-    fn the_port_check_skips_added_dialect_scripts_that_change_options() {
+    fn an_option_changing_snippet_may_keep_its_floor_code_only_when_absent() {
+        let yash = cell("yash", Some("yash"));
+        let check = |claim, snippet: &str, fixed: &str| {
+            let spec = set_spec(snippet, fixed);
+            port_check_claim(
+                &yash,
+                &spec,
+                snippet,
+                fixed,
+                claim,
+                Baseline::Verify,
+                &Outcomes::default(),
+            )
+            .unwrap()
+            .0
+        };
+        let snippet = "set -o errtrace 2>/dev/null; echo ok\n";
+        let fixed = "set -o errexit; echo ok\n";
+        assert_eq!(check(Claim::Absent, snippet, fixed), Outcome::Absent);
+        assert_eq!(
+            check(Claim::Absent, snippet, "set -o errtrace; echo ok\n"),
+            Outcome::PortMiss
+        );
+        assert_eq!(
+            check(Claim::Reproduces, "set -e; echo ok\n", fixed),
+            Outcome::PortMiss
+        );
+    }
+
+    #[test]
+    fn added_dialect_scripts_that_change_options_keep_the_floor() {
         assert!(keeps_floor_by_design("yash", "set -e; [ -o errexit ]\n"));
         assert!(keeps_floor_by_design("yash", "set -o errtrace\n"));
         assert!(!keeps_floor_by_design("yash", "[ -o errexit ]\n"));
