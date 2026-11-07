@@ -174,7 +174,7 @@ fn remove_transparent_commands(t: &Token) -> Token {
         if is_time && let InnerToken::T_SimpleCommand { words, .. } = n.inner_mut() {
             words.remove(0);
         }
-        pending.extend(n.inner_mut().children_mut());
+        n.inner_mut().for_each_child_mut(|c| pending.push(c));
     }
     copy
 }

@@ -661,8 +661,16 @@ impl Builder {
         #[cfg(test)]
         self.ctx.token_stack.push(t.id);
         // Every recursion of the builder passes through this call, and
-        // `stk.run` moves it onto the heap stack.
-        let range = stk.run(|stk| self.build_prime(stk, t)).await;
+        // `stk.run` moves it onto the heap stack. The text of a word holds no
+        // tokens, and `build'` makes a structural node for it without one.
+        let range = match &*t.inner {
+            InnerToken::T_Literal(_)
+            | InnerToken::T_SingleQuoted(_)
+            | InnerToken::T_Glob(_)
+            | InnerToken::T_DollarSingleQuoted(_)
+            | InnerToken::T_ParamSubSpecialChar(_) => self.none(),
+            _ => stk.run(|stk| self.build_prime(stk, t)).await,
+        };
         self.assoc.push((t.id, first_node..self.next));
         #[cfg(test)]
         self.ctx.token_stack.pop();
@@ -2540,67 +2548,45 @@ pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
 
 /// `getBracedReference`.
 pub(crate) fn get_braced_reference(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    let drop_prefix = |cs: &[char]| -> Vec<char> {
-        if let Some(&c) = cs.first()
-            && (c == '!' || c == '#')
-        {
-            return cs[1..].to_vec();
-        }
-        cs.to_vec()
+    let no_prefix = s.strip_prefix(['!', '#']).unwrap_or(s);
+    let take_name = |cs: &str| -> Option<String> {
+        let end = cs.find(|c| !is_variable_char(c)).unwrap_or(cs.len());
+        (end > 0).then(|| cs[..end].to_string())
     };
-    let no_prefix = drop_prefix(&chars);
-
-    let take_name = |cs: &[char]| -> Option<String> {
-        let name: String = cs.iter().take_while(|c| is_variable_char(**c)).collect();
-        if name.is_empty() { None } else { Some(name) }
-    };
-    let get_special = |cs: &[char]| -> Option<String> {
-        match cs.first() {
-            Some(&c) if is_special_variable_char(c) => Some(c.to_string()),
-            _ => None,
-        }
+    let get_special = |cs: &str| -> Option<String> {
+        cs.chars()
+            .next()
+            .filter(|&c| is_special_variable_char(c))
+            .map(String::from)
     };
     // nameExpansion ('!':next:rest): e.g. ${!foo*}
-    let name_expansion = |cs: &[char]| -> Option<String> {
-        if cs.len() >= 2 && cs[0] == '!' {
-            let next = cs[1];
-            if !is_variable_char(next) {
-                return None;
-            }
-            let rest = &cs[2..];
-            let first = rest.iter().copied().find(|c| !is_variable_char(*c))?;
-            if "*?@".contains(first) {
-                return Some(String::new());
-            }
+    let name_expansion = || -> Option<String> {
+        let mut rest = s.strip_prefix('!')?.chars();
+        let next = rest.next()?;
+        if !is_variable_char(next) {
+            return None;
         }
-        None
+        let first = rest.find(|c| !is_variable_char(*c))?;
+        "*?@".contains(first).then(String::new)
     };
 
-    name_expansion(&chars)
-        .or_else(|| take_name(&no_prefix))
-        .or_else(|| get_special(&no_prefix))
-        .or_else(|| get_special(&chars))
+    name_expansion()
+        .or_else(|| take_name(no_prefix))
+        .or_else(|| get_special(no_prefix))
+        .or_else(|| get_special(s))
         .unwrap_or_else(|| s.to_string())
 }
 
 /// `getBracedModifier`.
 pub(crate) fn get_braced_modifier(s: &str) -> String {
     let var = get_braced_reference(s);
-    let chars: Vec<char> = s.chars().collect();
     // dropModifier: candidates in list-monad order.
-    let candidates: Vec<String> = match chars.first() {
-        Some(&c) if c == '#' || c == '!' => {
-            vec![chars[1..].iter().collect(), s.to_string()]
-        }
-        _ => vec![s.to_string()],
-    };
-    for a in candidates {
-        if let Some(rest) = a.strip_prefix(&var) {
-            return rest.to_string();
-        }
-    }
-    String::new()
+    s.strip_prefix(['#', '!'])
+        .into_iter()
+        .chain(std::iter::once(s))
+        .find_map(|a| a.strip_prefix(var.as_str()))
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn variable_name_regex() -> &'static Regex {

@@ -54,7 +54,7 @@ impl Parser {
         {
             let msg =
                 format!("Use semicolon or linefeed before '{s}' (or quote to make it literal).");
-            self.problem_at(pos.clone(), pos, Severity::WarningC, 1010, &msg);
+            self.problem_at(pos, pos, Severity::WarningC, 1010, &msg);
         }
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_NormalWord(parts)))
@@ -77,7 +77,7 @@ impl Parser {
         if self.peek() == Some('(') {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1036,
@@ -144,7 +144,7 @@ impl Parser {
         let start = self.pos();
         let c = self.bump().ok_or(())?;
         let end = self.pos();
-        let id = self.next_id_between(start.clone(), end.clone());
+        let id = self.next_id_between(start, end);
         self.problem_at(
             start,
             end,
@@ -185,7 +185,7 @@ impl Parser {
                     }
                     if self.peek() == Some('\'') {
                         self.problem_at(
-                            pos.clone(),
+                            pos,
                             pos,
                             Severity::InfoC,
                             1003,
@@ -198,7 +198,7 @@ impl Parser {
                     let pos = self.pos();
                     self.bump();
                     self.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::WarningC,
                         1112,
@@ -224,7 +224,7 @@ impl Parser {
         {
             if s.chars().next_back().is_some_and(char::is_alphabetic) && c.is_alphabetic() {
                 self.problem_at(
-                    end.clone(),
+                    end,
                     end,
                     Severity::WarningC,
                     1011,
@@ -280,10 +280,10 @@ impl Parser {
             Some(c) if UNICODE_DOUBLE_QUOTES.contains(c) => {
                 let pos = self.pos();
                 self.bump();
-                let id = self.next_id_between(pos.clone(), self.pos());
+                let id = self.next_id_between(pos, self.pos());
                 // `parseProblemAt pos`, so zero-width at the quote.
                 self.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::WarningC,
                     1111,
@@ -489,7 +489,7 @@ impl Parser {
         } else {
             Severity::InfoC
         };
-        self.note_at(pos.clone(), pos, severity, code, &message);
+        self.note_at(pos, pos, severity, code, &message);
         Ok(next.to_string())
     }
 
@@ -507,8 +507,8 @@ impl Parser {
         let at_end = matches!(self.peek_at(i), None | Some('\n'));
         if at_end {
             self.problem_at(
-                pos.clone(),
-                pos.clone(),
+                *pos,
+                *pos,
                 Severity::ErrorC,
                 1101,
                 "Delete trailing spaces after \\ to break line (or use quotes for literal space).",
@@ -526,7 +526,7 @@ impl Parser {
             }
             Some('[') => {
                 let m = self.mark();
-                if let Ok(class) = self.read_glob_class(stk, start.clone()).await {
+                if let Ok(class) = self.read_glob_class(stk, start).await {
                     return Ok(class);
                 }
                 self.reset(m);
@@ -647,7 +647,7 @@ impl Parser {
                 let id = self.next_id_between(start, self.pos());
                 return Ok(Token::new(id, InnerToken::T_Literal("{}".to_string())));
             }
-            self.literal_brace_problem('{', start.clone());
+            self.literal_brace_problem('{', start);
             self.bump();
             let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_Literal("{".to_string())));
@@ -656,7 +656,7 @@ impl Parser {
         if self.peek() != Some('}') {
             return Err(());
         }
-        self.literal_brace_problem('}', start.clone());
+        self.literal_brace_problem('}', start);
         self.bump();
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal("}".to_string())))
@@ -666,7 +666,7 @@ impl Parser {
     /// taken literally, which is usually a missing `;` or a forgotten quote.
     fn literal_brace_problem(&mut self, c: char, pos: Position) {
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::WarningC,
             1083,
@@ -865,7 +865,8 @@ impl Parser {
         let start = self.pos();
         let op = self.one_of("?*@!+")?;
         self.char('(')?;
-        let list = self.read_extglob_parts(stk).await?;
+        // Extglobs nest, and `stk.run` puts each level on the heap stack.
+        let list = stk.run(|stk| self.read_extglob_parts(stk)).await?;
         self.char(')')?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
@@ -1033,7 +1034,7 @@ impl Parser {
         let pos = self.pos();
         self.char('´')?;
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1077,
@@ -1114,7 +1115,7 @@ impl Parser {
                 async |p, stk| p.read_dollar_expansion(stk).await,
                 |p, pos| {
                     p.note_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1102,
@@ -1288,7 +1289,8 @@ impl Parser {
         // here (`readDollarBracedLiteral` stops only at `bracedQuotable`,
         // `}"$'` + backtick), and nesting comes only from a `${` part.
         let word_start = self.pos();
-        let parts = self.read_braced_parts(stk).await?;
+        // `${..}` nests, and `stk.run` puts each level on the heap stack.
+        let parts = stk.run(|stk| self.read_braced_parts(stk)).await?;
         let wid = self.next_id_between(word_start, self.pos());
         let inner = Token::new(wid, InnerToken::T_NormalWord(parts));
         self.char('}')?;
@@ -1330,7 +1332,7 @@ impl Parser {
                 {
                     // `parseNoteAt pos` in Haskell is zero-width at the `$`.
                     self.note_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1037,
@@ -1364,7 +1366,7 @@ impl Parser {
                 if self.peek() == Some('[') {
                     // `parseNoteAt pos` in Haskell is zero-width at the `$`.
                     self.note_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1087,
@@ -1414,7 +1416,7 @@ impl Parser {
         let start = self.pos();
         self.char('$')?;
         let end = self.pos();
-        let id = self.next_id_between(start.clone(), end.clone());
+        let id = self.next_id_between(start, end);
         if quoted && self.quote_for_escape() {
             self.problem_at(
                 start,
@@ -1597,7 +1599,7 @@ impl Parser {
     }
 
     pub(super) fn make_literal_word(&mut self, s: &str, start: Position) -> Token {
-        let lit_id = self.next_id_between(start.clone(), self.pos());
+        let lit_id = self.next_id_between(start, self.pos());
         let lit = Token::new(lit_id, InnerToken::T_Literal(s.to_string()));
         let wid = self.next_id_between(start, self.pos());
         Token::new(wid, InnerToken::T_NormalWord(vec![lit]))

@@ -22,7 +22,9 @@ use crate::ast::{
     InnerToken, Piped, Quoted, Token,
 };
 use crate::ast_lib;
-use crate::interface::{NoExternalSources, Position, Severity, Shell, System, columns};
+use crate::interface::{
+    NoExternalSources, Position as FilePosition, Severity, Shell, System, columns,
+};
 use reblessive::Stk;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -208,13 +210,23 @@ const COMMON_COMMANDS: &[&str] = &[
     "zcat",
 ];
 
+/// A place in the file a parser reads: a [`FilePosition`] without the file
+/// name. The parser names the file only where it reports a place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct Position {
+    /// `posLine`: the 1-based source line.
+    line: i64,
+    /// `posColumn`: the 1-based source column, where tabs are 8.
+    column: i64,
+}
+
 /// A pending parse note/problem (SC1xxx), before id/position resolution.
 #[derive(Debug, Clone)]
 pub struct ParseNote {
     /// Where the note starts.
-    pub start: Position,
+    pub start: FilePosition,
     /// Where the note ends.
-    pub end: Position,
+    pub end: FilePosition,
     /// How serious the note is.
     pub severity: Severity,
     /// The `SC` code number.
@@ -230,7 +242,7 @@ pub struct ParseOutput {
     /// `prComments`: the parse notes and problems.
     pub notes: Vec<ParseNote>,
     /// `prTokenPositions`: each token's start and end.
-    pub positions: BTreeMap<Id, (Position, Position)>,
+    pub positions: BTreeMap<Id, (FilePosition, FilePosition)>,
     /// The sourced files that were read, by resolved name, each once, in the
     /// order they were first read.
     pub sources: Vec<String>,
@@ -299,7 +311,10 @@ pub struct Parser {
     col: i64,
     filename: String,
     next_id: i32,
+    /// The span of each token read from this parser's file.
     positions: BTreeMap<Id, (Position, Position)>,
+    /// The span of each token read from a sourced file, with that file's name.
+    sourced_positions: BTreeMap<Id, (FilePosition, FilePosition)>,
     notes: Vec<ParseNote>,
     /// Notes from complete, separated top-level statements survive later failures.
     completed_notes: usize,
@@ -514,6 +529,7 @@ impl Parser {
             filename: filename.to_string(),
             next_id: 0,
             positions: BTreeMap::new(),
+            sourced_positions: BTreeMap::new(),
             notes: Vec::new(),
             completed_notes: 0,
             problems: Vec::new(),
@@ -577,11 +593,27 @@ impl Parser {
     }
 
     #[inline]
-    fn pos(&self) -> Position {
+    const fn pos(&self) -> Position {
         Position {
-            file: self.filename.clone(),
             line: self.line,
             column: self.col,
+        }
+    }
+
+    /// The line and column of `p`, a place in this parser's file.
+    const fn local_pos(p: &FilePosition) -> Position {
+        Position {
+            line: p.line,
+            column: p.column,
+        }
+    }
+
+    /// `p` in this parser's file.
+    fn file_pos(&self, p: Position) -> FilePosition {
+        FilePosition {
+            file: self.filename.clone(),
+            line: p.line,
+            column: p.column,
         }
     }
 
@@ -665,9 +697,7 @@ impl Parser {
         self.push_ctx(name);
         let serial = self.contexts.back().map_or(0, |c| c.serial);
         self.open_starts.push(start_idx);
-        // Every named production passes through this call, and `stk.run`
-        // moves the parser's recursion onto the heap stack.
-        let r = stk.run(|stk| body(self, stk)).await;
+        let r = body(self, stk).await;
         self.open_starts.pop();
         // `parsecBracket` runs no `after val` once the body has committed.
         if self.committed && !committed {
@@ -1000,8 +1030,8 @@ impl Parser {
         let mut inner = stack.iter().rev().filter(|c| !c.name.is_empty());
         if let Some(c) = inner.next() {
             out.push(ParseNote {
-                start: c.pos.clone(),
-                end: c.pos.clone(),
+                start: self.file_pos(c.pos),
+                end: self.file_pos(c.pos),
                 severity: Severity::ErrorC,
                 code: 1073,
                 message: format!("Couldn't parse this {}. Fix to allow more checks.", c.name),
@@ -1009,8 +1039,8 @@ impl Parser {
         }
         if let Some(c) = inner.next() {
             out.push(ParseNote {
-                start: c.pos.clone(),
-                end: c.pos.clone(),
+                start: self.file_pos(c.pos),
+                end: self.file_pos(c.pos),
                 severity: Severity::InfoC,
                 code: 1009,
                 message: format!("The mentioned syntax error was in this {}.", c.name),
@@ -1022,11 +1052,10 @@ impl Parser {
         } else {
             format!("{}.", f.message)
         };
-        let pos = Position {
-            file: self.filename.clone(),
+        let pos = self.file_pos(Position {
             line: f.pos.0,
             column: f.pos.1,
-        };
+        });
         out.push(ParseNote {
             start: pos.clone(),
             end: pos,
@@ -1119,6 +1148,9 @@ impl Parser {
         }
         for (k, v) in sub.positions {
             self.positions.entry(k).or_insert(v);
+        }
+        for (k, v) in sub.sourced_positions {
+            self.sourced_positions.entry(k).or_insert(v);
         }
         self.notes.extend(sub.notes);
         for name in sub.sources {
@@ -1334,7 +1366,7 @@ impl Parser {
     }
 
     fn span_for(&self, id: Id) -> (Position, Position) {
-        self.positions.get(&id).cloned().unwrap_or_default()
+        self.positions.get(&id).copied().unwrap_or_default()
     }
 
     fn note_at(&mut self, start: Position, end: Position, sev: Severity, code: i64, msg: &str) {
@@ -1343,8 +1375,8 @@ impl Parser {
             return;
         }
         self.notes.push(ParseNote {
-            start,
-            end,
+            start: self.file_pos(start),
+            end: self.file_pos(end),
             severity: sev,
             code,
             message: msg.to_string(),
@@ -1364,8 +1396,8 @@ impl Parser {
             return;
         }
         self.problems.push(ParseNote {
-            start,
-            end,
+            start: self.file_pos(start),
+            end: self.file_pos(end),
             severity: sev,
             code,
             message: msg.to_string(),
@@ -1403,15 +1435,15 @@ impl Parser {
         name: &str,
     ) {
         self.problem_at(
-            start.clone(),
-            start.clone(),
+            *start,
+            *start,
             Severity::WarningC,
             1078,
             &format!("Did you forget to close this {name}?"),
         );
         self.problem_at(
-            end.clone(),
-            end.clone(),
+            *end,
+            *end,
             Severity::InfoC,
             1079,
             "This is actually an end quote, but due to next char it looks suspect.",
@@ -1427,7 +1459,7 @@ impl Parser {
                 let p = self.pos();
                 self.bump();
                 self.note_at(
-                    p.clone(),
+                    p,
                     p,
                     Severity::ErrorC,
                     1018,
@@ -1472,7 +1504,7 @@ impl Parser {
                     Ok(c) if c.ends_with('\\') => {
                         let pos = self.pos();
                         self.problem_at(
-                            pos.clone(),
+                            pos,
                             pos,
                             Severity::ErrorC,
                             1143,
@@ -1549,7 +1581,7 @@ impl Parser {
         if self.at_annotation_prefix() {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1126,
@@ -1590,7 +1622,7 @@ impl Parser {
         let pos = self.pos();
         self.bump();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1017,
@@ -1603,7 +1635,11 @@ impl Parser {
         // optional carriage return, then '\n', then read pending heredocs
         let _ = self.carriage_return();
         self.char('\n')?;
-        stk.run(|stk| self.read_pending_heredocs(stk)).await?;
+        // Most line feeds have no here-document waiting. Only one that has
+        // starts a future for the bodies.
+        if !self.pending_heredocs.is_empty() && !self.committed {
+            stk.run(|stk| self.read_pending_heredocs(stk)).await?;
+        }
         Ok('\n')
     }
 
@@ -1677,7 +1713,7 @@ impl Parser {
         }
         let pos = self.pos();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1133,
@@ -1863,10 +1899,18 @@ async fn parse_to_output_on(p: &mut Parser, stk: &mut Stk) -> ParseOutput {
     // Parse succeeded (we always return a tree in the slice); emit notes+problems.
     let mut notes = p.problems.clone();
     notes.extend(p.notes.clone());
+    let mut positions: BTreeMap<Id, (FilePosition, FilePosition)> =
+        std::mem::take(&mut p.positions)
+            .into_iter()
+            .map(|(id, (start, end))| (id, (p.file_pos(start), p.file_pos(end))))
+            .collect();
+    for (id, span) in std::mem::take(&mut p.sourced_positions) {
+        positions.entry(id).or_insert(span);
+    }
     ParseOutput {
         root,
         notes,
-        positions: std::mem::take(&mut p.positions),
+        positions,
         sources: std::mem::take(&mut p.sources),
     }
 }
@@ -1987,6 +2031,6 @@ fn reattach_in_place(t: &mut Token, bodies: &BTreeMap<Id, Vec<Token>>) {
             }
             continue;
         }
-        pending.extend(t.inner_mut().children_mut());
+        t.inner_mut().for_each_child_mut(|c| pending.push(c));
     }
 }

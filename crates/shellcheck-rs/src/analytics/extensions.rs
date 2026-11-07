@@ -153,7 +153,8 @@ pub(super) fn check_cleanup_traps(_params: &Parameters, root: &Token, out: &mut 
     }
     impl<'a> Scope<'a> {
         fn new(root: &'a Token) -> Self {
-            let mut pending = root.children();
+            let mut pending = Vec::new();
+            root.inner.for_each_child(|c| pending.push(c));
             pending.reverse();
             Self {
                 traps: Vec::new(),
@@ -181,9 +182,9 @@ pub(super) fn check_cleanup_traps(_params: &Parameters, root: &Token, out: &mut 
             if let Some((action, signals)) = trap(token) {
                 scope.traps.push((token, action, signals));
             }
-            let mut children = token.children();
-            children.reverse();
-            scope.pending.extend(children);
+            let first = scope.pending.len();
+            token.inner.for_each_child(|c| scope.pending.push(c));
+            scope.pending[first..].reverse();
             continue;
         }
         let Some(Scope { traps, .. }) = scopes.pop() else {

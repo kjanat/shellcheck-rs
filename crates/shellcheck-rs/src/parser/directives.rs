@@ -85,7 +85,7 @@ impl Parser {
         if !self.eof() && self.peek() != Some('\n') && self.peek() != Some('\r') {
             let pos = self.pos();
             self.note_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1125,
@@ -354,7 +354,7 @@ impl Parser {
                 let v = self.read_directive_word()?;
                 if crate::dialect::Dialect::from_name(&v).is_none() {
                     self.note_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1103,
@@ -371,7 +371,7 @@ impl Parser {
                     "false" => vec![Annotation::ExtendedAnalysis(false)],
                     _ => {
                         self.note_at(
-                            pos.clone(),
+                            pos,
                             pos,
                             Severity::ErrorC,
                             1146,
@@ -391,7 +391,7 @@ impl Parser {
                     // the unsandboxed caller and allows it.
                     "true" => {
                         self.note_at(
-                            pos.clone(),
+                            pos,
                             pos,
                             Severity::ErrorC,
                             1144,
@@ -402,7 +402,7 @@ impl Parser {
                     "false" => vec![Annotation::ExternalSources(false)],
                     _ => {
                         self.note_at(
-                            pos.clone(),
+                            pos,
                             pos,
                             Severity::ErrorC,
                             1145,
@@ -414,7 +414,7 @@ impl Parser {
             }
             _ => {
                 self.note_at(
-                    key_pos.clone(),
+                    key_pos,
                     key_pos,
                     Severity::WarningC,
                     1107,

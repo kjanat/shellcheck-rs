@@ -5,7 +5,7 @@ use crate::analyzer_lib::{
     DataSource, DataType, Out, Parameters, Scope, StackData, err, get_command_name, get_path, info,
     style, warn, warn_with_fix, word_parts,
 };
-use crate::ast::{AssignmentMode, Id, InnerToken, Token, Visit};
+use crate::ast::{AssignmentMode, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::is_command_substitution;
@@ -283,48 +283,41 @@ pub(super) fn check_dollar_brackets(_params: &Parameters, t: &Token, out: &mut O
 pub(super) fn check_prefix_assignment_reference(_params: &Parameters, root: &Token, out: &mut Out) {
     // `path` holds the open tokens from the root down. `commands` holds the
     // positions in `path` of the commands with words.
-    let mut path: Vec<&Token> = Vec::new();
-    let mut commands: Vec<usize> = Vec::new();
-    let mut pending = vec![Visit::Enter(root)];
-    let mut children = Vec::new();
-    while let Some(step) = pending.pop() {
-        let t = match step {
-            Visit::Enter(t) => t,
-            Visit::Leave(_) => {
-                path.pop();
-                if commands.last() == Some(&path.len()) {
-                    commands.pop();
+    let open = std::cell::RefCell::new((Vec::<&Token>::new(), Vec::<usize>::new()));
+    root.visit_stack(
+        &mut |t| {
+            let (path, commands) = &mut *open.borrow_mut();
+            // Stop at the nearest command with words, even if it has no prefix
+            // assignments.
+            if let InnerToken::T_DollarBraced { op, .. } = &*t.inner
+                && let Some(&at) = commands.last()
+                && let InnerToken::T_SimpleCommand { assignments, .. } = &*path[at].inner
+                && !assignments.is_empty()
+            {
+                let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
+                // Upstream asks whether an assignment lies on the path from the
+                // expansion to the root. Only the child of the command that the
+                // walk came down through can lie on that path.
+                let under = path.get(at + 1).map_or_else(|| t.id(), |c| c.id());
+                for v in assignments {
+                    par_check_var(v, &name, under, t.id(), out);
                 }
-                continue;
             }
-        };
-        // Stop at the nearest command with words, even if it has no prefix
-        // assignments.
-        if let InnerToken::T_DollarBraced { op, .. } = &*t.inner
-            && let Some(&at) = commands.last()
-            && let InnerToken::T_SimpleCommand { assignments, .. } = &*path[at].inner
-            && !assignments.is_empty()
-        {
-            let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
-            // Upstream asks whether an assignment lies on the path from the
-            // expansion to the root. Only the child of the command that the
-            // walk came down through can lie on that path.
-            let under = path.get(at + 1).map_or_else(|| t.id(), |c| c.id());
-            for v in assignments {
-                par_check_var(v, &name, under, t.id(), out);
+            if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+                && !words.is_empty()
+            {
+                commands.push(path.len());
             }
-        }
-        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
-            && !words.is_empty()
-        {
-            commands.push(path.len());
-        }
-        path.push(t);
-        pending.push(Visit::Leave(t));
-        t.inner.for_each_child(|c| children.push(c));
-        pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
-        children.clear();
-    }
+            path.push(t);
+        },
+        &mut |_| {
+            let (path, commands) = &mut *open.borrow_mut();
+            path.pop();
+            if commands.last() == Some(&path.len()) {
+                commands.pop();
+            }
+        },
+    );
 }
 
 pub(super) fn check_overriding_path(_params: &Parameters, t: &Token, out: &mut Out) {

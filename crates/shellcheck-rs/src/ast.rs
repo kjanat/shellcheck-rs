@@ -171,6 +171,8 @@ impl Eq for Token {}
 
 thread_local! {
     static VACANT: std::rc::Rc<InnerToken> = std::rc::Rc::new(InnerToken::T_Semi);
+    /// How many token drops are running on this thread's call stack.
+    static DROP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Moves the payload out of `slot` when no other token shares it, and puts
@@ -184,8 +186,25 @@ fn take_unique(slot: &mut std::rc::Rc<InnerToken>) -> Option<InnerToken> {
     std::rc::Rc::try_unwrap(std::mem::replace(slot, vacant)).ok()
 }
 
+/// How many levels the tree walks and the tree drop descend on the call stack
+/// before they move the rest of a subtree onto a work list. Scripts seldom
+/// nest this deep, and above it a walk allocates nothing.
+pub(crate) const RECURSION_BUDGET: usize = 64;
+
 impl Drop for Token {
     fn drop(&mut self) {
+        let Some(payload) = std::rc::Rc::get_mut(&mut self.inner) else {
+            return;
+        };
+        // Within the budget the payload drops on the call stack, and each
+        // token inside it counts one level deeper.
+        let depth = DROP_DEPTH.get();
+        if depth < RECURSION_BUDGET {
+            DROP_DEPTH.set(depth + 1);
+            drop(std::mem::replace(payload, InnerToken::T_Semi));
+            DROP_DEPTH.set(depth);
+            return;
+        }
         let Some(mut inner) = take_unique(&mut self.inner) else {
             return;
         };
@@ -982,6 +1001,15 @@ impl InnerToken {
         out
     }
 
+    /// Visit immediate children mutably in traversal order without allocating
+    /// a list.
+    pub fn for_each_child_mut<'a>(&'a mut self, mut visit: impl FnMut(&'a mut Token)) {
+        let _ = self.try_for_each_child_mut(|child| {
+            visit(child);
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    }
+
     fn try_for_each_child_mut<'a, B>(
         &'a mut self,
         mut visit: impl FnMut(&'a mut Token) -> std::ops::ControlFlow<B>,
@@ -999,14 +1027,49 @@ impl Token {
 
     /// Pre-order visit (parent before children), matching `doAnalysis f`.
     pub fn visit_preorder<F: FnMut(&Self)>(&self, f: &mut F) {
-        let _ = self.try_visit_preorder(&mut |t| {
-            f(t);
-            std::ops::ControlFlow::<()>::Continue(())
-        });
+        self.visit_preorder_within(f, RECURSION_BUDGET);
+    }
+
+    /// [`Self::visit_preorder`] on the call stack for `budget` levels, then on
+    /// a work list for the subtrees below.
+    fn visit_preorder_within<F: FnMut(&Self)>(&self, f: &mut F, budget: usize) {
+        let Some(budget) = budget.checked_sub(1) else {
+            let _ = self.try_visit_preorder_listed(&mut |t| {
+                f(t);
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            return;
+        };
+        f(self);
+        self.inner
+            .for_each_child(|c| c.visit_preorder_within(f, budget));
     }
 
     /// Pre-order traversal that stops immediately when the visitor breaks.
     pub fn try_visit_preorder<B>(
+        &self,
+        visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        self.try_visit_preorder_within(visit, RECURSION_BUDGET)
+    }
+
+    /// [`Self::try_visit_preorder`] on the call stack for `budget` levels,
+    /// then on a work list for the subtrees below.
+    fn try_visit_preorder_within<B>(
+        &self,
+        visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
+        budget: usize,
+    ) -> std::ops::ControlFlow<B> {
+        let Some(budget) = budget.checked_sub(1) else {
+            return self.try_visit_preorder_listed(visit);
+        };
+        visit(self)?;
+        self.inner
+            .try_for_each_child(|child| child.try_visit_preorder_within(visit, budget))
+    }
+
+    /// [`Self::try_visit_preorder`] with every pending token on a work list.
+    fn try_visit_preorder_listed<B>(
         &self,
         visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
     ) -> std::ops::ControlFlow<B> {
@@ -1023,7 +1086,38 @@ impl Token {
 
     /// Stack analysis: `start` pre-order, recurse, `end` post-order —
     /// matching `doStackAnalysis`.
-    pub fn visit_stack<S: FnMut(&Self), E: FnMut(&Self)>(&self, start: &mut S, end: &mut E) {
+    pub fn visit_stack<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+    ) {
+        self.visit_stack_within(start, end, RECURSION_BUDGET);
+    }
+
+    /// [`Self::visit_stack`] on the call stack for `budget` levels, then on a
+    /// work list for the subtrees below.
+    fn visit_stack_within<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+        budget: usize,
+    ) {
+        let Some(budget) = budget.checked_sub(1) else {
+            self.visit_stack_listed(start, end);
+            return;
+        };
+        start(self);
+        self.inner
+            .for_each_child(|c| c.visit_stack_within(start, end, budget));
+        end(self);
+    }
+
+    /// [`Self::visit_stack`] with every pending step on a work list.
+    fn visit_stack_listed<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+    ) {
         let mut pending = vec![Visit::Enter(self)];
         let mut children = Vec::new();
         while let Some(step) = pending.pop() {

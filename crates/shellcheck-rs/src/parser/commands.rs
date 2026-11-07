@@ -19,7 +19,7 @@ pub(super) enum CmdSuffix {
 impl Parser {
     pub(super) fn empty_literal(&mut self) -> Token {
         let p = self.pos();
-        let id = self.next_id_between(p.clone(), p);
+        let id = self.next_id_between(p, p);
         Token::new(id, InnerToken::T_Literal(String::new()))
     }
 
@@ -76,7 +76,7 @@ impl Parser {
             if self.char('!').is_ok() {
                 if start_spaces {
                     self.problem_at(
-                        start_pos.clone(),
+                        start_pos,
                         start_pos,
                         Severity::ErrorC,
                         1114,
@@ -85,7 +85,7 @@ impl Parser {
                 }
                 if middle_spaces {
                     self.problem_at(
-                        middle_pos.clone(),
+                        middle_pos,
                         middle_pos,
                         Severity::ErrorC,
                         1115,
@@ -100,7 +100,7 @@ impl Parser {
         let pos = self.pos();
         if self.char('!').is_ok() && self.ensure_path_ahead() {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1104,
@@ -119,7 +119,7 @@ impl Parser {
             let pos = self.pos();
             if self.ensure_path_ahead() {
                 self.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1113,
@@ -143,7 +143,7 @@ impl Parser {
         let pos = self.pos();
         if self.any_shebang() {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1128,
@@ -246,7 +246,7 @@ impl Parser {
                 // What follows a `&` usually means it was not meant to background anything.
                 if ["amp;", "gt;", "lt;"].iter().any(|s| self.string_peek(s)) {
                     self.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1109,
@@ -254,7 +254,7 @@ impl Parser {
                     );
                 } else if matches!(self.peek(), Some(c) if c == '_' || c.is_ascii_alphabetic()) {
                     self.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::WarningC,
                         1132,
@@ -267,7 +267,7 @@ impl Parser {
                 let semi = self.pos();
                 if self.char(';').is_ok() && self.peek() != Some(';') {
                     self.problem_at(
-                        semi.clone(),
+                        semi,
                         semi,
                         Severity::ErrorC,
                         1045,
@@ -382,6 +382,13 @@ impl Parser {
     }
 
     async fn read_term_inner(&mut self, stk: &mut Stk, top_level: bool) -> Option<Vec<Token>> {
+        // Every nested command list starts here, and `stk.run` puts each one
+        // on the heap stack.
+        stk.run(|stk| self.read_term_inner_body(stk, top_level))
+            .await
+    }
+
+    async fn read_term_inner_body(&mut self, stk: &mut Stk, top_level: bool) -> Option<Vec<Token>> {
         self.allspacing(stk).await;
         let first = self.read_and_or(stk).await.ok()?;
         self.read_term_more_inner(stk, first, top_level).await.ok()
@@ -447,8 +454,8 @@ impl Parser {
         // of half a compound command.
         if !annotations.is_empty() && self.keyword_len(stk).await.is_some() {
             self.problem_at(
-                ann_start.clone(),
-                ann_start.clone(),
+                ann_start,
+                ann_start,
                 Severity::ErrorC,
                 1123,
                 "ShellCheck directives are only valid in front of complete compound commands, like 'if', not e.g. individual 'elif' branches.",
@@ -647,7 +654,7 @@ impl Parser {
             }
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1035,
@@ -675,7 +682,7 @@ impl Parser {
             // `upstream-false-parse-error`.
             self.empty_negation = super::EmptyNegation::Taken;
             let here = self.pos();
-            let id = self.next_id_between(here.clone(), here);
+            let id = self.next_id_between(here, here);
             let nothing = Token::new(
                 id,
                 InnerToken::T_Pipeline {
@@ -833,11 +840,15 @@ impl Parser {
             self.reset(m);
             return Err(());
         }
+        // Every command tries `coproc` first. Only one that has the keyword
+        // starts the large future for the rest.
+        stk.run(|stk| self.read_coproc_rest(stk, start)).await
+    }
+
+    async fn read_coproc_rest(&mut self, stk: &mut Stk, start: Position) -> PResult<Token> {
         // choice [ try readCompoundCoProc, readSimpleCoProc ]
         if let Ok(t) = self
-            .try_parse(stk, async |p, stk| {
-                p.read_compound_coproc(stk, start.clone()).await
-            })
+            .try_parse(stk, async |p, stk| p.read_compound_coproc(stk, start).await)
             .await
         {
             return Ok(t);
@@ -862,7 +873,7 @@ impl Parser {
             .try_parse(stk, async |p, stk| p.read_coproc_body(stk, true).await)
             .await
         {
-            let id = self.next_id_between(start.clone(), self.pos());
+            let id = self.next_id_between(start, self.pos());
             return Ok(Token::new(id, InnerToken::T_CoProc { name: None, body }));
         }
         self.try_parse(stk, async |p, stk| {
@@ -978,10 +989,13 @@ impl Parser {
                 effective.as_deref(),
                 Some("declare" | "export" | "local" | "readonly" | "typeset")
             );
+            // `let`, `time`, `source` and `trap` are rare and parse much
+            // more than a word list. `stk.run` gives each its own future, so
+            // the future of every other command stays small.
             if effective.as_deref() == Some("let") {
-                suffix = self.read_let_suffix(stk).await?;
+                suffix = stk.run(|stk| self.read_let_suffix(stk)).await?;
             } else if effective.as_deref() == Some("time") {
-                suffix = self.read_time_suffix(stk).await?;
+                suffix = stk.run(|stk| self.read_time_suffix(stk)).await?;
             } else {
                 let kind = if is_modifier {
                     CmdSuffix::Modifier
@@ -1005,7 +1019,7 @@ impl Parser {
             (Some(first), Some(last)) => (self.span_for(first.id()).0, self.span_for(last.id()).1),
             _ => (self.pos(), self.pos()),
         };
-        let id1 = self.next_id_between(sstart.clone(), send.clone());
+        let id1 = self.next_id_between(sstart, send);
         let id2 = self.next_id_between(sstart, send);
 
         // partition prefix into assignments / redirects / rest
@@ -1045,8 +1059,8 @@ impl Parser {
         );
         // `case () of _ | isCommand ["source", "."] cmd -> readSource result ..`
         match Self::command_literal_name_of(&result).as_deref() {
-            Some("source" | ".") => return Ok(self.read_source(stk, result).await),
-            Some("trap") => self.syntax_check_trap(stk, &result).await,
+            Some("source" | ".") => return Ok(stk.run(|stk| self.read_source(stk, result)).await),
+            Some("trap") => stk.run(|stk| self.syntax_check_trap(stk, &result)).await,
             _ => {}
         }
         Ok(result)
@@ -1127,7 +1141,7 @@ impl Parser {
                 // Both ids copy the span of the original command, and both are
                 // allocated before the file is read (`getNewIdFor cmdId`).
                 let (start, end) = self.span_for(cmd_id);
-                let id1 = self.next_id_between(start.clone(), end.clone());
+                let id1 = self.next_id_between(start, end);
                 let id2 = self.next_id_between(start, end);
                 if let Some(src) = self.sub_read(stk, &resolved, &script).await {
                     let included = Token::new(id2, InnerToken::T_Include(src));
@@ -1240,8 +1254,12 @@ impl Parser {
         };
         self.next_id = sub.next_id;
         self.next_serial = sub.next_serial;
-        for (k, v) in sub.positions {
-            self.positions.entry(k).or_insert(v);
+        for (k, (start, end)) in std::mem::take(&mut sub.positions) {
+            let span = (sub.file_pos(start), sub.file_pos(end));
+            self.sourced_positions.entry(k).or_insert(span);
+        }
+        for (k, v) in sub.sourced_positions {
+            self.sourced_positions.entry(k).or_insert(v);
         }
         self.notes.extend(sub.notes);
         root
@@ -1293,7 +1311,7 @@ impl Parser {
         if sources >= 100 {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1092,
@@ -1526,7 +1544,7 @@ impl Parser {
                 if kind == CmdSuffix::Eval && self.peek() == Some('(') {
                     let pos = self.pos();
                     self.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::WarningC,
                         1098,
@@ -1567,9 +1585,9 @@ impl Parser {
         let mut pending: Vec<&mut Token> = vec![t];
         while let Some(t) = pending.pop() {
             self.reparse_node(stk, t, assoc).await;
-            let mut children = t.inner_mut().children_mut();
-            children.reverse();
-            pending.extend(children);
+            let first = pending.len();
+            t.inner_mut().for_each_child_mut(|c| pending.push(c));
+            pending[first..].reverse();
         }
     }
 
@@ -1599,7 +1617,7 @@ impl Parser {
                     .enumerate()
                     .filter_map(|(i, slot)| match &*slot.inner {
                         InnerToken::T_UnparsedIndex { pos, str } => {
-                            Some((i, pos.clone(), str.clone()))
+                            Some((i, Self::local_pos(pos), str.clone()))
                         }
                         _ => None,
                     })
@@ -1645,7 +1663,9 @@ impl Parser {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, slot)| match &*slot.inner {
-                    InnerToken::T_UnparsedIndex { pos, str } => Some((i, pos.clone(), str.clone())),
+                    InnerToken::T_UnparsedIndex { pos, str } => {
+                        Some((i, Self::local_pos(pos), str.clone()))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -1804,11 +1824,11 @@ impl Parser {
                     && (chars[0] == '\'' || chars[0] == '"')
                     && chars[0] == chars[chars.len() - 1]
                 {
-                    let mut p = start.clone();
+                    let mut p = start;
                     p.column += 1;
                     (chars[1..chars.len() - 1].iter().collect::<String>(), p)
                 } else {
-                    (raw.clone(), start.clone())
+                    (raw.clone(), start)
                 };
                 if let Some(tok) = self
                     .sub_parse_let_expression(stk, &adj_pos, &unquoted)
@@ -1905,7 +1925,10 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
-            InnerToken::T_UnparsedIndex { pos, str: raw },
+            InnerToken::T_UnparsedIndex {
+                pos: self.file_pos(pos),
+                str: raw,
+            },
         ))
     }
 
@@ -2023,7 +2046,7 @@ impl Parser {
         if self.peek() == Some('=') {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1097,
@@ -2129,9 +2152,9 @@ impl Parser {
 
     pub(super) fn empty_literal_word(&mut self) -> Token {
         let p = self.pos();
-        let lit_id = self.next_id_between(p.clone(), p.clone());
+        let lit_id = self.next_id_between(p, p);
         let lit = Token::new(lit_id, InnerToken::T_Literal(String::new()));
-        let wid = self.next_id_between(p.clone(), p);
+        let wid = self.next_id_between(p, p);
         Token::new(wid, InnerToken::T_NormalWord(vec![lit]))
     }
 
@@ -2148,7 +2171,7 @@ impl Parser {
         self.char('(')?;
         if self.peek() == Some('(') {
             self.problem_at(
-                opening.clone(),
+                opening,
                 opening,
                 Severity::ErrorC,
                 1116,
@@ -2179,7 +2202,7 @@ impl Parser {
                         // `readArray <|> readNormalWord`, and past the `(`
                         // neither that `<|>` nor the `<|> nothing` after it can
                         // recover.
-                        self.read_array(stk).await?
+                        stk.run(|stk| self.read_array(stk)).await?
                     } else {
                         let before = self.idx;
                         match self.read_normal_word(stk).await {
@@ -2205,7 +2228,7 @@ impl Parser {
             // `readRegular = readArray <|> readNormalWord`: an element may
             // itself be an array, as in `a=(1 [2]=(3 4))`.
             if self.peek() == Some('(') {
-                elems.push(self.read_array(stk).await?);
+                elems.push(stk.run(|stk| self.read_array(stk)).await?);
                 continue;
             }
             // `reluctantlyTill`'s trailing `<|> return []` ends the list on a
@@ -2292,7 +2315,7 @@ impl Parser {
             && self.peek_at(1) == Some('&')
             && let Some((op_end, num)) = self.try_parse_dup_target()
         {
-            let opid = self.next_id_between(op_start.clone(), op_end);
+            let opid = self.next_id_between(op_start, op_end);
             let op_tok = Token::new(
                 opid,
                 if opc == '<' {
@@ -2313,10 +2336,10 @@ impl Parser {
         let om = self.mark();
         let r = self
             .called(stk, "redirection", async move |p, stk| {
-                let op_tok = p.read_io_file_op(os.clone()).ok_or(())?;
+                let op_tok = p.read_io_file_op(os).ok_or(())?;
                 p.spacing();
                 let file = p.read_normal_word(stk).await?;
-                let iofile_id = p.next_id_between(os.clone(), p.pos());
+                let iofile_id = p.next_id_between(os, p.pos());
                 let iofile = Token::new(iofile_id, InnerToken::T_IoFile { op: op_tok, file });
                 let id = p.next_id_between(st, p.pos());
                 Ok(Token::new(
@@ -2514,8 +2537,8 @@ impl Parser {
         // substitution with a space missing, not a here document.
         if self.peek() == Some('(') {
             self.problem_at(
-                start.clone(),
-                start.clone(),
+                start,
+                start,
                 Severity::ErrorC,
                 1038,
                 &format!("Shells are space sensitive. Use '< <(cmd)', not '<<{sp}(cmd)'."),
@@ -2688,7 +2711,6 @@ impl Parser {
         }
 
         let col = |offset: usize| Position {
-            file: line_pos.file.clone(),
             line: line_pos.line,
             column: line_pos.column + columns(offset),
         };
@@ -2701,8 +2723,8 @@ impl Parser {
                 return;
             }
             self.problems.push(ParseNote {
-                start: pos.clone(),
-                end: pos,
+                start: self.file_pos(pos),
+                end: self.file_pos(pos),
                 severity: Severity::ErrorC,
                 code,
                 message: msg.to_string(),
@@ -2777,7 +2799,7 @@ impl Parser {
         // `parseProblemAtId`, so a `disable=` in scope at the `<<` -- the
         // scope this body is read in -- silences these like any problem.
         let mut at_token = |code: i64, msg: String| {
-            self.problem_at(start.clone(), end.clone(), Severity::ErrorC, code, &msg);
+            self.problem_at(start, end, Severity::ErrorC, code, &msg);
         };
         // The containment tests use the raw text; only the messages are escaped.
         let token = &hd.delim;
@@ -2922,7 +2944,7 @@ impl Parser {
                 "Parsing stopped here. Mismatched keywords or invalid parentheses?",
             )
         };
-        self.problem_at(p.clone(), p, Severity::ErrorC, code, message);
+        self.problem_at(p, p, Severity::ErrorC, code, message);
     }
 
     /// `readKeyword`: the tokens that close a compound command.
@@ -2981,8 +3003,8 @@ impl Parser {
             Some(true) => false,
             Some(false) => {
                 self.problem_at(
-                    start.clone(),
-                    start.clone(),
+                    *start,
+                    *start,
                     Severity::ErrorC,
                     1071,
                     "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!",
@@ -2991,8 +3013,8 @@ impl Parser {
             }
             None => {
                 self.problem_at(
-                    start.clone(),
-                    start.clone(),
+                    *start,
+                    *start,
                     Severity::ErrorC,
                     1008,
                     "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify.",
@@ -3017,8 +3039,8 @@ impl Parser {
         self.push_disables(&file_annotations);
         if has_bom {
             self.problem_at(
-                start.clone(),
-                start.clone(),
+                start,
+                start,
                 Severity::ErrorC,
                 1082,
                 "This file has a UTF-8 BOM. Remove it with: LC_CTYPE=C sed '1s/^...//' < yourscript .",
@@ -3085,7 +3107,7 @@ impl Parser {
         if !self.eof() && !self.has_committed_failure() {
             self.verify_eof(stk).await;
         }
-        let script_id = self.next_id_between(start.clone(), self.pos());
+        let script_id = self.next_id_between(start, self.pos());
         let script = Token::new(script_id, InnerToken::T_Script { shebang, commands });
         let ann_id = self.next_id_between(start, self.pos());
         let root = Token::new(
@@ -3218,8 +3240,7 @@ mod tests {
 
     async fn read_here_string(p: &mut Parser, stk: &mut Stk) -> PResult<Token> {
         let start = p.pos();
-        p.read_here_string(stk, start.clone(), start, String::new())
-            .await
+        p.read_here_string(stk, start, start, String::new()).await
     }
 
     #[test]

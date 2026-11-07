@@ -47,8 +47,8 @@ pub struct Parameters {
     /// runs as if extended analysis were off.
     pub dataflow_error: Option<InternalError>,
     /// Maps an id to the length of its path to the root, the token included.
-    /// The first fix that needs a precedence fills it.
-    fix_depths: std::cell::OnceCell<IdMap<Id, i32>>,
+    /// [`fix_depth`] fills it.
+    fix_depths: std::cell::RefCell<IdMap<Id, i32>>,
     /// Maps an id to the first answer `isQuoteFreeContext` gives on the path
     /// from that token to the root. [`is_quote_free`] fills it.
     pub(crate) quote_free_contexts: std::cell::RefCell<IdMap<Id, bool>>,
@@ -207,21 +207,18 @@ impl Parameters {
         self.id_map.get(pid)
     }
 
-    /// Returns the first answer `decide` gives on the path from `start` to the
-    /// root, or false when it gives none. `memo` stores the answer for every
-    /// token the climb passes. Tokens under one long chain of undecided
-    /// ancestors then climb only to the first token with a stored answer.
     /// Returns the first token down the left side of `t` that is not a list of
     /// the same operator as `t`. For `a && b && c` that is `a`. For a token
-    /// that is no `&&` or `||` list, it is `t` itself. Every list the walk
-    /// passes stores the answer, and the other lists of the chain reuse it.
+    /// that is no `&&` or `||` list, it is `t` itself. A walk past more than
+    /// [`MEMO_AFTER_STEPS`] lists stores the answer for each of them, and the
+    /// other lists of the chain reuse it.
     pub(crate) fn list_head(&self, t: &Token) -> Token {
         let lhs_of = |x: &Token| match &*x.inner {
             InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => Some(lhs.clone()),
             _ => None,
         };
         let kind = std::mem::discriminant(&*t.inner);
-        let mut climbed = Vec::new();
+        let mut steps = 0;
         let mut cur = t.clone();
         let head = loop {
             if let Some(known) = self.list_heads.borrow().get(&cur.id()) {
@@ -230,26 +227,38 @@ impl Parameters {
             let Some(lhs) = lhs_of(&cur) else {
                 break cur;
             };
-            climbed.push(cur.id());
+            steps += 1;
             if std::mem::discriminant(&*lhs.inner) != kind {
                 break lhs;
             }
             cur = lhs;
         };
-        let mut memo = self.list_heads.borrow_mut();
-        for id in climbed {
-            memo.insert(id, head.clone());
+        if steps > MEMO_AFTER_STEPS {
+            let mut memo = self.list_heads.borrow_mut();
+            let mut cur = Some(t.clone());
+            for _ in 0..steps {
+                let Some(list) = cur else {
+                    break;
+                };
+                memo.insert(list.id(), head.clone());
+                cur = lhs_of(&list);
+            }
         }
         head
     }
 
+    /// Returns the first answer `decide` gives on the path from `start` to the
+    /// root, or false when it gives none. A climb past more than
+    /// [`MEMO_AFTER_STEPS`] tokens stores the answer in `memo` for each of
+    /// them. Tokens under one long chain of undecided ancestors then climb
+    /// only to the first token with a stored answer.
     pub(crate) fn first_decision(
         &self,
         memo: &std::cell::RefCell<IdMap<Id, bool>>,
         start: Option<&Token>,
         decide: impl Fn(&Token) -> Option<bool>,
     ) -> bool {
-        let mut climbed = Vec::new();
+        let mut steps = 0;
         let mut node = start;
         let answer = loop {
             let Some(a) = node else {
@@ -258,19 +267,31 @@ impl Parameters {
             if let Some(&known) = memo.borrow().get(&a.id()) {
                 break known;
             }
-            climbed.push(a.id());
+            steps += 1;
             if let Some(decided) = decide(a) {
                 break decided;
             }
             node = self.parent(a);
         };
-        let mut memo = memo.borrow_mut();
-        for id in climbed {
-            memo.insert(id, answer);
+        if steps > MEMO_AFTER_STEPS {
+            let mut memo = memo.borrow_mut();
+            let mut node = start;
+            for _ in 0..steps {
+                let Some(a) = node else {
+                    break;
+                };
+                memo.insert(a.id(), answer);
+                node = self.parent(a);
+            }
         }
         answer
     }
 }
+
+/// How many tokens a climb passes before [`Parameters::first_decision`] and
+/// [`Parameters::list_head`] store its answer. Shorter climbs cost less than
+/// the stores, and the bound keeps every climb over a long chain linear.
+const MEMO_AFTER_STEPS: usize = 16;
 
 /// A check pushes `TokenComment`s into this sink via the emit helpers.
 pub type Out = Vec<TokenComment>;
@@ -362,33 +383,28 @@ use crate::interface::{InsertionPoint, Position, Replacement};
 /// Precedence = length of the parent path (getPath) from the token to the root,
 /// counting the token itself. Higher precedence is applied first.
 ///
-/// The first call measures the depth of every token. Each climb stops at
-/// the first ancestor with a known depth.
+/// Each call climbs to the first ancestor with a known depth and records the
+/// depth of every token it passed.
 fn fix_depth(params: &Parameters, id: Id) -> i32 {
-    let depths = params.fix_depths.get_or_init(|| {
-        let mut depths: IdMap<Id, i32> = IdMap::default();
-        let mut chain = Vec::new();
-        for &start in params.id_map.keys() {
-            let mut cur = start;
-            let mut depth = loop {
-                if let Some(&known) = depths.get(&cur) {
-                    break known;
-                }
-                chain.push(cur);
-                match params.parent_map.get(&cur) {
-                    Some(&up) => cur = up,
-                    None => break 0,
-                }
-            };
-            while let Some(id) = chain.pop() {
-                depth += 1;
-                depths.insert(id, depth);
-            }
-        }
-        depths
-    });
+    let mut depths = params.fix_depths.borrow_mut();
+    let mut chain = Vec::new();
+    let mut cur = id;
     // A token without a parent entry has a path of length one, like the root.
-    depths.get(&id).copied().unwrap_or(1)
+    let mut depth = loop {
+        if let Some(&known) = depths.get(&cur) {
+            break known;
+        }
+        chain.push(cur);
+        match params.parent_map.get(&cur) {
+            Some(&up) => cur = up,
+            None => break 0,
+        }
+    };
+    while let Some(id) = chain.pop() {
+        depth += 1;
+        depths.insert(id, depth);
+    }
+    depth
 }
 
 /// `replaceStart id params n r`: replace `n` columns at the token's start.
@@ -873,7 +889,7 @@ pub fn make_parameters_as(
         variable_flow,
         cfg_analysis,
         dataflow_error,
-        fix_depths: std::cell::OnceCell::new(),
+        fix_depths: std::cell::RefCell::default(),
         quote_free_contexts: std::cell::RefCell::default(),
         strict_quote_free_contexts: std::cell::RefCell::default(),
         list_heads: std::cell::RefCell::default(),
@@ -1118,17 +1134,38 @@ pub(crate) fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Opt
 }
 
 pub(crate) fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
+    let (name, token) = command_name_and_token(direct, t);
+    (name.map(std::borrow::Cow::into_owned), token)
+}
+
+/// [`get_command_name_and_token`], with the name borrowed from the tree when
+/// the command word is a single literal.
+fn command_name_and_token(direct: bool, t: &Token) -> (Option<std::borrow::Cow<'_, str>>, &Token) {
     if let Some(cmd) = get_command(t)
         && let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
         && let Some((w, rest)) = words.split_first()
-        && let Some(s) = ast_lib::get_literal_string(w)
+        && let Some(s) = literal_text(w)
     {
         if !direct && let Some(actual) = get_effective_command_token(&s, rest) {
-            return (ast_lib::get_literal_string(actual), actual);
+            return (literal_text(actual), actual);
         }
         return (Some(s), w);
     }
     (None, t)
+}
+
+/// `getLiteralString w`, borrowed from the tree when `w` is a word of one
+/// plain literal.
+fn literal_text(w: &Token) -> Option<std::borrow::Cow<'_, str>> {
+    if let InnerToken::T_NormalWord(parts) = &*w.inner
+        && let [part] = parts.as_slice()
+        && let InnerToken::T_Literal(s)
+        | InnerToken::T_SingleQuoted(s)
+        | InnerToken::T_ParamSubSpecialChar(s) = &*part.inner
+    {
+        return Some(std::borrow::Cow::Borrowed(s));
+    }
+    ast_lib::get_literal_string(w).map(std::borrow::Cow::Owned)
 }
 
 /// `getCommandName`.
@@ -1138,22 +1175,29 @@ pub(crate) fn get_command_name(t: &Token) -> Option<String> {
 
 /// `getCommandTokenOrThis`.
 pub(crate) fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(false, t).1
+    command_name_and_token(false, t).1
 }
 
 /// `getCommandBasename`.
 pub(crate) fn get_command_basename(t: &Token) -> Option<String> {
-    get_command_name(t).map(|s| s.rsplit('/').next().unwrap_or(&s).to_string())
+    command_name_and_token(false, t)
+        .0
+        .map(|s| s.rsplit('/').next().unwrap_or(&s).to_string())
 }
 
 /// `isCommandMatch`.
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
-    get_command_name(t).is_some_and(|s| matcher(&s))
+    command_name_and_token(false, t)
+        .0
+        .is_some_and(|s| matcher(&s))
 }
 
 /// `isCommand token str` (also matches `/usr/bin/str`).
 pub(crate) fn is_command(t: &Token, str: &str) -> bool {
-    is_command_match(t, |cmd| cmd == str || cmd.ends_with(&format!("/{str}")))
+    is_command_match(t, |cmd| {
+        cmd.strip_suffix(str)
+            .is_some_and(|dir| dir.is_empty() || dir.ends_with('/'))
+    })
 }
 
 /// `getAllFlags` restricted to the flag strings (`map snd $ getAllFlags`).

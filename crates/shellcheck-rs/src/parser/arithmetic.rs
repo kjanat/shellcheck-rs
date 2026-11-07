@@ -114,7 +114,7 @@ impl Parser {
         self.reset(look);
         if let Some((s, alt)) = found {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1106,
@@ -218,7 +218,8 @@ impl Parser {
     pub(super) async fn read_arith_trinary(&mut self, stk: &mut Stk) -> PResult<Token> {
         // Each precedence level below waits on the next one. The levels
         // between here and an operand are too many for one future. This call
-        // splits them, and so does the step from shifts to additions.
+        // splits them, and so do the steps from shifts to additions and from
+        // products to powers.
         let x = stk.run(|stk| self.read_arith_logical_or(stk)).await?;
         let m = self.mark();
         let start = self.pos();
@@ -326,7 +327,7 @@ impl Parser {
     pub(super) async fn read_arith_multiplication(&mut self, stk: &mut Stk) -> PResult<Token> {
         self.arith_split_by(
             stk,
-            async |p, stk| p.read_arith_exponential(stk).await,
+            async |p, stk| stk.run(|stk| p.read_arith_exponential(stk)).await,
             &["*", "/", "%"],
         )
         .await
@@ -508,7 +509,9 @@ impl Parser {
             Err(()) if self.idx != m.idx => return Err(()),
             Err(()) => self.reset(m),
         }
-        self.read_arith_expansion(stk).await
+        // Word parsing below this point is deep. `stk.run` starts it on a
+        // fresh future.
+        stk.run(|stk| self.read_arith_expansion(stk)).await
     }
 
     /// `readGroup`: `( sequence )` -> `TA_Parenthesis`.
@@ -564,7 +567,10 @@ impl Parser {
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(
             id,
-            InnerToken::T_UnparsedIndex { pos, str: raw },
+            InnerToken::T_UnparsedIndex {
+                pos: self.file_pos(pos),
+                str: raw,
+            },
         ))
     }
 

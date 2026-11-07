@@ -13,7 +13,7 @@ impl Parser {
             async |p, stk| p.read_subshell(stk).await,
             |p, pos| {
                 p.note_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1105,
@@ -208,7 +208,7 @@ impl Parser {
         }
         let pos = self.pos();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1081,
@@ -311,7 +311,7 @@ impl Parser {
         let mut pos = self.pos();
         pos.column += columns(offset);
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             code,
@@ -413,7 +413,7 @@ impl Parser {
             if !matches!(self.peek(), None | Some('(')) {
                 let pos = self.pos();
                 self.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1054,
@@ -424,7 +424,7 @@ impl Parser {
         if self.peek() == Some('}') {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1055,
@@ -439,7 +439,7 @@ impl Parser {
         if self.char('}').is_err() {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1056,
@@ -461,7 +461,7 @@ impl Parser {
         let spaced = !self.spacing().is_empty();
         let end = self.pos();
         if self.char(c).is_err() {
-            self.problem_at(start.clone(), start, Severity::ErrorC, 1137, msg);
+            self.problem_at(start, start, Severity::ErrorC, 1137, msg);
             return self.fail_with("");
         }
         if spaced {
@@ -513,8 +513,8 @@ impl Parser {
         self.keyword_attempt_failure(stk, "done").await;
         if self.keyword_ahead(stk, "done").await {
             self.problem_at(
-                kw.0.clone(),
-                kw.1.clone(),
+                kw.0,
+                kw.1,
                 Severity::ErrorC,
                 1057,
                 "Did you forget the 'do' for this loop?",
@@ -526,7 +526,7 @@ impl Parser {
         }
         if self.consume_keyword(stk, "do").await.is_err() {
             let here = self.pos();
-            self.problem_at(here.clone(), here, Severity::ErrorC, 1058, "Expected 'do'.");
+            self.problem_at(here, here, Severity::ErrorC, 1058, "Expected 'do'.");
             return self.fail_with("Expected 'do'");
         }
         // `parseProblemAtId (getId doKw)`: the span is the `do` token itself.
@@ -539,8 +539,8 @@ impl Parser {
         self.keyword_attempt_failure(stk, "done").await;
         if self.keyword_ahead(stk, "done").await {
             self.problem_at(
-                do_pos.clone(),
-                do_end.clone(),
+                do_pos,
+                do_end,
                 Severity::ErrorC,
                 1060,
                 "Can't have empty do clauses (use 'true' as a no-op).",
@@ -562,7 +562,7 @@ impl Parser {
             );
             let here = self.pos();
             self.problem_at(
-                here.clone(),
+                here,
                 here,
                 Severity::ErrorC,
                 1062,
@@ -577,7 +577,7 @@ impl Parser {
         if self.string_peek("<(") {
             let here = self.pos();
             self.problem_at(
-                here.clone(),
+                here,
                 here,
                 Severity::ErrorC,
                 1142,
@@ -640,7 +640,7 @@ impl Parser {
         }
         if self.consume_keyword(stk, "fi").await.is_err() {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1046,
@@ -648,7 +648,7 @@ impl Parser {
             );
             let here = self.pos();
             self.problem_at(
-                here.clone(),
+                here,
                 here,
                 Severity::ErrorC,
                 1047,
@@ -674,7 +674,7 @@ impl Parser {
         let condition = self.read_condition_list(stk).await?;
         if self.at_if_branch_keyword(stk).await {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1049,
@@ -688,13 +688,7 @@ impl Parser {
             }
             if p.consume_keyword(stk, "then").await.is_err() {
                 let here = p.pos();
-                p.problem_at(
-                    here.clone(),
-                    here,
-                    Severity::ErrorC,
-                    1050,
-                    "Expected 'then'.",
-                );
+                p.problem_at(here, here, Severity::ErrorC, 1050, "Expected 'then'.");
                 return p.fail_with("Expected 'then'");
             }
             p.accept_but_warn_semi(1051, "then");
@@ -714,7 +708,7 @@ impl Parser {
             let condition = p.read_condition_list(stk).await?;
             if p.at_if_branch_keyword(stk).await {
                 p.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1049,
@@ -744,7 +738,7 @@ impl Parser {
             p.reset(m);
             if nested_if {
                 p.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1075,
@@ -782,7 +776,7 @@ impl Parser {
         if self.at_if_branch_keyword(stk).await {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1048,
@@ -804,13 +798,19 @@ impl Parser {
         if self.peek() == Some(';') && self.peek_at(1) != Some(';') {
             let pos = self.pos();
             self.bump();
-            self.problem_at(pos.clone(), pos, Severity::ErrorC, code, message);
+            self.problem_at(pos, pos, Severity::ErrorC, code, message);
         } else {
             self.reset(m);
         }
     }
 
     pub(super) async fn read_condition_list(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
+        // A condition is a nested command list, and `stk.run` puts it on the
+        // heap stack like the lists `read_term` reads.
+        stk.run(|stk| self.read_condition_list_body(stk)).await
+    }
+
+    async fn read_condition_list_body(&mut self, stk: &mut Stk) -> PResult<Vec<Token>> {
         self.allspacing(stk).await;
         let first = self.read_and_or(stk).await?;
         self.read_term_more(stk, first).await
@@ -875,7 +875,7 @@ impl Parser {
     async fn read_for_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword(stk, "for").await?;
-        let kw = (start.clone(), self.pos());
+        let kw = (start, self.pos());
         // ShellCheck reuses the `for` keyword id for the whole T_ForIn/T_ForArithmetic
         // node, so SC2034 (and others) point at `for`, not the entire loop.
         let for_end = self.pos();
@@ -930,7 +930,7 @@ impl Parser {
         let dollar = self.pos();
         if self.char('$').is_ok() {
             self.problem_at(
-                dollar.clone(),
+                dollar,
                 dollar,
                 Severity::ErrorC,
                 1086,
@@ -998,7 +998,7 @@ impl Parser {
         if self.keyword_ahead(stk, "do").await {
             let pos = self.pos();
             self.note_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1063,
@@ -1068,7 +1068,7 @@ impl Parser {
     async fn read_select_clause_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         self.consume_keyword(stk, "select").await?;
-        let kw = (start.clone(), self.pos());
+        let kw = (start, self.pos());
         // ShellCheck reuses the `select` keyword id for the whole T_SelectIn node.
         let sel_end = self.pos();
         self.spacing();
@@ -1170,7 +1170,7 @@ impl Parser {
             if p.at_annotation_prefix() {
                 let pos = p.pos();
                 p.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1124,
@@ -1196,7 +1196,7 @@ impl Parser {
                 }
                 let pos = p.pos();
                 p.problem_at(
-                    pos.clone(),
+                    pos,
                     pos,
                     Severity::ErrorC,
                     1085,
@@ -1222,7 +1222,7 @@ impl Parser {
                 let pos = p.pos();
                 if p.peek() == Some(')') {
                     p.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1074,
@@ -1346,7 +1346,7 @@ impl Parser {
         } else {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1064,
@@ -1376,7 +1376,7 @@ impl Parser {
         }
         let pos = self.pos();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1065,
@@ -1425,7 +1425,7 @@ impl Parser {
                 if !has_parens && !had_spaces && matches!(p.peek(), Some('{' | '(')) {
                     let pos = p.pos();
                     p.problem_at(
-                        pos.clone(),
+                        pos,
                         pos,
                         Severity::ErrorC,
                         1095,
@@ -1457,7 +1457,7 @@ impl Parser {
         } else {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1064,

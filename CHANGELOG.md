@@ -41,6 +41,12 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 - Deep nesting and long chains cost time and memory in proportion to the
   script: 10,000 nested functions took 107 s and take 0.4 s, and 10,000 nested
   `$(..)` took 6.7 s and 673 MB and take 0.8 s and 300 MB
+- Checking allocates 30% less: the parser tracks line and column and adds the
+  file name only to reported positions, command names and `${..}` references
+  are read in place, and tree walks, `oversimplify` and dropping the tree run
+  on the call stack up to 64 levels deep without a work list. A 4,300-line
+  script checks 5% faster than before the nesting fixes, which cost nothing on
+  shorter scripts
 
 ## v1.0.0 - 2026-10-15
 

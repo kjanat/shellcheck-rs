@@ -7,7 +7,7 @@ use crate::analyzer_lib::{
     get_command_name, get_command_token_or_this, info, path_iter, replace_start,
     should_ignore_code, token_variable_flow, warn,
 };
-use crate::ast::{Annotation, Id, InnerToken, Token, Visit};
+use crate::ast::{Annotation, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::basename;
 use crate::ast_lib::e4m;
@@ -214,28 +214,20 @@ pub(super) fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
 /// to search its own path.
 fn visit_marking_bats_tests<'a>(root: &'a Token, mut f: impl FnMut(&'a Token, bool)) {
     let is_test = |t: &Token| matches!(&*t.inner, InnerToken::T_BatsTest { .. });
-    let mut open = 0usize;
-    let mut pending = vec![Visit::Enter(root)];
-    let mut children = Vec::new();
-    while let Some(step) = pending.pop() {
-        match step {
-            Visit::Enter(t) => {
-                if is_test(t) {
-                    open += 1;
-                }
-                f(t, open > 0);
-                pending.push(Visit::Leave(t));
-                t.inner.for_each_child(|c| children.push(c));
-                pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
-                children.clear();
+    let open = std::cell::Cell::new(0usize);
+    root.visit_stack(
+        &mut |t| {
+            if is_test(t) {
+                open.set(open.get() + 1);
             }
-            Visit::Leave(t) => {
-                if is_test(t) {
-                    open -= 1;
-                }
+            f(t, open.get() > 0);
+        },
+        &mut |t| {
+            if is_test(t) {
+                open.set(open.get() - 1);
             }
-        }
-    }
+        },
+    );
 }
 
 pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out: &mut Out) {
@@ -556,87 +548,83 @@ fn positional_use(params: &Parameters, root: &Token) -> Vec<(String, Token, bool
         function: Option<usize>,
         assigns: bool,
     }
+    /// The open frames, and one entry per function found so far.
+    type Open = (Vec<Frame>, Vec<(String, Token, bool, bool)>);
     let is_scope = |t: &Token| {
         matches!(
             &*t.inner,
             InnerToken::T_Function { .. } | InnerToken::T_Script { .. }
         )
     };
-    let mut found: Vec<(String, Token, bool, bool)> = Vec::new();
+    let open: std::cell::RefCell<Open> = std::cell::RefCell::default();
     // The functions and scripts nearest to a positional reference.
     let mut referenced: HashSet<Id> = HashSet::new();
-    let mut frames: Vec<Frame> = Vec::new();
-    let mut pending = vec![Visit::Enter(root)];
-    let mut children = Vec::new();
-    while let Some(step) = pending.pop() {
-        let t = match step {
-            Visit::Enter(t) => t,
-            Visit::Leave(t) => {
-                if is_scope(t)
-                    && let Some(frame) = frames.pop()
-                {
-                    if let Some(i) = frame.function {
-                        found[i].3 = frame.assigns;
+    root.visit_stack(
+        &mut |t| {
+            let (frames, found) = &mut *open.borrow_mut();
+            let flow =
+                token_variable_flow(&params.parent_map, &params.id_map, params.has_lastpipe(), t);
+            for entry in &flow {
+                match entry {
+                    StackData::Reference(_, tok, str)
+                        if is_positional(str) && !has_default_value(tok) =>
+                    {
+                        // `isDirectChildOf`. The search walks up from the reference to
+                        // the first function or script. Above `t`, the innermost open
+                        // frame is that function or script.
+                        let mut x: &Token = tok;
+                        let nearest = loop {
+                            if is_scope(x) {
+                                break Some(x.id());
+                            }
+                            if x.id() == t.id() {
+                                break frames.last().map(|f| f.id);
+                            }
+                            match params.parent(x) {
+                                Some(up) => x = up,
+                                None => break None,
+                            }
+                        };
+                        referenced.extend(nearest);
                     }
-                    if let Some(outer) = frames.last_mut() {
-                        outer.assigns |= frame.assigns;
+                    StackData::Assignment(_, _, str, _) if is_positional(str) => {
+                        if let Some(frame) = frames.last_mut() {
+                            frame.assigns = true;
+                        }
                     }
+                    _ => {}
                 }
-                continue;
             }
-        };
-        let flow =
-            token_variable_flow(&params.parent_map, &params.id_map, params.has_lastpipe(), t);
-        for entry in &flow {
-            match entry {
-                StackData::Reference(_, tok, str)
-                    if is_positional(str) && !has_default_value(tok) =>
-                {
-                    // `isDirectChildOf`. The search walks up from the reference to
-                    // the first function or script. Above `t`, the innermost open
-                    // frame is that function or script.
-                    let mut x: &Token = tok;
-                    let nearest = loop {
-                        if is_scope(x) {
-                            break Some(x.id());
-                        }
-                        if x.id() == t.id() {
-                            break frames.last().map(|f| f.id);
-                        }
-                        match params.parent(x) {
-                            Some(up) => x = up,
-                            None => break None,
-                        }
-                    };
-                    referenced.extend(nearest);
-                }
-                StackData::Assignment(_, _, str, _) if is_positional(str) => {
-                    if let Some(frame) = frames.last_mut() {
-                        frame.assigns = true;
+            if is_scope(t) {
+                let function = match &*t.inner {
+                    InnerToken::T_Function { name, .. } => {
+                        found.push((name.clone(), t.clone(), false, false));
+                        Some(found.len() - 1)
                     }
-                }
-                _ => {}
+                    _ => None,
+                };
+                frames.push(Frame {
+                    id: t.id(),
+                    function,
+                    assigns: false,
+                });
             }
-        }
-        if is_scope(t) {
-            let function = match &*t.inner {
-                InnerToken::T_Function { name, .. } => {
-                    found.push((name.clone(), t.clone(), false, false));
-                    Some(found.len() - 1)
+        },
+        &mut |t| {
+            let (frames, found) = &mut *open.borrow_mut();
+            if is_scope(t)
+                && let Some(frame) = frames.pop()
+            {
+                if let Some(i) = frame.function {
+                    found[i].3 = frame.assigns;
                 }
-                _ => None,
-            };
-            frames.push(Frame {
-                id: t.id(),
-                function,
-                assigns: false,
-            });
-        }
-        pending.push(Visit::Leave(t));
-        t.inner.for_each_child(|c| children.push(c));
-        pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
-        children.clear();
-    }
+                if let Some(outer) = frames.last_mut() {
+                    outer.assigns |= frame.assigns;
+                }
+            }
+        },
+    );
+    let (_, mut found) = open.into_inner();
     for entry in &mut found {
         entry.2 = referenced.contains(&entry.1.id());
     }

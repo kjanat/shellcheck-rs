@@ -29,14 +29,14 @@ impl Parser {
             .into_iter()
             .find(|s| self.string_peek(s));
         if let Some(c) = has_dash_ao {
-            let mut end = pos.clone();
+            let mut end = pos;
             end.column += columns(c.len());
             let alt = match c {
                 "or" | "-o" => "||",
                 _ => "&&",
             };
             self.problem_at(
-                pos.clone(),
+                pos,
                 end,
                 Severity::ErrorC,
                 1139,
@@ -111,7 +111,7 @@ impl Parser {
             && COMMON_COMMANDS.contains(&name.as_str())
         {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::WarningC,
                 1014,
@@ -140,8 +140,8 @@ impl Parser {
         let space = self.cond_spacing(stk).await;
         if space.is_empty() {
             self.problem_at(
-                start.clone(),
-                space_pos.clone(),
+                start,
+                space_pos,
                 Severity::ErrorC,
                 1035,
                 if single {
@@ -153,7 +153,7 @@ impl Parser {
         }
         if single && space.contains('\n') {
             self.problem_at(
-                space_pos.clone(),
+                space_pos,
                 space_pos,
                 Severity::ErrorC,
                 1080,
@@ -182,7 +182,7 @@ impl Parser {
                 self.fail_implicitly();
                 return Err(());
             }
-            let id = self.next_id_between(start.clone(), self.pos());
+            let id = self.next_id_between(start, self.pos());
             Token::new(id, InnerToken::TC_Empty { typ })
         };
         // `try (string "]]") <|> string "]"`: whichever bracket is actually
@@ -197,7 +197,7 @@ impl Parser {
         };
         if dbl && close != ConditionType::DoubleBracket {
             self.problem_at(
-                close_pos.clone(),
+                close_pos,
                 close_pos,
                 Severity::ErrorC,
                 1033,
@@ -206,8 +206,8 @@ impl Parser {
         }
         if single && close != ConditionType::SingleBracket {
             self.problem_at(
-                start.clone(),
-                start.clone(),
+                start,
+                start,
                 Severity::ErrorC,
                 1034,
                 "Test expression was opened with single [ but closed with double ]]. Make sure they match.",
@@ -235,8 +235,8 @@ impl Parser {
         let space = self.cond_spacing(stk).await;
         if required && space.is_empty() {
             self.problem_at(
-                pos.clone(),
-                pos.clone(),
+                pos,
+                pos,
                 Severity::ErrorC,
                 1035,
                 "You are missing a required space here.",
@@ -244,7 +244,7 @@ impl Parser {
         }
         if single && space.contains('\n') {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1080,
@@ -514,7 +514,7 @@ impl Parser {
         } else {
             return;
         };
-        self.problem_at(pos.clone(), pos.clone(), Severity::ErrorC, code, msg);
+        self.problem_at(*pos, *pos, Severity::ErrorC, code, msg);
     }
 
     pub(super) async fn read_cond_unary(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
@@ -563,7 +563,7 @@ impl Parser {
             ))
         } else {
             self.problem_at(
-                arg_pos.clone(),
+                arg_pos,
                 arg_pos,
                 Severity::ErrorC,
                 1019,
@@ -612,7 +612,7 @@ impl Parser {
         if self.peek() == Some('[') {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1026,
@@ -662,7 +662,7 @@ impl Parser {
                 // The operator was there, so there is no falling back to
                 // a nullary expression: what is missing is its argument.
                 self.problem_at(
-                    op_start.clone(),
+                    op_start,
                     op_start,
                     Severity::ErrorC,
                     1027,
@@ -712,7 +712,7 @@ impl Parser {
         }
         let pos = self.pos();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1076,
@@ -892,7 +892,7 @@ impl Parser {
         if !is_array_index && tail.ends_with(']') && !contains_open_bracket {
             let bracket = if single { "]" } else { "]]" };
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1020,
@@ -902,7 +902,7 @@ impl Parser {
         }
         if single && tail.ends_with(')') {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1021,
@@ -1047,7 +1047,7 @@ impl Parser {
         loop {
             let m = self.mark();
             let before = self.idx;
-            match self.read_regex_part(stk).await {
+            match stk.run(|stk| self.read_regex_part(stk)).await {
                 Ok(p) if self.idx != before => {
                     parts.push(p);
                     continue;

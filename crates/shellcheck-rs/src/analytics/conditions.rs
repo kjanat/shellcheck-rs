@@ -13,7 +13,7 @@ use crate::analyzer_lib::{
     info_with_fix, is_array_expansion, replace_end, replace_start, style, style_with_fix, warn,
     warn_with_fix, word_parts,
 };
-use crate::ast::{CaseType, ConditionType, Id, InnerToken, Token, Visit};
+use crate::ast::{CaseType, ConditionType, Id, InnerToken, Token};
 use crate::ast_lib;
 use crate::ast_lib::get_leading_unquoted_string;
 use crate::ast_lib::get_literal_string;
@@ -933,94 +933,88 @@ pub(super) fn check_subshelled_tests(_params: &Parameters, root: &Token, out: &m
         /// The position in the stack of the nearest strict ancestor that
         /// `isCompoundCondition` does not skip.
         decider: Option<usize>,
+        /// How many tokens the walk entered before this one.
+        order: usize,
     }
     // Id of a brace group or subshell -> whether its list holds only tests.
     let mut groups: crate::idhash::IdMap<Id, bool> = crate::idhash::IdMap::default();
-    let mut frames: Vec<Frame> = Vec::new();
+    let frames: std::cell::RefCell<Vec<Frame>> = std::cell::RefCell::default();
     let mut found: Vec<(usize, Id, i64, &str)> = Vec::new();
     let mut entered = 0;
-    let mut order: crate::idhash::IdMap<Id, usize> = crate::idhash::IdMap::default();
-    let mut pending = vec![Visit::Enter(root)];
-    let mut children = Vec::new();
-    while let Some(step) = pending.pop() {
-        match step {
-            Visit::Enter(t) => {
-                let decider = frames.len().checked_sub(1).and_then(|p| {
-                    if sst_skippable(frames[p].token) {
-                        frames[p].decider
-                    } else {
-                        Some(p)
-                    }
-                });
-                frames.push(Frame {
-                    token: t,
-                    assigns: sst_is_assignment_node(t),
-                    decider,
-                });
-                order.insert(t.id(), entered);
-                entered += 1;
-                pending.push(Visit::Leave(t));
-                t.inner.for_each_child(|c| children.push(c));
-                pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
-                children.clear();
-            }
-            Visit::Leave(t) => {
-                let Some(frame) = frames.pop() else {
-                    continue;
-                };
-                if let Some(parent) = frames.last_mut() {
-                    parent.assigns |= frame.assigns;
-                }
-                let (InnerToken::T_BraceGroup(list) | InnerToken::T_Subshell(list)) = &*t.inner
-                else {
-                    continue;
-                };
-                let all_tests = list.iter().all(|c| sst_is_test_structure(c, &groups));
-                groups.insert(t.id(), all_tests);
-                if !matches!(&*t.inner, InnerToken::T_Subshell(_)) || !all_tests || frame.assigns {
-                    continue;
-                }
-                // Check if a T_Subshell is used as a condition, e.g. if ( test )
-                // This technically also triggers for `if true; then ( test ); fi`
-                // but it's still a valid suggestion.
-                let compound_condition = frame.decider.is_some_and(|d| {
-                    matches!(
-                        &*frames[d].token.inner,
-                        InnerToken::T_IfExpression { .. }
-                            | InnerToken::T_WhileExpression { .. }
-                            | InnerToken::T_UntilExpression { .. }
-                    )
-                });
-                let function_body = frames.last().is_some_and(|p| is_function_tok(p.token));
-                let at = order[&t.id()];
-                if compound_condition {
-                    // Special case for if (test) and while (test)
-                    found.push((
-                        at,
-                        t.id(),
-                        2233,
-                        "Remove superfluous (..) around condition to avoid subshell overhead.",
-                    ));
-                } else if sst_is_single_test(list) && !function_body {
-                    // Special case for ([ x ]), except for func() ( [ x ] )
-                    found.push((
-                        at,
-                        t.id(),
-                        2234,
-                        "Remove superfluous (..) around test command to avoid subshell overhead.",
-                    ));
+    root.visit_stack(
+        &mut |t| {
+            let mut frames = frames.borrow_mut();
+            let decider = frames.len().checked_sub(1).and_then(|p| {
+                if sst_skippable(frames[p].token) {
+                    frames[p].decider
                 } else {
-                    // General case for ([ x ] || [ y ] && etc)
-                    found.push((
-                        at,
-                        t.id(),
-                        2235,
-                        "Use { ..; } instead of (..) to avoid subshell overhead.",
-                    ));
+                    Some(p)
                 }
+            });
+            frames.push(Frame {
+                token: t,
+                assigns: sst_is_assignment_node(t),
+                decider,
+                order: entered,
+            });
+            entered += 1;
+        },
+        &mut |t| {
+            let mut frames = frames.borrow_mut();
+            let Some(frame) = frames.pop() else {
+                return;
+            };
+            if let Some(parent) = frames.last_mut() {
+                parent.assigns |= frame.assigns;
             }
-        }
-    }
+            let (InnerToken::T_BraceGroup(list) | InnerToken::T_Subshell(list)) = &*t.inner else {
+                return;
+            };
+            let all_tests = list.iter().all(|c| sst_is_test_structure(c, &groups));
+            groups.insert(t.id(), all_tests);
+            if !matches!(&*t.inner, InnerToken::T_Subshell(_)) || !all_tests || frame.assigns {
+                return;
+            }
+            // Check if a T_Subshell is used as a condition, e.g. if ( test )
+            // This technically also triggers for `if true; then ( test ); fi`
+            // but it's still a valid suggestion.
+            let compound_condition = frame.decider.is_some_and(|d| {
+                matches!(
+                    &*frames[d].token.inner,
+                    InnerToken::T_IfExpression { .. }
+                        | InnerToken::T_WhileExpression { .. }
+                        | InnerToken::T_UntilExpression { .. }
+                )
+            });
+            let function_body = frames.last().is_some_and(|p| is_function_tok(p.token));
+            let at = frame.order;
+            if compound_condition {
+                // Special case for if (test) and while (test)
+                found.push((
+                    at,
+                    t.id(),
+                    2233,
+                    "Remove superfluous (..) around condition to avoid subshell overhead.",
+                ));
+            } else if sst_is_single_test(list) && !function_body {
+                // Special case for ([ x ]), except for func() ( [ x ] )
+                found.push((
+                    at,
+                    t.id(),
+                    2234,
+                    "Remove superfluous (..) around test command to avoid subshell overhead.",
+                ));
+            } else {
+                // General case for ([ x ] || [ y ] && etc)
+                found.push((
+                    at,
+                    t.id(),
+                    2235,
+                    "Use { ..; } instead of (..) to avoid subshell overhead.",
+                ));
+            }
+        },
+    );
     // Upstream reports in preorder, one subshell at a time.
     found.sort_by_key(|f| f.0);
     for (_, id, code, message) in found {

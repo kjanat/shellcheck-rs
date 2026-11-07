@@ -18,21 +18,63 @@ pub fn get_literal_string_ext(
 ) -> Option<String> {
     // The walk visits the word's parts depth-first, left to right. When the
     // fallback declines a part, the whole string is `Nothing`.
-    let mut out = String::new();
-    let mut pending = vec![t];
-    while let Some(t) = pending.pop() {
+    fn go(
+        t: &Token,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+        budget: usize,
+    ) -> Option<()> {
+        let Some(budget) = budget.checked_sub(1) else {
+            return listed(t, fb, out);
+        };
         match &*t.inner {
+            InnerToken::T_NormalWord(parts)
+            | InnerToken::T_DoubleQuoted(parts)
+            | InnerToken::T_DollarDoubleQuoted(parts)
+            | InnerToken::TA_Expansion(parts) => {
+                for p in parts {
+                    go(p, fb, out, budget)?;
+                }
+                Some(())
+            }
+            other => part(other, fb, out),
+        }
+    }
+    // The same walk with every pending part on a work list.
+    fn listed(
+        t: &Token,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+    ) -> Option<()> {
+        let mut pending = vec![t];
+        while let Some(t) = pending.pop() {
+            match &*t.inner {
+                InnerToken::T_NormalWord(parts)
+                | InnerToken::T_DoubleQuoted(parts)
+                | InnerToken::T_DollarDoubleQuoted(parts)
+                | InnerToken::TA_Expansion(parts) => pending.extend(parts.iter().rev()),
+                other => part(other, fb, out)?,
+            }
+        }
+        Some(())
+    }
+    // A part that holds no other parts.
+    fn part(
+        t: &InnerToken,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+    ) -> Option<()> {
+        match t {
             InnerToken::T_Literal(s)
             | InnerToken::T_SingleQuoted(s)
             | InnerToken::T_ParamSubSpecialChar(s) => out.push_str(s),
             InnerToken::T_DollarSingleQuoted(s) => out.push_str(&decode_escapes(s)),
-            InnerToken::T_NormalWord(parts)
-            | InnerToken::T_DoubleQuoted(parts)
-            | InnerToken::T_DollarDoubleQuoted(parts)
-            | InnerToken::TA_Expansion(parts) => pending.extend(parts.iter().rev()),
-            other => out.push_str(&fallback(other)?),
+            other => out.push_str(&fb(other)?),
         }
+        Some(())
     }
+    let mut out = String::new();
+    go(t, fallback, &mut out, crate::ast::RECURSION_BUDGET)?;
     Some(out)
 }
 
@@ -649,7 +691,58 @@ pub(crate) fn is_quoteable_expansion(t: &Token) -> bool {
 
 /// `concat $ oversimplify t`, the form nearly every caller wants.
 pub(crate) fn oversimplify_concat(t: &Token) -> String {
-    oversimplify(t).concat()
+    let mut out = String::new();
+    oversimplify_into(t, &mut out, crate::ast::RECURSION_BUDGET);
+    out
+}
+
+/// Appends `concat $ oversimplify t` to `out`. The walk descends `budget`
+/// levels on the call stack and hands deeper tokens to [`oversimplify`].
+fn oversimplify_into(t: &Token, out: &mut String, budget: usize) {
+    use InnerToken::{
+        T_Annotation, T_Backticked, T_DollarArithmetic, T_DollarBraced, T_DollarExpansion,
+        T_DollarSingleQuoted, T_DoubleQuoted, T_Glob, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_Pipeline, T_Redirecting, T_SimpleCommand, T_SingleQuoted,
+        TA_Expansion, TA_Sequence,
+    };
+    let Some(budget) = budget.checked_sub(1) else {
+        out.extend(oversimplify(t));
+        return;
+    };
+    match &*t.inner {
+        T_NormalWord(l) | T_DoubleQuoted(l) => {
+            for c in l {
+                oversimplify_into(c, out, budget);
+            }
+        }
+        T_SingleQuoted(s)
+        | T_Glob(s)
+        | T_Literal(s)
+        | T_ParamSubSpecialChar(s)
+        | T_DollarSingleQuoted(s) => out.push_str(s),
+        T_DollarBraced { .. } | T_DollarArithmetic(_) | T_DollarExpansion(_) | T_Backticked(_) => {
+            out.push_str("${VAR}");
+        }
+        T_Pipeline { commands, .. } if commands.len() == 1 => {
+            oversimplify_into(&commands[0], out, budget);
+        }
+        T_SimpleCommand { words, .. } => {
+            for w in words {
+                oversimplify_into(w, out, budget);
+            }
+        }
+        T_Redirecting { cmd, .. } => oversimplify_into(cmd, out, budget),
+        T_Annotation { token, .. } => oversimplify_into(token, out, budget),
+        // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
+        TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
+            if let TA_Expansion(v) = &*seq[0].inner {
+                for c in v {
+                    oversimplify_into(c, out, budget);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// `getTrailingUnquotedLiteral`: the word's last part, when it is an unquoted
