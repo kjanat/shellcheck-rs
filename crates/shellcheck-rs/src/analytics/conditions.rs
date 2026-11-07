@@ -13,7 +13,7 @@ use crate::analyzer_lib::{
     info_with_fix, is_array_expansion, replace_end, replace_start, style, style_with_fix, warn,
     warn_with_fix, word_parts,
 };
-use crate::ast::{CaseType, ConditionType, Id, InnerToken, Token};
+use crate::ast::{CaseType, ConditionType, Id, InnerToken, Token, Visit};
 use crate::ast_lib;
 use crate::ast_lib::get_leading_unquoted_string;
 use crate::ast_lib::get_literal_string;
@@ -327,7 +327,7 @@ pub(super) fn check_case_against_glob(_params: &Parameters, t: &Token, out: &mut
 }
 
 /// SC2055 / SC2056 / SC2252 — `checkOrNeq`.
-pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
+pub(super) fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::{T_OrIf, TA_Binary, TC_Binary, TC_Or};
     match &*t.inner {
         // Test-level "or": [ x != y -o x != z ]
@@ -390,8 +390,11 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
         }
         // Command-level "or": [ x != y ] || [ x != z ]
         T_OrIf { lhs, rhs } => {
-            if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
-                (or_get_expr(lhs), or_get_expr(rhs))
+            // Both lookups are pure, and their order does not change the result.
+            // The right side is a single command. It goes first, and a chain whose
+            // right side is no test skips the walk down its left side.
+            if let Some((lhs2, op2, rhs2)) = or_get_expr(params, rhs)
+                && let Some((lhs1, op1, rhs1)) = or_get_expr(params, lhs)
                 && op1 == op2
                 && (op1 == "-ne" || op1 == "!=")
                 && lhs1 == lhs2
@@ -412,7 +415,7 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2333 / SC2334 — `checkAndEq`.
-pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
+pub(super) fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::{T_AndIf, TA_Binary, TC_And, TC_Binary};
     match &*t.inner {
         // Test-level "and": [ x = y -a x = z ]
@@ -479,8 +482,11 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
         }
         // Command-level "and": [ x = y ] && [ x = z ]
         T_AndIf { lhs, rhs } => {
-            if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
-                (and_get_expr(lhs), and_get_expr(rhs))
+            // Both lookups are pure, and their order does not change the result.
+            // The right side is a single command. It goes first, and a chain whose
+            // right side is no test skips the walk down its left side.
+            if let Some((lhs2, op2, rhs2)) = and_get_expr(params, rhs)
+                && let Some((lhs1, op1, rhs1)) = and_get_expr(params, lhs)
                 && op1 == op2
                 && lhs1 == lhs2
                 && rhs1 != rhs2
@@ -913,34 +919,112 @@ pub(super) fn check_empty_condition(_params: &Parameters, t: &Token, out: &mut O
     }
 }
 
-pub(super) fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Subshell(list) = &*t.inner
-        && list.iter().all(sst_is_test_structure)
-        && !sst_has_assignment(t)
-    {
-        let path = get_path(params, t);
-        if sst_is_compound_condition(&path) {
-            style(
-                out,
-                t.id(),
-                2233,
-                "Remove superfluous (..) around condition to avoid subshell overhead.",
-            );
-        } else if sst_is_single_test(list) && !sst_is_function_body(&path) {
-            style(
-                out,
-                t.id(),
-                2234,
-                "Remove superfluous (..) around test command to avoid subshell overhead.",
-            );
-        } else {
-            style(
-                out,
-                t.id(),
-                2235,
-                "Use { ..; } instead of (..) to avoid subshell overhead.",
-            );
+/// `checkSubshelledTests`, as one walk over the whole tree. For each
+/// subshell, upstream asks whether its list holds only tests, whether
+/// anything in it assigns, and what its path to the root holds. Asked per
+/// subshell, each answer costs the nesting depth. The walk computes the
+/// first two answers from the bottom up and holds the ancestors on a stack.
+pub(super) fn check_subshelled_tests(_params: &Parameters, root: &Token, out: &mut Out) {
+    /// An open token.
+    struct Frame<'a> {
+        token: &'a Token,
+        /// Whether anything in the subtree read so far assigns.
+        assigns: bool,
+        /// The position in the stack of the nearest strict ancestor that
+        /// `isCompoundCondition` does not skip.
+        decider: Option<usize>,
+    }
+    // Id of a brace group or subshell -> whether its list holds only tests.
+    let mut groups: crate::idhash::IdMap<Id, bool> = crate::idhash::IdMap::default();
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut found: Vec<(usize, Id, i64, &str)> = Vec::new();
+    let mut entered = 0;
+    let mut order: crate::idhash::IdMap<Id, usize> = crate::idhash::IdMap::default();
+    let mut pending = vec![Visit::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        match step {
+            Visit::Enter(t) => {
+                let decider = frames.len().checked_sub(1).and_then(|p| {
+                    if sst_skippable(frames[p].token) {
+                        frames[p].decider
+                    } else {
+                        Some(p)
+                    }
+                });
+                frames.push(Frame {
+                    token: t,
+                    assigns: sst_is_assignment_node(t),
+                    decider,
+                });
+                order.insert(t.id(), entered);
+                entered += 1;
+                pending.push(Visit::Leave(t));
+                t.inner.for_each_child(|c| children.push(c));
+                pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+                children.clear();
+            }
+            Visit::Leave(t) => {
+                let Some(frame) = frames.pop() else {
+                    continue;
+                };
+                if let Some(parent) = frames.last_mut() {
+                    parent.assigns |= frame.assigns;
+                }
+                let (InnerToken::T_BraceGroup(list) | InnerToken::T_Subshell(list)) = &*t.inner
+                else {
+                    continue;
+                };
+                let all_tests = list.iter().all(|c| sst_is_test_structure(c, &groups));
+                groups.insert(t.id(), all_tests);
+                if !matches!(&*t.inner, InnerToken::T_Subshell(_)) || !all_tests || frame.assigns {
+                    continue;
+                }
+                // Check if a T_Subshell is used as a condition, e.g. if ( test )
+                // This technically also triggers for `if true; then ( test ); fi`
+                // but it's still a valid suggestion.
+                let compound_condition = frame.decider.is_some_and(|d| {
+                    matches!(
+                        &*frames[d].token.inner,
+                        InnerToken::T_IfExpression { .. }
+                            | InnerToken::T_WhileExpression { .. }
+                            | InnerToken::T_UntilExpression { .. }
+                    )
+                });
+                let function_body = frames.last().is_some_and(|p| is_function_tok(p.token));
+                let at = order[&t.id()];
+                if compound_condition {
+                    // Special case for if (test) and while (test)
+                    found.push((
+                        at,
+                        t.id(),
+                        2233,
+                        "Remove superfluous (..) around condition to avoid subshell overhead.",
+                    ));
+                } else if sst_is_single_test(list) && !function_body {
+                    // Special case for ([ x ]), except for func() ( [ x ] )
+                    found.push((
+                        at,
+                        t.id(),
+                        2234,
+                        "Remove superfluous (..) around test command to avoid subshell overhead.",
+                    ));
+                } else {
+                    // General case for ([ x ] || [ y ] && etc)
+                    found.push((
+                        at,
+                        t.id(),
+                        2235,
+                        "Use { ..; } instead of (..) to avoid subshell overhead.",
+                    ));
+                }
+            }
         }
+    }
+    // Upstream reports in preorder, one subshell at a time.
+    found.sort_by_key(|f| f.0);
+    for (_, id, code, message) in found {
+        style(out, id, code, message);
     }
 }
 
@@ -1600,7 +1684,9 @@ fn sst_is_test_command(t: &Token) -> bool {
     false
 }
 
-fn sst_is_test_structure(t: &Token) -> bool {
+/// `isTestStructure`. `groups` holds the answer for every brace group and
+/// subshell below `t`, and the walk stops at them.
+fn sst_is_test_structure(t: &Token, groups: &crate::idhash::IdMap<Id, bool>) -> bool {
     // Every structure the walk reaches must be a test. The order of the checks
     // does not change the result.
     let mut pending = vec![t];
@@ -1621,9 +1707,8 @@ fn sst_is_test_structure(t: &Token) -> bool {
             } if separators.is_empty() && commands.len() == 1 => {
                 if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
                     match &*cmd.inner {
-                        InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
-                            pending.extend(ts);
-                            continue;
+                        InnerToken::T_BraceGroup(_) | InnerToken::T_Subshell(_) => {
+                            groups.get(&cmd.id()).copied().unwrap_or(false)
                         }
                         _ => sst_is_test_command(t),
                     }
@@ -1648,11 +1733,6 @@ fn is_function_tok(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Function { .. })
 }
 
-fn sst_is_function_body(path: &[Token]) -> bool {
-    // path[0] is the subshell itself; path[1] is its immediate parent.
-    path.get(1).is_some_and(is_function_tok)
-}
-
 fn sst_skippable(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Redirecting { redirs, .. } => redirs.is_empty(),
@@ -1660,20 +1740,6 @@ fn sst_skippable(t: &Token) -> bool {
         InnerToken::T_Annotation { .. } => true,
         _ => false,
     }
-}
-
-fn sst_is_compound_condition(path: &[Token]) -> bool {
-    // dropWhile skippable over the tail (parents) of the path.
-    let tail = if path.len() > 1 { &path[1..] } else { &[][..] };
-    let mut iter = tail.iter().skip_while(|t| sst_skippable(t));
-    iter.next().is_some_and(|t| {
-        matches!(
-            &*t.inner,
-            InnerToken::T_IfExpression { .. }
-                | InnerToken::T_WhileExpression { .. }
-                | InnerToken::T_UntilExpression { .. }
-        )
-    })
 }
 
 fn sst_is_assignment_node(t: &Token) -> bool {
@@ -1687,16 +1753,6 @@ fn sst_is_assignment_node(t: &Token) -> bool {
         }
         _ => false,
     }
-}
-
-fn sst_has_assignment(t: &Token) -> bool {
-    let mut found = false;
-    t.visit_preorder(&mut |n| {
-        if sst_is_assignment_node(n) {
-            found = true;
-        }
-    });
-    found
 }
 
 const BINARY_TEST_OPS: &[&str] = &[
@@ -1920,17 +1976,26 @@ fn words_can_be_equal(x: &Token, y: &Token) -> bool {
     pseudo_globs_can_overlap(&word_to_pseudo_glob(x), &word_to_pseudo_glob(y))
 }
 
-/// `getExpr` of `checkOrNeq`: fetches x and y in `T_OrIf x (T_OrIf y z)`.
-fn or_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    cmd_level_get_expr(x, |t| match t {
+/// `getExpr` of `checkOrNeq`. It fetches x and y in `T_OrIf x (T_OrIf y z)`.
+fn or_get_expr(params: &Parameters, x: &Token) -> Option<(Token, String, Token)> {
+    let x = match &*x.inner {
+        InnerToken::T_OrIf { .. } => params.list_head(x),
+        _ => x.clone(),
+    };
+    cmd_level_get_expr(&x, |t| match t {
         InnerToken::T_OrIf { lhs, .. } => Some(lhs),
         _ => None,
     })
 }
 
-/// `getExpr` of `checkAndEq`: fetches x and y in `T_AndIf x (T_AndIf y z)`.
-fn and_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    cmd_level_get_expr(x, |t| match t {
+/// `getExpr` of `checkAndEq`. It fetches x and y in
+/// `T_AndIf x (T_AndIf y z)`.
+fn and_get_expr(params: &Parameters, x: &Token) -> Option<(Token, String, Token)> {
+    let x = match &*x.inner {
+        InnerToken::T_AndIf { .. } => params.list_head(x),
+        _ => x.clone(),
+    };
+    cmd_level_get_expr(&x, |t| match t {
         InnerToken::T_AndIf { lhs, .. } => Some(lhs),
         _ => None,
     })
@@ -3230,19 +3295,106 @@ mod tests {
 
     // SC2233/2234/2235 checkSubshelledTests
 
+    /// The per-subshell form of `checkSubshelledTests`, as upstream asks it.
+    fn subshelled_tests_per_node(params: &Parameters) -> Vec<(Id, i64)> {
+        fn is_test_structure(t: &Token) -> bool {
+            match &*t.inner {
+                InnerToken::T_Banged(w) => is_test_structure(w),
+                InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
+                    is_test_structure(lhs) && is_test_structure(rhs)
+                }
+                InnerToken::T_Pipeline {
+                    separators,
+                    commands,
+                } if separators.is_empty() && commands.len() == 1 => match &*commands[0].inner {
+                    InnerToken::T_Redirecting { cmd, .. } => match &*cmd.inner {
+                        InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
+                            ts.iter().all(is_test_structure)
+                        }
+                        _ => sst_is_test_command(t),
+                    },
+                    _ => sst_is_test_command(t),
+                },
+                _ => sst_is_test_command(t),
+            }
+        }
+        let mut found = Vec::new();
+        params.root.visit_preorder(&mut |t| {
+            let InnerToken::T_Subshell(list) = &*t.inner else {
+                return;
+            };
+            let mut assigns = false;
+            t.visit_preorder(&mut |n| assigns |= sst_is_assignment_node(n));
+            if !list.iter().all(is_test_structure) || assigns {
+                return;
+            }
+            let path = get_path(params, t);
+            let decider = path[1..].iter().find(|a| !sst_skippable(a));
+            let compound = decider.is_some_and(|a| {
+                matches!(
+                    &*a.inner,
+                    InnerToken::T_IfExpression { .. }
+                        | InnerToken::T_WhileExpression { .. }
+                        | InnerToken::T_UntilExpression { .. }
+                )
+            });
+            let code = if compound {
+                2233
+            } else if sst_is_single_test(list) && !path.get(1).is_some_and(is_function_tok) {
+                2234
+            } else {
+                2235
+            };
+            found.push((t.id(), code));
+        });
+        found
+    }
+
+    #[test]
+    fn subshelled_tests_walk_equals_the_per_subshell_check() {
+        let scripts = [
+            "( [ a ] )",
+            "a && ( [ b ] || ! [ c ] )",
+            "( [ a ] && { [ b ] && ( [ c ] ); } )",
+            "( ( ( [ a ] ) ) )",
+            "( ( ( true ) ) )",
+            "if ( [ a ] ); then ( ( [ b ] ) ); fi",
+            "while ( ( [ a ] ) ); do :; done",
+            "until ( [ a ] ) > /dev/null; do :; done",
+            "f() ( [[ x ]] )\ng() ( ( [ y ] ) )",
+            "( [[ ${v:=x} = y ]] && ( [ a ] ) )",
+            "( ( [ a ] ) && [[ $((i++)) = 1 ]] )",
+            "( [ a ] ) | ( [ b ] )",
+            "# shellcheck disable=SC2234\n( ( [ a ] ) )",
+        ];
+        let mut codes = std::collections::HashSet::new();
+        for script in scripts {
+            let params = params_for(script);
+            let mut out = Out::new();
+            check_subshelled_tests(&params, &params.root, &mut out);
+            let walked: Vec<(Id, i64)> = out.iter().map(|c| (c.id, c.comment.code)).collect();
+            assert_eq!(walked, subshelled_tests_per_node(&params), "{script}");
+            codes.extend(walked.iter().map(|w| w.1));
+        }
+        assert_eq!(codes.len(), 3);
+    }
+
     #[test]
     fn prop_checkSubshelledTests1() {
-        assert!(emits(check_subshelled_tests, "a && ( [ b ] || ! [ c ] )"));
+        assert!(tree_emits(
+            check_subshelled_tests,
+            "a && ( [ b ] || ! [ c ] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests2() {
-        assert!(emits(check_subshelled_tests, "( [ a ] )"));
+        assert!(tree_emits(check_subshelled_tests, "( [ a ] )"));
     }
 
     #[test]
     fn prop_checkSubshelledTests3() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "( [ a ] && [ b ] || test c )"
         ));
@@ -3250,7 +3402,7 @@ mod tests {
 
     #[test]
     fn prop_checkSubshelledTests4() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "( [ a ] && { [ b ] && [ c ]; } )"
         ));
@@ -3258,22 +3410,31 @@ mod tests {
 
     #[test]
     fn prop_checkSubshelledTests5() {
-        assert!(!emits(check_subshelled_tests, "( [[ ${var:=x} = y ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ ${var:=x} = y ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests6() {
-        assert!(!emits(check_subshelled_tests, "( [[ $((i++)) = 10 ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ $((i++)) = 10 ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests7() {
-        assert!(!emits(check_subshelled_tests, "( [[ $((i+=1)) = 10 ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ $((i+=1)) = 10 ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests8() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "# shellcheck disable=SC2234\nf() ( [[ x ]] )"
         ));

@@ -5,7 +5,7 @@ use crate::analyzer_lib::{
     DataSource, DataType, Out, Parameters, Scope, StackData, err, get_command_name, get_path, info,
     style, warn, warn_with_fix, word_parts,
 };
-use crate::ast::{AssignmentMode, Id, InnerToken, Token};
+use crate::ast::{AssignmentMode, Id, InnerToken, Token, Visit};
 use crate::ast_lib;
 use crate::ast_lib::get_word_parts;
 use crate::ast_lib::is_command_substitution;
@@ -276,26 +276,54 @@ pub(super) fn check_dollar_brackets(_params: &Parameters, t: &Token, out: &mut O
     }
 }
 
-pub(super) fn check_prefix_assignment_reference(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_DollarBraced { op, .. } = &*t.inner {
-        // Stop at the nearest command with words, even if it has no prefix
-        // assignments. Only build an ID path when there is something to check.
-        for node in crate::analyzer_lib::path_iter(params, t) {
-            if let InnerToken::T_SimpleCommand { assignments, words } = &*node.inner
-                && !words.is_empty()
-            {
-                if !assignments.is_empty() {
-                    let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
-                    let id_path: Vec<Id> = crate::analyzer_lib::path_iter(params, t)
-                        .map(Token::id)
-                        .collect();
-                    for v in assignments {
-                        par_check_var(v, &name, &id_path, t.id(), out);
-                    }
+/// `checkPrefixAssignmentReference`, as one walk over the whole tree. A
+/// stack holds the open commands with words, and its top is the nearest one
+/// around each `${..}`. Upstream climbs the parent map from every expansion
+/// instead.
+pub(super) fn check_prefix_assignment_reference(_params: &Parameters, root: &Token, out: &mut Out) {
+    // `path` holds the open tokens from the root down. `commands` holds the
+    // positions in `path` of the commands with words.
+    let mut path: Vec<&Token> = Vec::new();
+    let mut commands: Vec<usize> = Vec::new();
+    let mut pending = vec![Visit::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        let t = match step {
+            Visit::Enter(t) => t,
+            Visit::Leave(_) => {
+                path.pop();
+                if commands.last() == Some(&path.len()) {
+                    commands.pop();
                 }
-                break;
+                continue;
+            }
+        };
+        // Stop at the nearest command with words, even if it has no prefix
+        // assignments.
+        if let InnerToken::T_DollarBraced { op, .. } = &*t.inner
+            && let Some(&at) = commands.last()
+            && let InnerToken::T_SimpleCommand { assignments, .. } = &*path[at].inner
+            && !assignments.is_empty()
+        {
+            let name = cfg::get_braced_reference(&ast_lib::oversimplify_concat(op));
+            // Upstream asks whether an assignment lies on the path from the
+            // expansion to the root. Only the child of the command that the
+            // walk came down through can lie on that path.
+            let under = path.get(at + 1).map_or_else(|| t.id(), |c| c.id());
+            for v in assignments {
+                par_check_var(v, &name, under, t.id(), out);
             }
         }
+        if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
+            && !words.is_empty()
+        {
+            commands.push(path.len());
+        }
+        path.push(t);
+        pending.push(Visit::Leave(t));
+        t.inner.for_each_child(|c| children.push(c));
+        pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+        children.clear();
     }
 }
 
@@ -630,11 +658,12 @@ fn bps_check_first(first: &Token, out: &mut Out) {
     }
 }
 
-fn par_check_var(v: &Token, name: &str, id_path: &[Id], expansion_id: Id, out: &mut Out) {
+/// `checkVar`, for an expansion under the command's child `under`.
+fn par_check_var(v: &Token, name: &str, under: Id, expansion_id: Id, out: &mut Out) {
     if let InnerToken::T_Assignment { var, indices, .. } = &*v.inner
         && indices.is_empty()
         && var == name
-        && !id_path.contains(&v.id())
+        && v.id() != under
     {
         warn(
             out,
@@ -1566,7 +1595,7 @@ mod tests {
 
     #[test]
     fn prop_checkPrefixAssign1() {
-        assert!(node_emits(
+        assert!(tree_emits(
             check_prefix_assignment_reference,
             "var=foo echo $var"
         ));
@@ -1574,10 +1603,34 @@ mod tests {
 
     #[test]
     fn prop_checkPrefixAssign2() {
-        assert!(!node_emits(
+        assert!(!tree_emits(
             check_prefix_assignment_reference,
             "var=$(echo $var) cmd"
         ));
+    }
+
+    #[test]
+    fn prefix_assignment_reference_finds_the_nearest_command_with_words() {
+        let codes = |s: &str| {
+            let params = params_for(s);
+            let mut out = Out::new();
+            check_prefix_assignment_reference(&params, &params.root, &mut out);
+            let mut codes: Vec<i64> = out.iter().map(|c| c.comment.code).collect();
+            codes.sort_unstable();
+            codes
+        };
+        // The expansion inside its own assignment sees the old value on purpose.
+        assert_eq!(codes("var=${var}x cmd"), Vec::<i64>::new());
+        // An assignment elsewhere in the same command still reaches only the
+        // forked process.
+        assert_eq!(codes("a=1 b=${a} cmd"), vec![2097, 2098]);
+        // An inner command with words stops the search.
+        assert_eq!(codes("var=x echo $(echo ${var})"), Vec::<i64>::new());
+        // An inner command without words does not.
+        assert_eq!(codes("var=x echo $(y=${var})"), vec![2097, 2098]);
+        // Leaving a command closes it for later siblings.
+        assert_eq!(codes("var=x echo 1; echo ${var}"), Vec::<i64>::new());
+        assert_eq!(codes("var=x echo ${a:-${b:-${var}}}"), vec![2097, 2098]);
     }
 
     // SC2247 checkDollarQuoteParen

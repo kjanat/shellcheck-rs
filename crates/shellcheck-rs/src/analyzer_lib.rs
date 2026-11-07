@@ -46,6 +46,16 @@ pub struct Parameters {
     /// The internal error that stopped the dataflow analysis, which then
     /// runs as if extended analysis were off.
     pub dataflow_error: Option<InternalError>,
+    /// Maps an id to the length of its path to the root, the token included.
+    /// The first fix that needs a precedence fills it.
+    fix_depths: std::cell::OnceCell<IdMap<Id, i32>>,
+    /// Maps an id to the first answer `isQuoteFreeContext` gives on the path
+    /// from that token to the root. [`is_quote_free`] fills it.
+    pub(crate) quote_free_contexts: std::cell::RefCell<IdMap<Id, bool>>,
+    /// The same map for `strict = True`.
+    pub(crate) strict_quote_free_contexts: std::cell::RefCell<IdMap<Id, bool>>,
+    /// Maps the id of a `&&` or `||` list to its [`Parameters::list_head`].
+    list_heads: std::cell::RefCell<IdMap<Id, Token>>,
 }
 
 impl Parameters {
@@ -196,6 +206,70 @@ impl Parameters {
         let pid = self.parent_map.get(&t.id())?;
         self.id_map.get(pid)
     }
+
+    /// Returns the first answer `decide` gives on the path from `start` to the
+    /// root, or false when it gives none. `memo` stores the answer for every
+    /// token the climb passes. Tokens under one long chain of undecided
+    /// ancestors then climb only to the first token with a stored answer.
+    /// Returns the first token down the left side of `t` that is not a list of
+    /// the same operator as `t`. For `a && b && c` that is `a`. For a token
+    /// that is no `&&` or `||` list, it is `t` itself. Every list the walk
+    /// passes stores the answer, and the other lists of the chain reuse it.
+    pub(crate) fn list_head(&self, t: &Token) -> Token {
+        let lhs_of = |x: &Token| match &*x.inner {
+            InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => Some(lhs.clone()),
+            _ => None,
+        };
+        let kind = std::mem::discriminant(&*t.inner);
+        let mut climbed = Vec::new();
+        let mut cur = t.clone();
+        let head = loop {
+            if let Some(known) = self.list_heads.borrow().get(&cur.id()) {
+                break known.clone();
+            }
+            let Some(lhs) = lhs_of(&cur) else {
+                break cur;
+            };
+            climbed.push(cur.id());
+            if std::mem::discriminant(&*lhs.inner) != kind {
+                break lhs;
+            }
+            cur = lhs;
+        };
+        let mut memo = self.list_heads.borrow_mut();
+        for id in climbed {
+            memo.insert(id, head.clone());
+        }
+        head
+    }
+
+    pub(crate) fn first_decision(
+        &self,
+        memo: &std::cell::RefCell<IdMap<Id, bool>>,
+        start: Option<&Token>,
+        decide: impl Fn(&Token) -> Option<bool>,
+    ) -> bool {
+        let mut climbed = Vec::new();
+        let mut node = start;
+        let answer = loop {
+            let Some(a) = node else {
+                break false;
+            };
+            if let Some(&known) = memo.borrow().get(&a.id()) {
+                break known;
+            }
+            climbed.push(a.id());
+            if let Some(decided) = decide(a) {
+                break decided;
+            }
+            node = self.parent(a);
+        };
+        let mut memo = memo.borrow_mut();
+        for id in climbed {
+            memo.insert(id, answer);
+        }
+        answer
+    }
 }
 
 /// A check pushes `TokenComment`s into this sink via the emit helpers.
@@ -287,14 +361,34 @@ use crate::interface::{InsertionPoint, Position, Replacement};
 
 /// Precedence = length of the parent path (getPath) from the token to the root,
 /// counting the token itself. Higher precedence is applied first.
+///
+/// The first call measures the depth of every token. Each climb stops at
+/// the first ancestor with a known depth.
 fn fix_depth(params: &Parameters, id: Id) -> i32 {
-    let mut depth = 1;
-    let mut cur = id;
-    while let Some(&p) = params.parent_map.get(&cur) {
-        depth += 1;
-        cur = p;
-    }
-    depth
+    let depths = params.fix_depths.get_or_init(|| {
+        let mut depths: IdMap<Id, i32> = IdMap::default();
+        let mut chain = Vec::new();
+        for &start in params.id_map.keys() {
+            let mut cur = start;
+            let mut depth = loop {
+                if let Some(&known) = depths.get(&cur) {
+                    break known;
+                }
+                chain.push(cur);
+                match params.parent_map.get(&cur) {
+                    Some(&up) => cur = up,
+                    None => break 0,
+                }
+            };
+            while let Some(id) = chain.pop() {
+                depth += 1;
+                depths.insert(id, depth);
+            }
+        }
+        depths
+    });
+    // A token without a parent entry has a path of length one, like the root.
+    depths.get(&id).copied().unwrap_or(1)
 }
 
 /// `replaceStart id params n r`: replace `n` columns at the token's start.
@@ -779,6 +873,10 @@ pub fn make_parameters_as(
         variable_flow,
         cfg_analysis,
         dataflow_error,
+        fix_depths: std::cell::OnceCell::new(),
+        quote_free_contexts: std::cell::RefCell::default(),
+        strict_quote_free_contexts: std::cell::RefCell::default(),
+        list_heads: std::cell::RefCell::default(),
     }
 }
 
@@ -1198,17 +1296,10 @@ pub(crate) fn is_param_to(params: &Parameters, cmd: &str, t: &Token) -> bool {
 // isQuoteFree (parent-context walk, non-strict)
 
 pub(crate) fn is_quote_free(params: &Parameters, t: &Token) -> bool {
-    if is_quote_free_element(params, t) {
-        return true;
-    }
-    let mut node = params.parent(t);
-    while let Some(a) = node {
-        if let Some(b) = is_quote_free_context(params, a) {
-            return b;
-        }
-        node = params.parent(a);
-    }
-    false
+    is_quote_free_element(params, t)
+        || params.first_decision(&params.quote_free_contexts, params.parent(t), |a| {
+            is_quote_free_context(params, a)
+        })
 }
 
 pub(crate) fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
@@ -1369,6 +1460,28 @@ pub(crate) fn get_variable_flow(
     };
     let mut out = Vec::new();
     stack_analysis(&ctx, root, &mut out);
+    out
+}
+
+/// Returns the references and assignments that `t` itself contributes to
+/// [`get_variable_flow`], without the scopes around them. The flow of a
+/// subtree consists of exactly these entries for each of its tokens.
+pub(crate) fn token_variable_flow(
+    parent_map: &IdMap<Id, Id>,
+    id_map: &IdMap<Id, Token>,
+    has_lastpipe: bool,
+    t: &Token,
+) -> Vec<StackData> {
+    let ctx = FlowCtx {
+        parent_map,
+        id_map,
+        has_lastpipe,
+    };
+    let mut out: Vec<StackData> = get_referenced_variables(&ctx, t)
+        .into_iter()
+        .map(|(b, tok, name)| StackData::Reference(b, tok, name))
+        .collect();
+    push_modified(t, &mut out);
     out
 }
 
@@ -2482,9 +2595,99 @@ mod printf_format_tests {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
-    use super::{determine_shell, get_variables_from_literal};
+    use super::{
+        determine_shell, fix_depth, get_variables_from_literal, is_quote_free,
+        is_quote_free_context, is_quote_free_element,
+    };
     use crate::dialect::Dialect;
     use crate::interface::Shell;
+
+    #[test]
+    fn is_quote_free_equals_the_plain_climb() {
+        for shell in [crate::interface::Shell::Bash, crate::interface::Shell::Sh] {
+            let params =
+                crate::test_support::params_for_shell(crate::test_support::QUOTE_CONTEXTS, shell);
+            let climb = |t| {
+                if is_quote_free_element(&params, t) {
+                    return true;
+                }
+                let mut node = params.parent(t);
+                while let Some(a) = node {
+                    if let Some(b) = is_quote_free_context(&params, a) {
+                        return b;
+                    }
+                    node = params.parent(a);
+                }
+                false
+            };
+            let (mut free, mut bound) = (0, 0);
+            // Twice, so that the second round answers from the memo alone.
+            for _ in 0..2 {
+                for t in params.id_map.values() {
+                    let expected = climb(t);
+                    assert_eq!(is_quote_free(&params, t), expected, "{t:?}");
+                    if expected { free += 1 } else { bound += 1 }
+                }
+            }
+            assert!(free > 20 && bound > 20);
+        }
+    }
+
+    #[test]
+    fn list_head_equals_the_plain_walk() {
+        let params = crate::test_support::params_for(
+            "a && b && c || d || e && f && g\n{ x || y; } && z\nh || i\nj",
+        );
+        let walk = |t: &crate::ast::Token| {
+            let kind = std::mem::discriminant(&*t.inner);
+            let mut cur = t.clone();
+            loop {
+                let lhs = match &*cur.inner {
+                    crate::ast::InnerToken::T_AndIf { lhs, .. }
+                    | crate::ast::InnerToken::T_OrIf { lhs, .. } => lhs.clone(),
+                    _ => return cur,
+                };
+                if std::mem::discriminant(&*lhs.inner) != kind {
+                    return lhs;
+                }
+                cur = lhs;
+            }
+        };
+        let mut lists = 0;
+        for _ in 0..2 {
+            for t in params.id_map.values() {
+                assert_eq!(params.list_head(t).id(), walk(t).id(), "{t:?}");
+                if matches!(
+                    &*t.inner,
+                    crate::ast::InnerToken::T_AndIf { .. } | crate::ast::InnerToken::T_OrIf { .. }
+                ) {
+                    lists += 1;
+                }
+            }
+        }
+        assert_eq!(lists, 2 * 9);
+    }
+
+    #[test]
+    fn fix_depth_is_the_parent_path_length() {
+        let params = crate::test_support::params_for(
+            "f() { a=$(( (1 + (2)) )) cmd \"${x:-${y:-$(echo $z)}}\"; }\nf | g && h",
+        );
+        let climb = |id| {
+            let mut depth = 1;
+            let mut cur = id;
+            while let Some(&up) = params.parent_map.get(&cur) {
+                depth += 1;
+                cur = up;
+            }
+            depth
+        };
+        assert!(params.id_map.len() > 30);
+        for &id in params.id_map.keys() {
+            assert_eq!(fix_depth(&params, id), climb(id));
+        }
+        assert_eq!(fix_depth(&params, crate::ast::Id(i32::MAX)), 1);
+    }
 
     #[test]
     fn bats_run_variable_flow() {

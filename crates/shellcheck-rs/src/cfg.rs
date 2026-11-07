@@ -2101,16 +2101,6 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
 
 /// `removeUnnecessaryStructuralNodes`, also returning its `recursiveRemapping`.
 fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
-    fn recursive_lookup(map: &IdMap<Node, Node>, mut node: Node) -> Node {
-        while let Some(&x) = map.get(&node) {
-            if x == node {
-                break;
-            }
-            node = x;
-        }
-        node
-    }
-
     let (nodes, edges, mapping, association) = g;
 
     let is_regular_edge = |e: &(Node, Node, CFEdge)| matches!(e.2, CFEdge::CFEFlow);
@@ -2158,10 +2148,24 @@ fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
         remapping.insert(k, v); // last wins, matching sorted fromList
     }
 
-    let recursive_remapping: IdMap<Node, Node> = remapping
-        .keys()
-        .map(|c| (*c, recursive_lookup(&remapping, *c)))
-        .collect();
+    // `recursiveLookup` follows the remapping to a node that it does not
+    // move. The remapping only moves a node to a smaller node. In ascending
+    // order, every node's target is therefore resolved already, and each
+    // chain is walked once.
+    let mut sorted: Vec<Node> = remapping.keys().copied().collect();
+    sorted.sort_unstable();
+    let mut resolved: IdMap<Node, Node> = IdMap::default();
+    for c in sorted {
+        let next = remapping[&c];
+        let end = if next == c {
+            c
+        } else {
+            resolved.get(&next).copied().unwrap_or(next)
+        };
+        resolved.insert(c, end);
+    }
+    let recursive_remapping: IdMap<Node, Node> =
+        remapping.keys().map(|c| (*c, resolved[c])).collect();
 
     let filtered_nodes: Vec<(Node, CFNode)> = nodes
         .into_iter()

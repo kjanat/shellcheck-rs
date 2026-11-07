@@ -93,9 +93,15 @@ pub fn check_script_as(
         );
         let analysis = analytics::analyze_with(&params, &optional);
         let policy = dialect_policy::Policy::of(checked_as, &params.root);
+        let mut silencers = Silencers::default();
         for tc in analysis {
-            if annotation_ignores(&params, tc.id, tc.comment.code, spec.check_sourced)
-                || !policy.keeps(tc.comment.code)
+            if annotation_ignores(
+                &params,
+                &mut silencers,
+                tc.id,
+                tc.comment.code,
+                spec.check_sourced,
+            ) || !policy.keeps(tc.comment.code)
             {
                 continue;
             }
@@ -109,11 +115,12 @@ pub fn check_script_as(
     // Filter by severity / include / exclude.
     positioned.retain(|pc| should_include(pc, spec));
 
-    // nub: remove exact duplicates, preserving first occurrence.
-    positioned = nub(positioned);
-
-    // sort by (file, line, column, severity, code, message).
-    positioned.sort_by_key(order_key);
+    // Sort by (file, line, column, severity, code, message), then nub away
+    // exact duplicates and preserve the first occurrence. Upstream nubs
+    // first, with the same result. Duplicates share a key, and the stable
+    // sort leaves each run of one key in its original order.
+    positioned.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+    positioned = nub_sorted(positioned);
 
     CheckResult {
         filename: spec.filename.clone(),
@@ -161,16 +168,18 @@ fn clarify_parse_errors(notes: &mut Vec<ParseNote>) {
 /// (`shouldIgnoreFor _ T_Include {} = not $ asCheckSourced asSpec`).
 fn annotation_ignores(
     params: &analyzer_lib::Parameters,
+    silencers: &mut Silencers,
     id: Id,
     code: Code,
     check_sourced: bool,
 ) -> bool {
     use crate::ast::{Annotation, InnerToken};
-    let mut cur = id;
     // Walk from the comment's token up to the root via the parent map, checking
-    // each ancestor token (getPath semantics).
-    while let Some(&pid) = params.parent_map.get(&cur) {
-        if let Some(tok) = params.id_map.get(&pid) {
+    // each ancestor token (getPath semantics). Only annotations and includes
+    // can decide, and the walk visits only those.
+    let mut at = silencers.nearest(params, id);
+    while let Some(sid) = at {
+        if let Some(tok) = params.id_map.get(&sid) {
             if !check_sourced && matches!(&*tok.inner, InnerToken::T_Include(_)) {
                 return true;
             }
@@ -185,9 +194,47 @@ fn annotation_ignores(
                 }
             }
         }
-        cur = pid;
+        at = silencers.nearest(params, sid);
     }
     false
+}
+
+/// Maps an id to its nearest strict ancestor that is a `T_Annotation` or a
+/// `T_Include`. [`annotation_ignores`] asks only about those tokens.
+/// Lookups fill the map, and every token a lookup passes gets the same
+/// answer.
+#[derive(Default)]
+struct Silencers(crate::idhash::IdMap<Id, Option<Id>>);
+
+impl Silencers {
+    fn nearest(&mut self, params: &analyzer_lib::Parameters, id: Id) -> Option<Id> {
+        use crate::ast::InnerToken;
+        let silences = |pid: &Id| {
+            params.id_map.get(pid).is_some_and(|t| {
+                matches!(
+                    &*t.inner,
+                    InnerToken::T_Annotation { .. } | InnerToken::T_Include(_)
+                )
+            })
+        };
+        let mut climbed = Vec::new();
+        let mut cur = id;
+        let answer = loop {
+            if let Some(&known) = self.0.get(&cur) {
+                break known;
+            }
+            climbed.push(cur);
+            match params.parent_map.get(&cur) {
+                None => break None,
+                Some(pid) if silences(pid) => break Some(*pid),
+                Some(&pid) => cur = pid,
+            }
+        };
+        for c in climbed {
+            self.0.insert(c, answer);
+        }
+        answer
+    }
 }
 
 /// `readConfigFile`'s failure branch:
@@ -255,26 +302,36 @@ fn should_include(pc: &PositionedComment, spec: &CheckSpec) -> bool {
     )
 }
 
-fn nub(v: Vec<PositionedComment>) -> Vec<PositionedComment> {
+/// `nub` for comments sorted by [`order_key`]. A duplicate can only follow
+/// its first occurrence inside their run of equal keys.
+fn nub_sorted(v: Vec<PositionedComment>) -> Vec<PositionedComment> {
     let mut out: Vec<PositionedComment> = Vec::with_capacity(v.len());
+    // The index in `out` where the run of the last comment's key begins.
+    let mut run = 0;
     for pc in v {
-        if !out.iter().any(|x| x == &pc) {
+        if out
+            .get(run)
+            .is_some_and(|first| order_key(first) != order_key(&pc))
+        {
+            run = out.len();
+        }
+        if !out[run..].iter().any(|x| x == &pc) {
             out.push(pc);
         }
     }
     out
 }
 
-type OrderKey = (String, i64, i64, Severity, Code, String);
+type OrderKey<'a> = (&'a str, i64, i64, Severity, Code, &'a str);
 
-fn order_key(pc: &PositionedComment) -> OrderKey {
+fn order_key(pc: &PositionedComment) -> OrderKey<'_> {
     (
-        pc.start.file.clone(),
+        &pc.start.file,
         pc.start.line,
         pc.start.column,
         pc.comment.severity,
         pc.comment.code,
-        pc.comment.message.clone(),
+        &pc.comment.message,
     )
 }
 
@@ -1553,6 +1610,103 @@ mod tests {
 
     use crate::analyzer_lib::INJECTED_DATAFLOW_ERROR;
     use crate::cfg::InternalError;
+
+    #[test]
+    fn annotation_ignores_equals_the_plain_climb() {
+        use crate::ast::{Annotation, InnerToken};
+        let params = crate::test_support::params_for(
+            "# shellcheck disable=SC2034\n\
+             f() {\n\
+               # shellcheck disable=SC2086\n\
+               { echo $a; x=1\n\
+                 # shellcheck disable=SC2154,SC2016\n\
+                 echo '$b' $c; }\n\
+               echo $d\n\
+             }\n\
+             # shellcheck disable=SC2046\n\
+             echo $(ls) $e\n",
+        );
+        let climb = |id, code| {
+            let mut cur = id;
+            while let Some(&pid) = params.parent_map.get(&cur) {
+                if let Some(tok) = params.id_map.get(&pid)
+                    && let InnerToken::T_Annotation { annotations, .. } = &*tok.inner
+                    && annotations.iter().any(|a| {
+                        matches!(a, Annotation::DisableComment(from, to) if code >= *from && code < *to)
+                    })
+                {
+                    return true;
+                }
+                cur = pid;
+            }
+            false
+        };
+        let mut silencers = Silencers::default();
+        let (mut ignored, mut reported) = (0, 0);
+        for _ in 0..2 {
+            for &id in params.id_map.keys() {
+                for code in [2016, 2034, 2046, 2086, 2154, 2155] {
+                    let expected = climb(id, code);
+                    assert_eq!(
+                        annotation_ignores(&params, &mut silencers, id, code, true),
+                        expected,
+                        "{id:?} SC{code}"
+                    );
+                    if expected {
+                        ignored += 1;
+                    } else {
+                        reported += 1;
+                    }
+                }
+            }
+        }
+        assert!(ignored > 50 && reported > 50);
+    }
+
+    #[test]
+    fn sorting_then_nub_equals_upstream_nub_then_sort() {
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |bound: i64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            i64::try_from(seed >> 33).unwrap_or(0) % bound
+        };
+        let at = |line, column| Position {
+            file: String::new(),
+            line,
+            column,
+        };
+        for _ in 0..300 {
+            // The values come from small ranges. Keys repeat, and comments with
+            // one key differ only in their end or code.
+            let comments: Vec<PositionedComment> = (0..next(40))
+                .map(|_| {
+                    let (line, column) = (1 + next(2), 1 + next(3));
+                    PositionedComment {
+                        start: at(line, column),
+                        end: at(line, column + next(2)),
+                        comment: Comment {
+                            severity: Severity::WarningC,
+                            code: 2000 + next(2),
+                            message: String::new(),
+                        },
+                        fix: None,
+                    }
+                })
+                .collect();
+            let mut upstream: Vec<PositionedComment> = Vec::new();
+            for pc in &comments {
+                if !upstream.contains(pc) {
+                    upstream.push(pc.clone());
+                }
+            }
+            upstream.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+            let mut sorted = comments;
+            sorted.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+            assert_eq!(nub_sorted(sorted), upstream);
+        }
+    }
 
     fn with_dataflow_error(spec: &CheckSpec) -> CheckResult {
         INJECTED_DATAFLOW_ERROR.with(|e| e.set(Some(InternalError("Missing root"))));

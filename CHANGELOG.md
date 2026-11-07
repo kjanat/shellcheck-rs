@@ -38,6 +38,9 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   `if`/loops, functions, `$(..)`, `${..}`, `$((..))`, `[[ .. ]]` and long
   `&&`/`||`/`!` chains. The WASM module checks them in Node, browsers,
   wasmtime and wazero alike, where a few hundred levels used to trap
+- Deep nesting and long chains cost time and memory in proportion to the
+  script: 10,000 nested functions took 107 s and take 0.4 s, and 10,000 nested
+  `$(..)` took 6.7 s and 673 MB and take 0.8 s and 300 MB
 
 ## v1.0.0 - 2026-10-15
 

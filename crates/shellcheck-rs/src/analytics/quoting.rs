@@ -554,18 +554,11 @@ fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> 
 }
 
 fn is_strictly_quote_free(params: &Parameters, t: &Token) -> bool {
-    if is_quote_free_element(params, t) {
-        return true;
-    }
     // msum over the ancestors (NE.tail of getPath): first `Just` wins.
-    let mut cur = t;
-    while let Some(p) = params.parent(cur) {
-        if let Some(v) = is_quote_free_context_strict(params, p) {
-            return v;
-        }
-        cur = p;
-    }
-    false
+    is_quote_free_element(params, t)
+        || params.first_decision(&params.strict_quote_free_contexts, params.parent(t), |a| {
+            is_quote_free_context_strict(params, a)
+        })
 }
 
 /// `` re = \$[{(0-9a-zA-Z_]|`[^`]+` ``
@@ -999,6 +992,35 @@ pub(super) fn check_variable_braces(params: &Parameters, t: &Token, out: &mut Ou
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn is_strictly_quote_free_equals_the_plain_climb() {
+        for shell in [Shell::Bash, Shell::Sh] {
+            let params = params_for_shell(QUOTE_CONTEXTS, shell);
+            let climb = |t| {
+                if is_quote_free_element(&params, t) {
+                    return true;
+                }
+                let mut cur = t;
+                while let Some(p) = params.parent(cur) {
+                    if let Some(v) = is_quote_free_context_strict(&params, p) {
+                        return v;
+                    }
+                    cur = p;
+                }
+                false
+            };
+            let (mut free, mut bound) = (0, 0);
+            for _ in 0..2 {
+                for t in params.id_map.values() {
+                    let expected = climb(t);
+                    assert_eq!(is_strictly_quote_free(&params, t), expected, "{t:?}");
+                    if expected { free += 1 } else { bound += 1 }
+                }
+            }
+            assert!(free > 20 && bound > 20);
+        }
+    }
 
     #[test]
     fn prop_checkUnquotedExpansions1() {

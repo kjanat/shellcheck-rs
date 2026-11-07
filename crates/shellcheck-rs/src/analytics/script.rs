@@ -4,10 +4,10 @@ use crate::analyzer_lib::is_sourced;
 use crate::analyzer_lib::is_unqualified_command;
 use crate::analyzer_lib::{
     Out, Parameters, StackData, err, err_with_fix, fix_with, get_command_basename,
-    get_command_name, get_command_token_or_this, get_path, get_variable_flow, info, replace_start,
-    should_ignore_code, warn,
+    get_command_name, get_command_token_or_this, info, path_iter, replace_start,
+    should_ignore_code, token_variable_flow, warn,
 };
-use crate::ast::{Annotation, Id, InnerToken, Token};
+use crate::ast::{Annotation, Id, InnerToken, Token, Visit};
 use crate::ast_lib;
 use crate::ast_lib::basename;
 use crate::ast_lib::e4m;
@@ -20,7 +20,7 @@ use crate::cfg::is_variable_name;
 use crate::interface::Shell;
 use crate::regex_lib::mk_regex;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(super) fn check_shebang_parameters(_params: &Parameters, t: &Token, out: &mut Out) {
     use std::sync::OnceLock;
@@ -93,32 +93,12 @@ pub(super) fn check_unpassed_in_functions(params: &Parameters, root: &Token, out
     // functionMap: name -> function token, for functions that reference a
     // positional parameter directly and never assign one.
     let mut function_map: HashMap<String, Token> = HashMap::new();
-    root.visit_preorder(&mut |t| {
-        if let InnerToken::T_Function { name, body, .. } = &*t.inner {
-            let flow = get_variable_flow(
-                &params.parent_map,
-                &params.id_map,
-                params.has_lastpipe(),
-                body,
-            );
-            let references_positional = flow.iter().any(|sd| match sd {
-                StackData::Reference(_, tok, str) => {
-                    is_positional(str)
-                        && is_direct_child_of(params, tok, t)
-                        && !has_default_value(tok)
-                }
-                _ => false,
-            });
-            let assigns_positional = flow.iter().any(|sd| match sd {
-                StackData::Assignment(_, _, str, _) => is_positional(str),
-                _ => false,
-            });
-            if references_positional && !assigns_positional {
-                // Map.fromList keeps the last entry for a key in preorder.
-                function_map.insert(name.clone(), t.clone());
-            }
+    for (name, t, references_positional, assigns_positional) in positional_use(params, root) {
+        if references_positional && !assigns_positional {
+            // Map.fromList keeps the last entry for a key in preorder.
+            function_map.insert(name, t);
         }
-    });
+    }
 
     // referenceList: (name, argumentless, callsite) for every call of a
     // tracked function.
@@ -229,22 +209,47 @@ pub(super) fn check_shebang(params: &Parameters, t: &Token, out: &mut Out) {
     }
 }
 
+/// Calls `f` on every token in preorder, with whether the token is a Bats
+/// test or lies inside one. The walk counts the open tests, so no token has
+/// to search its own path.
+fn visit_marking_bats_tests<'a>(root: &'a Token, mut f: impl FnMut(&'a Token, bool)) {
+    let is_test = |t: &Token| matches!(&*t.inner, InnerToken::T_BatsTest { .. });
+    let mut open = 0usize;
+    let mut pending = vec![Visit::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        match step {
+            Visit::Enter(t) => {
+                if is_test(t) {
+                    open += 1;
+                }
+                f(t, open > 0);
+                pending.push(Visit::Leave(t));
+                t.inner.for_each_child(|c| children.push(c));
+                pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+                children.clear();
+            }
+            Visit::Leave(t) => {
+                if is_test(t) {
+                    open -= 1;
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out: &mut Out) {
     let Some(cfga) = params.cfg_analysis.as_ref() else {
         return;
     };
 
-    let in_bats_test = |t: &Token| {
-        crate::analyzer_lib::path_iter(params, t)
-            .any(|node| matches!(&*node.inner, InnerToken::T_BatsTest { .. }))
-    };
     let mut funcs: BTreeMap<String, Vec<(Id, bool)>> = BTreeMap::new();
-    root.visit_preorder(&mut |t| {
+    visit_marking_bats_tests(root, |t, in_bats_test| {
         if let InnerToken::T_Function { name, .. } = &*t.inner {
             funcs
                 .entry(name.clone())
                 .or_default()
-                .push((t.id(), in_bats_test(t)));
+                .push((t.id(), in_bats_test));
         }
     });
 
@@ -253,7 +258,7 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
         return;
     }
 
-    root.visit_preorder(&mut |t| {
+    visit_marking_bats_tests(root, |t, in_bats_test| {
         if let InnerToken::T_SimpleCommand { words, .. } = &*t.inner
             && let Some(cmd) = words.first()
         {
@@ -261,7 +266,7 @@ pub(super) fn check_use_before_definition(params: &Parameters, root: &Token, out
             (|| {
                 let name = crate::ast_lib::get_literal_string(cmd)?;
                 let invocations = funcs.get(&name)?;
-                if in_bats_test(t) && invocations.iter().any(|&(_, in_test)| !in_test) {
+                if in_bats_test && invocations.iter().any(|&(_, in_test)| !in_test) {
                     return None;
                 }
                 // Is the function definitely being defined later?
@@ -391,15 +396,15 @@ pub(super) fn check_command_is_unreachable(params: &Parameters, t: &Token, out: 
                 if state.state_is_reachable() {
                     return None;
                 }
-                if is_sourced(params, t) {
-                    return None;
-                }
-                let path = get_path(params, t);
-                if path
-                    .iter()
+                // All guards are upstream's. The ancestor walk runs first. It usually
+                // stops at the nearest ancestor, and `isSourced` always walks to the root.
+                if path_iter(params, t)
                     .skip(1)
                     .any(|a| is_unreachable(params, a) || is_unreachable_function(params, a))
                 {
+                    return None;
+                }
+                if is_sourced(params, t) {
                     return None;
                 }
                 info(
@@ -411,22 +416,21 @@ pub(super) fn check_command_is_unreachable(params: &Parameters, t: &Token, out: 
                 Some(())
             })();
         }
-        InnerToken::T_Function { .. } => {
-            let path = get_path(params, t);
+        // As in Haskell, the path is walked lazily. Only an unreachable function
+        // walks it, and only up to the first unreachable function around it.
+        InnerToken::T_Function { .. }
             if is_unreachable_function(params, t)
-                && !path
-                    .iter()
+                && !path_iter(params, t)
                     .skip(1)
                     .any(|a| is_unreachable_function(params, a))
-                && !is_sourced(params, t)
-            {
-                info(
-                    out,
-                    t.id(),
-                    2329,
-                    "This function is never invoked. Check usage (or ignored if invoked indirectly).",
-                );
-            }
+                && !is_sourced(params, t) =>
+        {
+            info(
+                out,
+                t.id(),
+                2329,
+                "This function is never invoked. Check usage (or ignored if invoked indirectly).",
+            );
         }
         _ => {}
     }
@@ -534,18 +538,109 @@ fn has_default_value(t: &Token) -> bool {
     }
 }
 
-/// `isDirectChildOf child parent`: the nearest enclosing function or script of
-/// `child` is `parent`.
-fn is_direct_child_of(params: &Parameters, child: &Token, parent: &Token) -> bool {
-    get_path(params, child)
-        .iter()
-        .find(|x| {
-            matches!(
-                &*x.inner,
-                InnerToken::T_Function { .. } | InnerToken::T_Script { .. }
-            )
-        })
-        .is_some_and(|f| f.id() == parent.id())
+/// Returns one entry per function, in preorder. An entry holds the
+/// function's name, the function, whether its body references a positional
+/// parameter that `isDirectChildOf` the function without `hasDefaultValue`,
+/// and whether its body assigns one.
+///
+/// Upstream runs `getVariableFlow` on each function body, and nested
+/// functions make that quadratic. The flow of a body holds the references
+/// and assignments of each of its tokens. One walk over the whole tree
+/// therefore finds the same answers. A reference counts for the function or
+/// script nearest to it, and an assignment counts for every function around
+/// it.
+fn positional_use(params: &Parameters, root: &Token) -> Vec<(String, Token, bool, bool)> {
+    /// A function or script the walk is inside.
+    struct Frame {
+        id: Id,
+        function: Option<usize>,
+        assigns: bool,
+    }
+    let is_scope = |t: &Token| {
+        matches!(
+            &*t.inner,
+            InnerToken::T_Function { .. } | InnerToken::T_Script { .. }
+        )
+    };
+    let mut found: Vec<(String, Token, bool, bool)> = Vec::new();
+    // The functions and scripts nearest to a positional reference.
+    let mut referenced: HashSet<Id> = HashSet::new();
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut pending = vec![Visit::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        let t = match step {
+            Visit::Enter(t) => t,
+            Visit::Leave(t) => {
+                if is_scope(t)
+                    && let Some(frame) = frames.pop()
+                {
+                    if let Some(i) = frame.function {
+                        found[i].3 = frame.assigns;
+                    }
+                    if let Some(outer) = frames.last_mut() {
+                        outer.assigns |= frame.assigns;
+                    }
+                }
+                continue;
+            }
+        };
+        let flow =
+            token_variable_flow(&params.parent_map, &params.id_map, params.has_lastpipe(), t);
+        for entry in &flow {
+            match entry {
+                StackData::Reference(_, tok, str)
+                    if is_positional(str) && !has_default_value(tok) =>
+                {
+                    // `isDirectChildOf`. The search walks up from the reference to
+                    // the first function or script. Above `t`, the innermost open
+                    // frame is that function or script.
+                    let mut x: &Token = tok;
+                    let nearest = loop {
+                        if is_scope(x) {
+                            break Some(x.id());
+                        }
+                        if x.id() == t.id() {
+                            break frames.last().map(|f| f.id);
+                        }
+                        match params.parent(x) {
+                            Some(up) => x = up,
+                            None => break None,
+                        }
+                    };
+                    referenced.extend(nearest);
+                }
+                StackData::Assignment(_, _, str, _) if is_positional(str) => {
+                    if let Some(frame) = frames.last_mut() {
+                        frame.assigns = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if is_scope(t) {
+            let function = match &*t.inner {
+                InnerToken::T_Function { name, .. } => {
+                    found.push((name.clone(), t.clone(), false, false));
+                    Some(found.len() - 1)
+                }
+                _ => None,
+            };
+            frames.push(Frame {
+                id: t.id(),
+                function,
+                assigns: false,
+            });
+        }
+        pending.push(Visit::Leave(t));
+        t.inner.for_each_child(|c| children.push(c));
+        pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+        children.clear();
+    }
+    for entry in &mut found {
+        entry.2 = referenced.contains(&entry.1.id());
+    }
+    found
 }
 
 /// `groupByLink`: group consecutive elements where each adjacent pair links.
@@ -734,11 +829,7 @@ fn is_condition(t: &Token) -> bool {
     }
 }
 
-fn used_unconditionally(
-    params: &Parameters,
-    t: &Token,
-    test_ids: &std::collections::BTreeSet<Id>,
-) -> bool {
+fn used_unconditionally(params: &Parameters, t: &Token, test_ids: &im_rc::OrdSet<Id>) -> bool {
     let Some(cfga) = params.cfg_analysis.as_ref() else {
         return false;
     };

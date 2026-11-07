@@ -24,6 +24,14 @@ pub fn message_of(script: &str, code: Code) -> String {
     )
 }
 
+/// A script with every kind of quote-free context and long undecided
+/// chains. Tests compare memoized climbs with plain climbs on it.
+pub const QUOTE_CONTEXTS: &str = "[ -n $a -a -n $b -a -n $c ]\n\
+    [[ $a && $b && ( $c || $d ) ]]\nx=$a y=\"$b\" cmd $c > $d\n\
+    for i in $a $b; do echo \"${x:-$y}\" $(( $z + ( $w ) )); done\n\
+    case $a in $b) echo $c <<< $d;; esac\nselect s in $a; do :; done\n\
+    export e=$a; local l=$b";
+
 pub fn params_for(script: &str) -> Parameters {
     let p = parse_script("test", script);
     let root = p.root.expect("parse produced no root");
