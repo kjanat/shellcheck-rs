@@ -202,8 +202,8 @@ jobs:
 
       - name: Check the port against the recorded outcomes
         shell: bash -o pipefail {0}
+        env: { status: "0" }
         run: |
-          status=0
           cargo validity 2>&1 | tee validity.log || status=$?
           {
             echo '### Validity check'

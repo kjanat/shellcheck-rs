@@ -8,7 +8,8 @@
 # Do not delete this file: it is the single source of truth for the project's
 # tools and is checked into the repo.
 
-min_version = "2026.11.3"
+min_version.soft = "2026.11.3"
+min_version.hard = "2026.11.2"
 
 [tools]
 cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
