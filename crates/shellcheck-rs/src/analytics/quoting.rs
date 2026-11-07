@@ -1718,7 +1718,7 @@ mod tests {
         assert!(!node_emits(check_tilde_in_quotes, "awk '$0 ~ /foo/'"));
     }
 
-    // ---- SC2026/2027/2140 checkInexplicablyUnquoted ----
+    // SC2026/2027/2140 checkInexplicablyUnquoted
 
     #[test]
     fn prop_checkInexplicablyUnquoted1() {
@@ -1813,7 +1813,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2083 checkLonelyDotDash ----
+    // SC2083 checkLonelyDotDash
 
     #[test]
     fn prop_checkSpuriousExpansion1() {
@@ -1844,7 +1844,7 @@ mod tests {
         assert!(node_emits(check_spurious_expansion, "r[]=x $()"));
     }
 
-    // ---- SC2007 checkDollarBrackets ----
+    // SC2007 checkDollarBrackets
 
     #[test]
     fn prop_checkDollarQuoteParen1() {
@@ -1866,7 +1866,7 @@ mod tests {
         assert!(!node_emits(check_dollar_quote_paren, "$\"..\""));
     }
 
-    // ---- SC2256 checkTranslatedStringVariable ----
+    // SC2256 checkTranslatedStringVariable
 
     #[test]
     fn prop_checkTranslatedStringVariable1() {
@@ -1905,7 +1905,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2188/2189 checkRedirectedNowhere ----
+    // SC2188/2189 checkRedirectedNowhere
 
     #[test]
     fn prop_checkUnquotedParameterExpansionPattern1() {
@@ -1939,7 +1939,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2302/2303 checkArrayValueUsedAsIndex ----
+    // SC2302/2303 checkArrayValueUsedAsIndex
 
     #[test]
     fn prop_checkTildeInPath1() {
@@ -1956,7 +1956,7 @@ mod tests {
         assert!(!emits(check_tilde_in_path, "PATH=~/bin"));
     }
 
-    // ---- checkUnsupported ----
+    // checkUnsupported
 
     #[test]
     fn prop_checkUnquotedN() {

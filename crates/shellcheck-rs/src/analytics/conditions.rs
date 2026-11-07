@@ -3101,7 +3101,7 @@ mod tests {
         assert!(emits(check_comparison_with_leading_x, "[ X$foo != Xbar ]"));
     }
 
-    // ---- SC2001 checkEchoSed ----
+    // SC2001 checkEchoSed
 
     #[test]
     fn prop_checkTestArgumentSplitting1() {
@@ -3226,9 +3226,9 @@ mod tests {
         assert!(emits(check_test_argument_splitting, "[ 6 -eq 2*3 ]"));
     }
 
-    // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere ----
+    // SC2216/2217/2259/2260/2261 checkPipeToNowhere
 
-    // ---- SC2233/2234/2235 checkSubshelledTests ----
+    // SC2233/2234/2235 checkSubshelledTests
 
     #[test]
     fn prop_checkSubshelledTests1() {
@@ -3284,7 +3284,7 @@ mod tests {
         assert!(emits(check_single_bracket_operators, "[ test =~ foo ]"));
     }
 
-    // ---- SC2075 checkDoubleBracketOperators ----
+    // SC2075 checkDoubleBracketOperators
 
     #[test]
     fn prop_checkDoubleBracketOperators1() {
@@ -3296,7 +3296,7 @@ mod tests {
         assert!(!emits(check_double_bracket_operators, "[[ foo < bar ]]"));
     }
 
-    // ---- SC2107/2108/2109/2110/2166 checkConditionalAndOrs ----
+    // SC2107/2108/2109/2110/2166 checkConditionalAndOrs
 
     #[test]
     fn prop_checkConditionalAndOrs1() {
@@ -3323,7 +3323,7 @@ mod tests {
         assert!(emits(check_conditional_and_ors, "[ -z 3 -o a = b ]"));
     }
 
-    // ---- SC2049 checkGlobbedRegex ----
+    // SC2049 checkGlobbedRegex
 
     #[test]
     fn prop_checkGlobbedRegex1() {
@@ -3365,7 +3365,7 @@ mod tests {
         assert!(!emits(check_globbed_regex, "[[ $foo =~ x\\* ]]"));
     }
 
-    // ---- SC2050/2193 checkConstantIfs ----
+    // SC2050/2193 checkConstantIfs
 
     #[test]
     fn prop_checkConstantIfs1() {
@@ -3432,7 +3432,7 @@ mod tests {
         assert!(emits(check_constant_ifs, "[[ '~' == x ]]"));
     }
 
-    // ---- SC2158/2159/2160/2161/2078 checkConstantNullary ----
+    // SC2158/2159/2160/2161/2078 checkConstantNullary
 
     #[test]
     fn prop_checkConstantNullary() {
@@ -3469,7 +3469,7 @@ mod tests {
         assert!(emits_code(check_constant_nullary, "[ false ]", 2158));
     }
 
-    // ---- SC2057/2058 checkValidCondOps ----
+    // SC2057/2058 checkValidCondOps
 
     #[test]
     fn prop_checkValidCondOps1() {
@@ -3496,7 +3496,7 @@ mod tests {
         assert!(!emits(check_valid_cond_ops, "[[ ! -v foo ]]"));
     }
 
-    // ---- SC2053/2081/2330 checkComparisonAgainstGlob ----
+    // SC2053/2081/2330 checkComparisonAgainstGlob
 
     #[test]
     fn prop_checkComparisonAgainstGlob() {
@@ -3540,7 +3540,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2254 checkCaseAgainstGlob ----
+    // SC2254 checkCaseAgainstGlob
 
     #[test]
     fn prop_checkCaseAgainstGlob1() {
@@ -3566,7 +3566,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2055/2056/2252 checkOrNeq ----
+    // SC2055/2056/2252 checkOrNeq
 
     #[test]
     fn prop_checkOrNeq1() {
@@ -3631,7 +3631,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2333/2334 checkAndEq ----
+    // SC2333/2334 checkAndEq
 
     #[test]
     fn prop_checkAndEq1() {
@@ -3718,7 +3718,7 @@ mod tests {
         assert!(emits(check_and_eq, "[ \"$a\" = 1 ] && x && [ \"$a\" = 2 ]"));
     }
 
-    // ---- SC2204/2205 checkSubshellAsTest ----
+    // SC2204/2205 checkSubshellAsTest
 
     #[test]
     fn prop_checkSubshellAsTest1() {
@@ -3758,7 +3758,7 @@ mod tests {
         assert!(emits(check_subshell_as_test, "( ! -d file )"));
     }
 
-    // ---- SC2212 checkEmptyCondition ----
+    // SC2212 checkEmptyCondition
 
     #[test]
     fn prop_checkEmptyCondition1() {
@@ -3770,7 +3770,7 @@ mod tests {
         assert!(!emits(check_empty_condition, "[ foo -o bar ]"));
     }
 
-    // ---- SC2265/2266 checkBadTestAndOr ----
+    // SC2265/2266 checkBadTestAndOr
 
     #[test]
     fn prop_checkBadTestAndOr1() {
@@ -3787,7 +3787,7 @@ mod tests {
         assert!(emits(check_bad_test_and_or, "[ x ] | [ y ]"));
     }
 
-    // ---- SC2283/2284/2285 checkSecondArgIsComparison ----
+    // SC2283/2284/2285 checkSecondArgIsComparison
 
     #[test]
     fn prop_checkSecondArgIsComparison1() {
@@ -3839,7 +3839,7 @@ mod tests {
         assert!(emits(check_second_arg_is_comparison, "var +=$(foo)"));
     }
 
-    // ---- SC2171 checkTrailingBracket ----
+    // SC2171 checkTrailingBracket
 
     #[test]
     fn prop_checkTrailingBracket1() {
@@ -3869,7 +3869,7 @@ mod tests {
         assert!(!emits(check_trailing_bracket, "run bar ']'"));
     }
 
-    // ---- SC2331 checkUnaryTestA ----
+    // SC2331 checkUnaryTestA
 
     #[test]
     fn prop_checkUnaryTestA1() {
@@ -3886,7 +3886,7 @@ mod tests {
         assert!(!emits(check_unary_test_a, "[ foo -a bar ]"));
     }
 
-    // ---- SC2194/2195/2221/2222 checkUnmatchableCases ----
+    // SC2194/2195/2221/2222 checkUnmatchableCases
 
     #[test]
     fn prop_checkUnmatchableCases1() {
@@ -4039,7 +4039,7 @@ mod tests {
         }
     }
 
-    // ---- SC2101/2102 checkCharRangeGlob ----
+    // SC2101/2102 checkCharRangeGlob
 
     #[test]
     fn prop_checkCharRangeGlob1() {

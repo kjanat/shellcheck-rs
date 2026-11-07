@@ -50,7 +50,7 @@ pub fn unlines(xs: &[String]) -> String {
     s
 }
 
-// --- Ranged / overlap -------------------------------------------------------
+// Ranged / overlap
 
 /// `overlap x y = xEnd > yStart && yEnd > xStart` over `Position` order.
 fn overlap(x: &Replacement, y: &Replacement) -> bool {
@@ -100,7 +100,7 @@ pub fn map_positions<F: Fn(&Position) -> Position>(fix: &Fix, f: F) -> Fix {
     }
 }
 
-// --- Tab realignment (removeTabStops) ---------------------------------------
+// Tab realignment (removeTabStops)
 
 /// `real`: map a virtual column (tabstop 8) to a real character column on
 /// `line`. Mirrors the Haskell recursion exactly.
@@ -190,7 +190,7 @@ pub fn make_non_virtual(comments: &[PositionedComment], contents: &str) -> Vec<P
         .collect()
 }
 
-// --- Prefix-sum tree (PSTree) -----------------------------------------------
+// Prefix-sum tree (PSTree)
 
 enum PSTree {
     Leaf,
@@ -268,7 +268,7 @@ impl PSTree {
     }
 }
 
-// --- Replacement application ------------------------------------------------
+// Replacement application
 
 /// `n` as an index into `len` items, clamped to `0..=len`.
 fn clamp_index(n: i64, len: usize) -> usize {

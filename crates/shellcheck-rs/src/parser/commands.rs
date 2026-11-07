@@ -196,7 +196,7 @@ impl Parser {
         ok
     }
 
-    // ---- separators --------------------------------------------------------
+    // separators
 
     /// `g_Semi = notFollowedBy2 g_DSEMI >> tryToken ";" T_Semi`: a single `;`,
     /// and never the first half of a `;;`.
@@ -354,7 +354,7 @@ impl Parser {
         }
     }
 
-    // ---- terms / and-or / pipelines ---------------------------------------
+    // terms / and-or / pipelines
 
     pub(super) async fn read_compound_list_or_empty(&mut self, stk: &mut Stk) -> Vec<Token> {
         self.read_compound_list(stk, false).await
@@ -907,7 +907,7 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_CoProcBody(body)))
     }
 
-    // ---- compound commands -------------------------------------------------
+    // compound commands
 
     pub(super) async fn read_arithmetic_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         self.called(stk, "((..)) command", async |p, stk| {
@@ -928,7 +928,7 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Arithmetic(c)))
     }
 
-    // ---- simple command ----------------------------------------------------
+    // simple command
 
     pub(super) async fn read_simple_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         self.called(stk, "simple command", async |p, stk| {
@@ -2227,7 +2227,7 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Array(elems)))
     }
 
-    // ---- redirections ------------------------------------------------------
+    // redirections
 
     /// `many readIoRedirect`, which stops on an attempt that declined without
     /// reading anything and fails on one that read something first: `(x)<` and
@@ -2899,7 +2899,7 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
-    // ---- script entry ------------------------------------------------------
+    // script entry
 
     /// `isValidShell` (Parser.hs readScriptFile): `Just true` for a recognized
     /// good shell, `Just false` for a known-unsupported one, `None` otherwise.

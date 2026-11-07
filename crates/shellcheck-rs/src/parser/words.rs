@@ -7,7 +7,7 @@ use super::{
 use reblessive::Stk;
 
 impl Parser {
-    // ---- words -------------------------------------------------------------
+    // words
 
     /// `readNormalWord` = many1 word parts -> `T_NormalWord`
     pub(super) async fn read_normal_word(&mut self, stk: &mut Stk) -> PResult<Token> {
@@ -1042,7 +1042,7 @@ impl Parser {
         Ok(())
     }
 
-    // ---- dollar expansions -------------------------------------------------
+    // dollar expansions
 
     pub(super) async fn read_normal_dollar(&mut self, stk: &mut Stk) -> PResult<Token> {
         // ensureDollar
@@ -1487,7 +1487,7 @@ impl Parser {
         Ok(Token::new(id, InnerToken::T_DollarDoubleQuoted(parts)))
     }
 
-    // ---- helpers for subexpressions ---------------------------------------
+    // helpers for subexpressions
 
     /// Parse the raw content of a `${...}` into a word whose parts include any
     /// nested expansions, single/double quotes and literal runs.
@@ -1603,7 +1603,7 @@ impl Parser {
         Token::new(wid, InnerToken::T_NormalWord(vec![lit]))
     }
 
-    // ---- arithmetic contents (faithful port of readArithmeticContents) -----
+    // arithmetic contents (faithful port of readArithmeticContents)
     //
     // Parses inline (like the Haskell parser) directly off the input stream,
     // producing the real `TA_*` tree. Binary/assignment/combo-op nodes carry the

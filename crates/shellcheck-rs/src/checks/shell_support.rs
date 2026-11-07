@@ -1138,7 +1138,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2093 checkSpuriousExec ----
+    // SC2093 checkSpuriousExec
 
     #[test]
     fn prop_checkForDecimals1() {
@@ -1155,7 +1155,7 @@ mod tests {
         assert!(!emits(for_decimals, "declare -A foo; foo[1.2]=bar"));
     }
 
-    // ---- checkBashisms (full SC30xx family) ----
+    // checkBashisms (full SC30xx family)
 
     #[test]
     fn prop_checkBashisms() {
@@ -1978,7 +1978,7 @@ mod tests {
         ));
     }
 
-    // ---- checkBraceExpansionVars (SC2051 / SC2175) ----
+    // checkBraceExpansionVars (SC2051 / SC2175)
 
     #[test]
     fn prop_checkBraceExpansionVars1() {
@@ -2000,7 +2000,7 @@ mod tests {
         assert!(emits(brace_expansion_vars, "echo {$i..100}"));
     }
 
-    // ---- checkMultiDimensionalArrays (SC2180) ----
+    // checkMultiDimensionalArrays (SC2180)
 
     #[test]
     fn prop_checkMultiDimensionalArrays1() {
@@ -2064,7 +2064,7 @@ mod tests {
         ));
     }
 
-    // ---- checkMultipleBangs (SC2325) ----
+    // checkMultipleBangs (SC2325)
 
     #[test]
     fn prop_checkMultipleBangs1() {
@@ -2076,7 +2076,7 @@ mod tests {
         assert!(!emits(multiple_bangs, "! true"));
     }
 
-    // ---- checkBangAfterPipe (SC2326) ----
+    // checkBangAfterPipe (SC2326)
 
     #[test]
     fn prop_checkBangAfterPipe1() {
@@ -2093,7 +2093,7 @@ mod tests {
         assert!(!emits(bang_after_pipe, "! ! true | true"));
     }
 
-    // ---- checkNegatedUnaryOps (SC2332) ----
+    // checkNegatedUnaryOps (SC2332)
 
     #[test]
     fn prop_checkNegatedUnaryOps1() {

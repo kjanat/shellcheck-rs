@@ -31,9 +31,7 @@ type Finding = (
     Vec<CommentKey>,
 );
 
-// ---------------------------------------------------------------------------
 // Deterministic RNG (xorshift64*), so a seed reproduces a run exactly.
-// ---------------------------------------------------------------------------
 pub struct Rng(u64);
 
 impl Rng {
@@ -69,9 +67,7 @@ impl Rng {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Vocabulary
-// ---------------------------------------------------------------------------
 const SHELLS: [Option<&str>; 6] = [
     None,
     Some("bash"),
@@ -156,9 +152,7 @@ const INSERTS: [&str; 33] = [
     " ", "\t", "$(", "${", "$((", "[[", "]]", "done", "fi", "esac", "!", "*", "@", "+=", "--",
 ];
 
-// ---------------------------------------------------------------------------
 // Generation
-// ---------------------------------------------------------------------------
 fn word(r: &mut Rng, depth: usize) -> String {
     match r.below(100) {
         0..=34 => r.pick(&WORDS).to_string(),
@@ -357,9 +351,7 @@ pub fn generate(r: &mut Rng, seeds: &[String]) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Mutation
-// ---------------------------------------------------------------------------
 fn mutate(r: &mut Rng, s: &str, seeds: &[String]) -> String {
     let chars: Vec<char> = s.chars().collect();
     match r.below(8) {
@@ -428,9 +420,7 @@ fn mutate(r: &mut Rng, s: &str, seeds: &[String]) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Divergence identity
-// ---------------------------------------------------------------------------
 /// How one script's two answers differ, reduced to something groupable so a
 /// single root cause is reported once instead of five hundred times.
 fn signature(port: &[CommentKey], oracle: &[CommentKey], shell: Option<&str>) -> String {
@@ -455,9 +445,7 @@ fn signature(port: &[CommentKey], oracle: &[CommentKey], shell: Option<&str>) ->
     format!("{shell:?}|missing{missing:?}|extra{extra:?}")
 }
 
-// ---------------------------------------------------------------------------
 // Shrinking
-// ---------------------------------------------------------------------------
 struct Shrinker<'a> {
     oracle: &'a Oracle,
     shell: Option<&'a str>,
@@ -530,9 +518,7 @@ impl Shrinker<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Driver
-// ---------------------------------------------------------------------------
 /// The generator's inputs on their own, with no oracle involved.
 ///
 /// `run` interleaves generation with checking; a caller that only needs shell

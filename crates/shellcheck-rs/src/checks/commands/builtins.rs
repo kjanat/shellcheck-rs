@@ -1200,7 +1200,7 @@ $ENGINE stop "$CONTAINER_ID""#,
         ));
     }
 
-    // ---- SC2209 / SC2037 checkAssignAteCommand ----
+    // SC2209 / SC2037 checkAssignAteCommand
 
     #[test]
     fn prop_checkNonportableSignals1() {
@@ -1237,7 +1237,7 @@ $ENGINE stop "$CONTAINER_ID""#,
         assert!(!emits(check_nonportable_signals(), "trap 'stop' int"));
     }
 
-    // ---- SC2023 checkTimeParameters ----
+    // SC2023 checkTimeParameters
 
     #[test]
     fn prop_checkReturn1() {

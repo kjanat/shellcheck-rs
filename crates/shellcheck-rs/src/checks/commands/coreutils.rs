@@ -1200,7 +1200,7 @@ mod tests {
         assert!(!emits(check_tr(), "tr '[=e=]' 'e'"));
     }
 
-    // ---- SC2061 checkFindNameGlob ----
+    // SC2061 checkFindNameGlob
 
     #[test]
     fn prop_checkGrepRe1() {
@@ -1317,7 +1317,7 @@ mod tests {
         assert!(!emits(check_grep_re(), "grep '.*' file"));
     }
 
-    // ---- SC2186/2196/2197 deprecated ----
+    // SC2186/2196/2197 deprecated
 
     #[test]
     fn prop_checkDeprecatedTempfile1() {
@@ -1496,7 +1496,7 @@ mod tests {
         assert!(emits(check_deprecated_fgrep(), "fgrep '*' files"));
     }
 
-    // ---- SC2117 checkInteractiveSu ----
+    // SC2117 checkInteractiveSu
 
     #[test]
     fn prop_checkInteractiveSu1() {
@@ -1518,7 +1518,7 @@ mod tests {
         assert!(!emits(check_interactive_su(), "su root < script"));
     }
 
-    // ---- SC2185 checkFindWithoutPath ----
+    // SC2185 checkFindWithoutPath
 
     #[test]
     fn prop_checkChmodDashr1() {
@@ -1535,7 +1535,7 @@ mod tests {
         assert!(!emits(check_chmod_dashr(), "chmod a-r dir"));
     }
 
-    // ---- SC2267 checkXargsDashi ----
+    // SC2267 checkXargsDashi
 
     #[test]
     fn prop_checkXargsDashi1() {
@@ -1562,7 +1562,7 @@ mod tests {
         assert!(!emits(check_xargs_dashi(), "xargs -x sed -i foo"));
     }
 
-    // ---- SC2172/2173 checkNonportableSignals ----
+    // SC2172/2173 checkNonportableSignals
 
     #[test]
     fn prop_checkTimeParameters1() {
@@ -1600,7 +1600,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2150 checkFindExecWithSingleArgument ----
+    // SC2150 checkFindExecWithSingleArgument
 
     #[test]
     fn prop_checkTimedCommand1() {

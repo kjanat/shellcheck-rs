@@ -1158,7 +1158,7 @@ mod tests {
         ));
     }
 
-    // ---- checkForInQuoted ----
+    // checkForInQuoted
 
     #[test]
     fn prop_checkFunctionDeclarations1() {
@@ -1181,7 +1181,7 @@ mod tests {
         assert!(!emits(check_function_declarations, "foo() { echo bar; }"));
     }
 
-    // ---- checkStderrPipe ----
+    // checkStderrPipe
 
     #[test]
     fn prop_checkAliasUsedInSameParsingUnit1() {
@@ -1231,7 +1231,7 @@ mod tests {
         ));
     }
 
-    // ---- checkBlatantRecursion ----
+    // checkBlatantRecursion
 
     #[test]
     fn prop_checkBlatantRecursion1() {
@@ -1277,7 +1277,7 @@ mod tests {
         assert!(!emits(check_blatant_recursion, "cd() { builtin cd $1; }"));
     }
 
-    // ---- checkAssignToSelf ----
+    // checkAssignToSelf
 
     #[test]
     fn prop_checkUseBeforeDefinition8() {
@@ -1362,7 +1362,7 @@ mod tests {
         ));
     }
 
-    // --- SC2317/2329 checkCommandIsUnreachable ---
+    // SC2317/2329 checkCommandIsUnreachable
 
     #[test]
     fn prop_checkCommandIsUnreachable1() {
@@ -1403,7 +1403,7 @@ mod tests {
         ));
     }
 
-    // --- SC2319/2320 checkOverwrittenExitCode ---
+    // SC2319/2320 checkOverwrittenExitCode
 
     #[test]
     fn prop_checkOverwrittenExitCode1() {

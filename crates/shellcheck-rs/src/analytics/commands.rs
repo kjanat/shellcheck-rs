@@ -686,9 +686,7 @@ pub(super) fn check_bats_test_does_not_use_negation(params: &Parameters, t: &Tok
     }
 }
 
-// ===========================================================================
 // Tests
-// ===========================================================================
 
 /// `couldBeOptimized`: the argument won't be re-split/globbed if inlined.
 fn could_be_optimized(t: &Token) -> bool {
@@ -1499,7 +1497,7 @@ mod tests {
         assert!(emits(check_assign_ate_command, "here=pwd"));
     }
 
-    // ---- SC2211 checkGlobAsCommand ----
+    // SC2211 checkGlobAsCommand
 
     #[test]
     fn prop_checkGlobAsCommand1() {
@@ -1516,7 +1514,7 @@ mod tests {
         assert!(!emits(check_glob_as_command, "echo foo*"));
     }
 
-    // ---- SC2065 checkTestRedirects ----
+    // SC2065 checkTestRedirects
 
     #[test]
     fn prop_checkFlagAsCommand1() {
@@ -1626,7 +1624,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2270-2282 checkEqualsInCommand ----
+    // SC2270-2282 checkEqualsInCommand
 
     fn eic_codes(s: &str) -> Vec<i64> {
         codes(check_equals_in_command, s)
@@ -1752,7 +1750,7 @@ mod tests {
         assert_eq!(eic_codes("411toppm=true"), vec![2282]);
     }
 
-    // ---- SC2144/2198/2199/2200/2201/2202/2203/2208/2245/2255 checkTestArgumentSplitting ----
+    // SC2144/2198/2199/2200/2201/2202/2203/2208/2245/2255 checkTestArgumentSplitting
 
     #[test]
     fn prop_checkLonelyDotDash1() {
@@ -1764,7 +1762,7 @@ mod tests {
         assert!(!node_emits(check_lonely_dot_dash, "./file"));
     }
 
-    // ---- SC2084/2091/2092 checkSpuriousExpansion ----
+    // SC2084/2091/2092 checkSpuriousExpansion
 
     #[test]
     fn prop_checkFindExec1() {
@@ -1808,7 +1806,7 @@ mod tests {
         ));
     }
 
-    // ---- checkLoopKeywordScope ----
+    // checkLoopKeywordScope
 
     #[test]
     fn prop_checkUnsupported3() {
@@ -1836,7 +1834,7 @@ mod tests {
         assert!(emits(check_unsupported, "#!/bin/ash\necho \"${ ls; }\""));
     }
 
-    // ---- checkSuspiciousIFS ----
+    // checkSuspiciousIFS
 
     #[test]
     fn prop_checkCpLegacyR1() {
@@ -1848,7 +1846,7 @@ mod tests {
         assert!(!emits(check_cp_legacy_r, "cp -R foo bar"));
     }
 
-    // ---- checkLoopVariableReassignment ----
+    // checkLoopVariableReassignment
 
     #[test]
     fn prop_checkCommandWithTrailingSymbol1() {
@@ -1903,7 +1901,7 @@ mod tests {
         assert!(emits_code(check_command_with_trailing_symbol, "/", 2287));
     }
 
-    // ---- checkBatsTestDoesNotUseNegation ----
+    // checkBatsTestDoesNotUseNegation
 
     #[test]
     fn prop_checkBatsTestDoesNotUseNegation1() {

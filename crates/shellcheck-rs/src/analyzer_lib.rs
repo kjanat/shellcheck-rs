@@ -139,9 +139,7 @@ impl ShellOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Linear variable-flow model (`ShellCheck.AnalyzerLib`)
-// ---------------------------------------------------------------------------
 
 /// `data Scope = SubshellScope String | NoneScope`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,7 +281,7 @@ pub fn style_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::StyleC, id, code, note, fix));
 }
 
-// ---- fix construction (from ShellCheck.Analytics) --------------------------
+// fix construction (from ShellCheck.Analytics)
 
 use crate::interface::{InsertionPoint, Position, Replacement};
 
@@ -457,7 +455,7 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
     out
 }
 
-// ---- context construction --------------------------------------------------
+// context construction
 
 /// `determineShell`: derive the shell from the shebang / shell override, else
 /// the fallback, else Bash.
@@ -829,10 +827,8 @@ fn get_extended_analysis_directive(root: &Token) -> Option<bool> {
     }
 }
 
-// ===========================================================================
 // Shared AST helpers for the dataflow checks (SC2154/SC2034/SC2086)
 // Ported from ShellCheck.ASTLib / ShellCheck.AnalyzerLib / ShellCheck.Data.
-// ===========================================================================
 
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_bsd_opts as cfg_get_bsd_opts,
@@ -986,7 +982,7 @@ pub(crate) fn get_path(params: &Parameters, t: &Token) -> Vec<Token> {
     path_iter(params, t).cloned().collect()
 }
 
-// ---- command-name resolution ----------------------------------------------
+// command-name resolution
 
 fn is_flag_word(t: &Token) -> bool {
     word_parts(t)
@@ -1105,7 +1101,7 @@ fn get_all_flags_words(words: &[Token]) -> Vec<(Token, String)> {
     out
 }
 
-// ---- predicates for SC2086 -------------------------------------------------
+// predicates for SC2086
 
 /// `isArrayExpansion`.
 pub(crate) fn is_array_expansion(t: &Token) -> bool {
@@ -1199,7 +1195,7 @@ pub(crate) fn is_param_to(params: &Parameters, cmd: &str, t: &Token) -> bool {
     }
 }
 
-// ---- isQuoteFree (parent-context walk, non-strict) -------------------------
+// isQuoteFree (parent-context walk, non-strict)
 
 pub(crate) fn is_quote_free(params: &Parameters, t: &Token) -> bool {
     if is_quote_free_element(params, t) {
@@ -1275,7 +1271,7 @@ pub(crate) fn is_assignment_param_to_command(params: &Parameters, assign: &Token
     false
 }
 
-// ---- Levenshtein distance (`dist`) -----------------------------------------
+// Levenshtein distance (`dist`)
 
 pub(crate) fn dist(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -1301,7 +1297,7 @@ pub(crate) fn dist(a: &str, b: &str) -> usize {
     prev[m]
 }
 
-// ---- getVariablesFromLiteral(Token) ----------------------------------------
+// getVariablesFromLiteral(Token)
 
 fn get_variables_from_literal(s: &str) -> Vec<String> {
     use std::sync::OnceLock;
@@ -1316,11 +1312,9 @@ fn get_variables_from_literal_token(t: &Token) -> Vec<String> {
     get_variables_from_literal(&get_literal_string_def(" ", t))
 }
 
-// ---- special variable data (ShellCheck.Data) -------------------------------
+// special variable data (ShellCheck.Data)
 
-// ===========================================================================
 // getVariableFlow (`ShellCheck.AnalyzerLib.getVariableFlow`)
-// ===========================================================================
 
 struct FlowCtx<'a> {
     parent_map: &'a IdMap<Id, Id>,
@@ -1484,7 +1478,7 @@ fn causes_subshell(ctx: &FlowCtx, t: &Token) -> Option<bool> {
     })
 }
 
-// ---- getModifiedVariables --------------------------------------------------
+// getModifiedVariables
 
 fn is_closing_file_op(op: &Token) -> bool {
     match &*op.inner {
@@ -2016,7 +2010,7 @@ fn get_modified_variable_command(
         .collect()
 }
 
-// ---- getReferencedVariables ------------------------------------------------
+// getReferencedVariables
 
 fn is_dereferencing_binary_op(op: &str) -> bool {
     matches!(op, "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge")
@@ -2178,7 +2172,7 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
     }
 }
 
-// ---- helpers consolidated from the check batches (ports of AnalyzerLib) ----
+// helpers consolidated from the check batches (ports of AnalyzerLib)
 
 /// The words after the command name of a `T_SimpleCommand`.
 pub(crate) fn arguments(t: &Token) -> &[Token] {

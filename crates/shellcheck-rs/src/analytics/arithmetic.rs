@@ -564,7 +564,7 @@ mod tests {
         assert!(!emits(check_arithmetic_deref, "(( ${x+1} + ${x=42} ))"));
     }
 
-    // ---- SC2219 checkLetUsage ----
+    // SC2219 checkLetUsage
 
     #[test]
     fn prop_checkArithmeticOpCommand1() {
@@ -581,7 +581,7 @@ mod tests {
         assert!(!emits(check_arithmetic_op_command, "foo + opts"));
     }
 
-    // ---- checkWrongArithmeticAssignment ----
+    // checkWrongArithmeticAssignment
 
     #[test]
     fn prop_checkWrongArit() {
@@ -593,7 +593,7 @@ mod tests {
         assert!(emits(check_wrong_arithmetic_assignment, "n=2; i=n*2"));
     }
 
-    // ---- checkPipePitfalls ----
+    // checkPipePitfalls
 
     #[test]
     fn prop_checkDivBeforeMult() {
@@ -610,7 +610,7 @@ mod tests {
         assert!(!(node_emits(check_div_before_mult, "echo $((c/10*10))")));
     }
 
-    // --- SC2080 checkArithmeticBadOctal ---
+    // SC2080 checkArithmeticBadOctal
 
     #[test]
     fn prop_checkArithmeticBadOctal1() {
@@ -627,7 +627,7 @@ mod tests {
         assert!(!(node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))")));
     }
 
-    // --- SC2257 checkModifiedArithmeticInRedirection ---
+    // SC2257 checkModifiedArithmeticInRedirection
 
     #[test]
     fn prop_checkModifiedArithmeticInRedirection1() {
@@ -691,7 +691,7 @@ mod tests {
         );
     }
 
-    // --- SC2321 checkUnnecessaryArithmeticExpansionIndex ---
+    // SC2321 checkUnnecessaryArithmeticExpansionIndex
 
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex1() {
@@ -726,7 +726,7 @@ mod tests {
         );
     }
 
-    // --- SC2322/2323 checkUnnecessaryParens ---
+    // SC2322/2323 checkUnnecessaryParens
 
     #[test]
     fn prop_checkUnnecessaryParens1() {
@@ -768,7 +768,7 @@ mod tests {
         assert!(!(node_emits(check_unnecessary_parens, "(( (1)+1 ))")));
     }
 
-    // --- SC2218 checkUseBeforeDefinition ---
+    // SC2218 checkUseBeforeDefinition
 
     #[test]
     fn prop_checkPlusEqualsNumber1() {

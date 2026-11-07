@@ -1255,7 +1255,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2097/2098 checkPrefixAssignmentReference ----
+    // SC2097/2098 checkPrefixAssignmentReference
 
     #[test]
     fn prop_checkRedirectedNowhere1() {
@@ -1303,7 +1303,7 @@ mod tests {
         assert!(!node_emits(check_redirected_nowhere, "var=`< file`"));
     }
 
-    // ---- SC2210 checkRedirectionToNumber ----
+    // SC2210 checkRedirectionToNumber
 
     #[test]
     fn prop_checkRedirectionToNumber1() {
@@ -1325,7 +1325,7 @@ mod tests {
         assert!(!node_emits(check_redirection_to_number, "foo 1>&2"));
     }
 
-    // ---- SC2238 checkRedirectionToCommand ----
+    // SC2238 checkRedirectionToCommand
 
     #[test]
     fn prop_checkRedirectionToCommand1() {
@@ -1342,7 +1342,7 @@ mod tests {
         assert!(!node_emits(check_redirection_to_command, "ls > myfile"));
     }
 
-    // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere (full) ----
+    // SC2216/2217/2259/2260/2261 checkPipeToNowhere (full)
 
     #[test]
     fn prop_checkPipeToNowhere1() {
@@ -1476,7 +1476,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2327/2328 checkExpansionWithRedirection ----
+    // SC2327/2328 checkExpansionWithRedirection
 
     #[test]
     fn prop_checkExpansionWithRedirection1() {
@@ -1542,14 +1542,14 @@ mod tests {
         ));
     }
 
-    // ---- SC2190/2191/2192 checkArrayAssignmentIndices ----
+    // SC2190/2191/2192 checkArrayAssignmentIndices
 
     #[test]
     fn prop_checkEchoWc3() {
         assert!(emits(check_echo_wc, "n=$(echo $foo | wc -c)"));
     }
 
-    // ---- checkPipedAssignment ----
+    // checkPipedAssignment
 
     #[test]
     fn prop_checkPipedAssignment1() {
@@ -1566,7 +1566,7 @@ mod tests {
         assert!(!emits(check_piped_assignment, "A=foo"));
     }
 
-    // ---- checkArithmeticOpCommand ----
+    // checkArithmeticOpCommand
 
     #[test]
     fn prop_checkPipePitfalls3() {
@@ -1685,7 +1685,7 @@ mod tests {
         ));
     }
 
-    // ---- checkShebangParameters ----
+    // checkShebangParameters
 
     #[test]
     fn prop_checkStderrPipe1() {
@@ -1697,7 +1697,7 @@ mod tests {
         assert!(!emits(check_stderr_pipe, "#!/bin/bash\nfoo |& bar"));
     }
 
-    // ---- checkOverridingPath ----
+    // checkOverridingPath
 
     #[test]
     fn prop_checkGrepQ1() {
@@ -1732,5 +1732,5 @@ mod tests {
         assert!(!emits(check_should_use_grep_q, "[[ -n $(pgrep foo) ]]"));
     }
 
-    // ---- checkCpLegacyR ----
+    // checkCpLegacyR
 }

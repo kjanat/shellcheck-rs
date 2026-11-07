@@ -532,7 +532,7 @@ impl Parser {
         }
     }
 
-    // ---- cursor primitives -------------------------------------------------
+    // cursor primitives
 
     #[inline]
     const fn mark(&self) -> Mark {
@@ -1222,7 +1222,7 @@ impl Parser {
         }
     }
 
-    // ---- char-class combinators -------------------------------------------
+    // char-class combinators
 
     /// Parsec records an error for every failure, implicit ones included, and
     /// reports the one that got furthest. `getStringFromParsec` keeps only
@@ -1324,7 +1324,7 @@ impl Parser {
         }
     }
 
-    // ---- id / span / notes -------------------------------------------------
+    // id / span / notes
 
     fn next_id_between(&mut self, start: Position, end: Position) -> Id {
         let id = Id(self.next_id);
@@ -1372,7 +1372,7 @@ impl Parser {
         });
     }
 
-    // ---- whitespace / comments --------------------------------------------
+    // whitespace / comments
 
     fn line_whitespace(&mut self) -> PResult<char> {
         // " \t" <|> almostSpace <|> carriageReturn-not-before-newline handled elsewhere

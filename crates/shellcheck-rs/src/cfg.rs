@@ -35,9 +35,7 @@ use regex::Regex;
 /// Node id in the graph. Haskell `Node = Int`; all ids here are non-negative.
 pub type Node = usize;
 
-// ===========================================================================
 // Data types (ported 1:1 from CFG.hs)
-// ===========================================================================
 
 /// Node labels in a Control Flow Graph (`data CFNode`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,9 +279,7 @@ pub struct CFGResult {
     pub cf_post_dominators: PostDominators,
 }
 
-// ===========================================================================
 // Graph representation (replaces fgl's Gr / mkGraph / nodes / edges)
-// ===========================================================================
 
 /// An immutable labeled directed multigraph. Mirrors `G.Gr CFNode CFEdge` for
 /// the parts of the fgl interface the port relies on (`mkGraph`, `nodes`,
@@ -422,9 +418,7 @@ impl MutGraph {
     }
 }
 
-// ===========================================================================
 // The graph-building "monad" (RWS) as a Builder
-// ===========================================================================
 
 /// A `(start, end)` node range. `data Range = Range Node Node`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,7 +513,7 @@ impl Builder {
         self.internal_error.get_or_insert(InternalError(what));
     }
 
-    // --- core primitives (newNode, link, registerNode, ...) ---
+    // core primitives (newNode, link, registerNode, ...)
 
     fn new_node(&mut self, label: CFNode) -> Node {
         let n = self.next;
@@ -579,7 +573,7 @@ impl Builder {
         self.link_ranges(first, &ranges)
     }
 
-    // --- scoping helpers (local / under / subshell / withFunctionScope) ---
+    // scoping helpers (local / under / subshell / withFunctionScope)
 
     async fn subshell(
         &mut self,
@@ -635,7 +629,7 @@ impl Builder {
         r
     }
 
-    // --- buildRoot / build / build' ---
+    // buildRoot / build / build'
 
     async fn build_root(&mut self, stk: &mut Stk, t: &Token) -> Range {
         let first_node = self.next;
@@ -1139,7 +1133,7 @@ impl Builder {
         self.link_range(inline, end);
         Range(cmd.0, inline.1)
     }
-    // --- compound builders ---
+    // compound builders
 
     async fn build_dollar_braced(&mut self, stk: &mut Stk, id: Id, op: &Token) -> Range {
         let str = oversimplify_concat(op);
@@ -1382,7 +1376,7 @@ impl Builder {
         self.link_range(cond_range, end)
     }
 
-    // --- assignments ---
+    // assignments
 
     async fn build_assignment(&mut self, stk: &mut Stk, scope: Option<Scope>, t: &Token) -> Range {
         let op = match &*t.inner {
@@ -1419,7 +1413,7 @@ impl Builder {
         op
     }
 
-    // --- command dispatch (handleCommand) ---
+    // command dispatch (handleCommand)
 
     async fn handle_command(
         &mut self,
@@ -1958,9 +1952,7 @@ fn to_effects(
     }
 }
 
-// ===========================================================================
 // buildGraph
-// ===========================================================================
 
 /// `buildGraph :: CFGParameters -> Token -> CFGResult`.
 ///
@@ -2026,9 +2018,7 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, Int
     })
 }
 
-// ===========================================================================
 // Graph transforms on CFW (renumber / removeUnnecessaryStructuralNodes)
-// ===========================================================================
 
 fn remap_helper(m: &IdMap<Node, Node>, n: Node) -> Node {
     *m.get(&n).unwrap_or(&n)
@@ -2189,9 +2179,7 @@ fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
     (graph, recursive_remapping)
 }
 
-// ===========================================================================
 // topsort (replaces fgl's topsort)
-// ===========================================================================
 
 /// Topological sort matching fgl's `topsort = reverse . postflatten . dff`:
 /// DFS forest over nodes in ascending id order, successors in edge order,
@@ -2236,9 +2224,7 @@ pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<
     postorder
 }
 
-// ===========================================================================
 // Post-dominators (replaces fgl's dom + inlineSubshells)
-// ===========================================================================
 
 fn find_terminal_nodes(g: &MutGraph) -> Vec<Node> {
     let mut out = Vec::new();
@@ -2512,9 +2498,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
     (idom, has_chain)
 }
 
-// ===========================================================================
 // ASTLib helpers ported locally (CFG.hs relies on these)
-// ===========================================================================
 
 pub(crate) const fn is_variable_start_char(c: char) -> bool {
     c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
@@ -2767,7 +2751,7 @@ fn is_array_expansion(t: &Token) -> bool {
     }
 }
 
-// --- pseudoglob (for case catch-all detection) ---
+// pseudoglob (for case catch-all detection)
 
 // Variant names mirror the Haskell constructors PGAny / PGMany / PGChar.
 #[allow(clippy::enum_variant_names)]
@@ -2871,7 +2855,7 @@ fn has_catch_all(conds: &[Token]) -> bool {
     })
 }
 
-// --- getOpts family ---
+// getOpts family
 
 fn lookup(key: &str, flags: &[(String, (Token, Token))]) -> Option<(Token, Token)> {
     flags.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
@@ -3031,9 +3015,7 @@ pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> 
     out
 }
 
-// ===========================================================================
 // Tests (ported from CFG.hs prop_*)
-// ===========================================================================
 
 pub(crate) fn may_become_multiple_args(t: &Token) -> bool {
     will_become_multiple_args(t) || mbma_f(false, t)

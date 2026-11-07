@@ -383,7 +383,7 @@ fn from_env_args(args: &[&str]) -> String {
         .map_or_else(String::new, |a| (*a).to_string())
 }
 
-// ---- helpers consolidated from the check batches (ports of ASTLib) ----
+// helpers consolidated from the check batches (ports of ASTLib)
 
 /// `getWordParts`.
 pub(crate) fn get_word_parts(t: &Token) -> Vec<&Token> {

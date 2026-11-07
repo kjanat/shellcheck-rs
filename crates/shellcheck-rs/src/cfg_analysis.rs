@@ -32,9 +32,7 @@ const FALLBACK_THRESHOLD: i64 = 10_000;
 // The number of cache entries to keep per node
 const CACHE_ENTRIES: usize = 10;
 
-// ===========================================================================
 // Externally-exposed lattice values
-// ===========================================================================
 
 /// Whether or not the value needs quoting (has spaces/globs), or we don't know.
 ///
@@ -298,9 +296,7 @@ impl CFGAnalysis {
     }
 }
 
-// ===========================================================================
 // Internal lattice/state types
-// ===========================================================================
 
 /// A function definition, or lack thereof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -493,7 +489,7 @@ fn state_eq(a: &InternalState, b: &InternalState) -> bool {
     state_is_quick_equal(a, b) || state_is_slow_equal(a, b)
 }
 
-// --- Value abstractions ---
+// Value abstractions
 
 const fn unknown_variable_value() -> VariableValue {
     VariableValue {
@@ -661,7 +657,7 @@ fn literal_to_variable_value(s: &str) -> VariableValue {
     }
 }
 
-// --- state field mutators (all set version = -1 via `modified`) ---
+// state field mutators (all set version = -1 via `modified`)
 
 fn insert_global(name: &str, val: VariableState, state: &InternalState) -> InternalState {
     let mut s = state.clone();
@@ -719,7 +715,7 @@ fn get_variable_with_scope(s: &InternalState, name: &str) -> Option<(VariableSta
     None
 }
 
-// --- patch / vmPatch ---
+// patch / vmPatch
 
 fn vm_patch<V>(base: &VMap<V>, diff: &VMap<V>) -> VMap<V> {
     if base.version == 0 {
@@ -762,9 +758,7 @@ fn patch_state(base: &InternalState, diff: &InternalState) -> InternalState {
     }
 }
 
-// ===========================================================================
 // Environment state (createEnvironmentState) + variable data
-// ===========================================================================
 
 fn create_environment_state() -> InternalState {
     let mut state = new_internal_state();
@@ -806,9 +800,7 @@ fn create_environment_state() -> InternalState {
     state
 }
 
-// ===========================================================================
 // The DFA context
-// ===========================================================================
 
 /// Whenever a function (or subshell) is invoked, an entry is pushed.
 #[derive(Debug, Clone)]
@@ -907,7 +899,7 @@ impl Ctx {
         state
     }
 
-    // --- stack lookups (lookupStack' / peekStack) ---
+    // stack lookups (lookupStack' / peekStack)
 
     fn lookup_stack<V, G, D>(&mut self, function_only: bool, get: G, make_dep: D, def: V) -> V
     where
@@ -1041,7 +1033,7 @@ impl Ctx {
         )
     }
 
-    // --- peek (no dependency) ---
+    // peek (no dependency)
 
     fn peek_var_with_scope(
         &self,
@@ -1081,7 +1073,7 @@ impl Ctx {
         Rc::default()
     }
 
-    // --- writes ---
+    // writes
 
     fn write_global(&mut self, name: &str, val: VariableState) {
         self.output = insert_global(name, val, &self.output);
@@ -1153,7 +1145,7 @@ impl Ctx {
 }
 
 impl Ctx {
-    // --- value abstraction ---
+    // value abstraction
 
     fn cf_value_to_variable_value(&mut self, val: &CFValue) -> VariableValue {
         match val {
@@ -1191,7 +1183,7 @@ impl Ctx {
         }
     }
 
-    // --- effect transfer ---
+    // effect transfer
 
     fn transfer_effect(&mut self, effect: &CFEffect) {
         match effect {
@@ -1264,7 +1256,7 @@ impl Ctx {
         }
     }
 
-    // --- merges (join) ---
+    // merges (join)
 
     fn merge_maps_var(
         &mut self,
@@ -1419,7 +1411,7 @@ impl Ctx {
         acc
     }
 
-    // --- stack frame management ---
+    // stack frame management
 
     fn patch_output(&mut self, diff: &InternalState) {
         self.output = patch_state(&self.output, diff);
@@ -1498,7 +1490,7 @@ impl Ctx {
             .insert(path, (deps.clone(), states.clone()));
     }
 
-    // --- cache ---
+    // cache
 
     fn fulfills_dependency(&self, entry: Node, dep: &StateDependency) -> bool {
         match dep {
@@ -1574,7 +1566,7 @@ impl Ctx {
         self.patch_output(&diff);
     }
 
-    // --- transfer ---
+    // transfer
 
     async fn transfer(&mut self, stk: &mut Stk, label: &CFNode) {
         match label {
@@ -1694,7 +1686,7 @@ impl Ctx {
         (deps, res)
     }
 
-    // --- the iterative DFA ---
+    // the iterative DFA
 
     async fn process(&mut self, stk: &mut Stk, states: &mut StateMap, node: Node) -> Vec<Node> {
         let incoming = self.pred_flow.get(&node).cloned().unwrap_or_default();
@@ -1815,9 +1807,7 @@ impl Ctx {
     }
 }
 
-// ===========================================================================
 // Top-level orchestration helpers
-// ===========================================================================
 
 fn insert_in(
     overwrite: bool,
@@ -2049,7 +2039,6 @@ pub fn analyze_control_flow(
     })
 }
 
-// ===========================================================================
 // Tests
 //
 // NB: CFGAnalysis.hs itself defines NO `prop_` tests (its `$quickCheckAll`
@@ -2057,7 +2046,6 @@ pub fn analyze_control_flow(
 // SC2154/SC2086/SC2034, carry the prop_ tests, in Analytics.hs). These tests
 // therefore exercise the ported abstract interpretation directly against the
 // documented lattice semantics, via a faithful parse+analyze helper.
-// ===========================================================================
 
 #[cfg(test)]
 mod tests {

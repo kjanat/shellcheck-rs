@@ -655,12 +655,12 @@ fn parse_worker_count(value: &str) -> ControlFlow<Outcome, usize> {
 /// `parseOption` for one flag. `Break` ends the parse with that outcome.
 fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
     match flag.key {
-        // --- Immediate informational exits (exit 0). ---
+        // Immediate informational exits (exit 0).
         "version" => return ControlFlow::Break(Outcome::PrintVersion),
         "help" => return ControlFlow::Break(Outcome::PrintHelp),
         "list-optional" => return ControlFlow::Break(Outcome::ListOptional),
 
-        // --- Wired into CheckSpec (effective in the analysis core). ---
+        // Wired into CheckSpec (effective in the analysis core).
         "shell" => {
             let v = flag.value.as_deref().unwrap_or("");
             match parse_dialect(v) {
@@ -705,7 +705,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         }
         "norc" => o.spec.ignore_rc = true,
 
-        // --- Accepted and set on the spec, effective where the core supports it. ---
+        // Accepted and set on the spec, effective where the core supports it.
         "sourced" => o.spec.check_sourced = true,
         "extended-analysis" => {
             let v = flag.value.as_deref().unwrap_or("");
@@ -721,7 +721,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
             }
         }
 
-        // --- Validated but not yet effective in the core. ---
+        // Validated but not yet effective in the core.
         "color" => {
             // Default value when no argument is given is "always" (matches
             // the Haskell OptArg default), then validated.

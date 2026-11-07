@@ -958,11 +958,11 @@ mod tests {
         ));
     }
 
-    // ---- SC2210 checkRedirectionToNumber ----
+    // SC2210 checkRedirectionToNumber
 
-    // ---- SC2206 / SC2207 checkSplittingInArrays ----
+    // SC2206 / SC2207 checkSplittingInArrays
 
-    // ---- SC2268 checkComparisonWithLeadingX ----
+    // SC2268 checkComparisonWithLeadingX
 
     #[test]
     fn prop_checkForInQuoted() {
@@ -1054,7 +1054,7 @@ mod tests {
         ));
     }
 
-    // ---- checkFindExec ----
+    // checkFindExec
 
     #[test]
     fn prop_lks_break_toplevel() {
@@ -1084,7 +1084,7 @@ mod tests {
         ));
     }
 
-    // ---- checkFunctionDeclarations ----
+    // checkFunctionDeclarations
 
     #[test]
     fn prop_checkLoopVariableReassignment1() {
@@ -1118,7 +1118,7 @@ mod tests {
         ));
     }
 
-    // ---- checkForLoopGlobVariables ----
+    // checkForLoopGlobVariables
 
     #[test]
     fn prop_checkForLoopGlobVariables1() {
@@ -1144,5 +1144,5 @@ mod tests {
         ));
     }
 
-    // ---- checkAliasUsedInSameParsingUnit ----
+    // checkAliasUsedInSameParsingUnit
 }

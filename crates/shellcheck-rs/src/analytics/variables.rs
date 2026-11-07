@@ -1550,7 +1550,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2088 checkTildeInQuotes ----
+    // SC2088 checkTildeInQuotes
 
     #[test]
     fn prop_checkDollarBrackets1() {
@@ -1562,7 +1562,7 @@ mod tests {
         assert!(!node_emits(check_dollar_brackets, "echo $((1+2))"));
     }
 
-    // ---- SC2087 checkSshHereDoc ----
+    // SC2087 checkSshHereDoc
 
     #[test]
     fn prop_checkPrefixAssign1() {
@@ -1580,7 +1580,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2247 checkDollarQuoteParen ----
+    // SC2247 checkDollarQuoteParen
 
     #[test]
     fn prop_checkArrayAssignmentIndices1() {
@@ -1686,7 +1686,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2295 checkUnquotedParameterExpansionPattern ----
+    // SC2295 checkUnquotedParameterExpansionPattern
 
     #[test]
     fn prop_checkArrayValueUsedAsIndex1() {
@@ -1792,7 +1792,7 @@ mod tests {
         assert!(!emits(check_overriding_path, "PATH=$PATH:/stuff"));
     }
 
-    // ---- checkTildeInPath ----
+    // checkTildeInPath
 
     #[test]
     fn prop_checkSuspiciousIFS1() {
@@ -1809,7 +1809,7 @@ mod tests {
         assert!(emits(check_suspicious_ifs, "IFS=' \\t\\n'"));
     }
 
-    // ---- checkShouldUseGrepQ ----
+    // checkShouldUseGrepQ
 
     #[test]
     fn prop_checkAssignToSelf1() {
@@ -1831,5 +1831,5 @@ mod tests {
         assert!(!emits(check_assign_to_self, "x=$x mycmd"));
     }
 
-    // ---- checkCommandWithTrailingSymbol ----
+    // checkCommandWithTrailingSymbol
 }

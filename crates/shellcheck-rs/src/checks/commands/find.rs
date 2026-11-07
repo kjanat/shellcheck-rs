@@ -290,7 +290,7 @@ mod tests {
         assert!(!emits(check_find_name_glob(), "find * -name '*.php'"));
     }
 
-    // ---- SC2062/2063/2022 checkGrepRe ----
+    // SC2062/2063/2022 checkGrepRe
 
     #[test]
     fn prop_checkFindWithoutPath1() {
@@ -335,7 +335,7 @@ mod tests {
         assert!(!emits(check_find_without_path(), "find -Hx . -print"));
     }
 
-    // ---- SC2253 checkChmodDashr ----
+    // SC2253 checkChmodDashr
 
     #[test]
     fn prop_checkFindExecWithSingleArgument1() {
@@ -361,7 +361,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2156 checkInjectableFindSh ----
+    // SC2156 checkInjectableFindSh
 
     #[test]
     fn prop_checkInjectableFindSh1() {
@@ -387,7 +387,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2146 checkFindActionPrecedence ----
+    // SC2146 checkFindActionPrecedence
 
     #[test]
     fn prop_checkFindActionPrecedence1() {
@@ -413,7 +413,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2227 checkFindRedirections ----
+    // SC2227 checkFindRedirections
 
     #[test]
     fn prop_checkFindRedirections1() {
@@ -439,5 +439,5 @@ mod tests {
         ));
     }
 
-    // ---- SC2176/2177 checkTimedCommand ----
+    // SC2176/2177 checkTimedCommand
 }

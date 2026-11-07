@@ -244,7 +244,7 @@ impl Token {
 /// Variant order matches the Haskell `data InnerToken` declaration order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InnerToken {
-    // --- Arithmetic (TA_*) ---
+    // Arithmetic (TA_*)
     /// `TA_Binary`: an arithmetic binary operation.
     TA_Binary {
         /// The operator, e.g. `+`.
@@ -293,7 +293,7 @@ pub enum InnerToken {
         operand: Token,
     },
 
-    // --- Test conditions (TC_*) ---
+    // Test conditions (TC_*)
     /// `TC_And`: `&&` or `-a` in a test.
     TC_And {
         /// Which test syntax holds it.
@@ -356,7 +356,7 @@ pub enum InnerToken {
         typ: ConditionType,
     },
 
-    // --- Operator / keyword leaves ---
+    // Operator / keyword leaves
     /// `T_AND_IF`: the `&&` operator.
     T_AND_IF,
     /// `T_AndIf`: `lhs && rhs`.
