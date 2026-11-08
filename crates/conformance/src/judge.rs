@@ -190,6 +190,20 @@ mod tests {
         std::fs::write(&fake, format!("#!/bin/sh\necho '{stdout}'\n")).expect("write oracle");
         std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .expect("chmod oracle");
+        // A child another test thread forked while the write was open holds
+        // the descriptor until it execs, and exec fails with ETXTBSY until
+        // then. Once one exec succeeds, no process can hold it any more.
+        for _ in 0..100 {
+            match std::process::Command::new(&fake).output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                ran => {
+                    ran.expect("run fake oracle");
+                    break;
+                }
+            }
+        }
         oracle::Oracle::new(&fake.to_string_lossy()).expect("oracle")
     }
 
