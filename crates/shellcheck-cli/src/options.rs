@@ -318,7 +318,7 @@ fn usage_table<'a>(opts: impl Iterator<Item = &'a OptDef> + Clone) -> String {
 #[must_use]
 pub fn usage() -> String {
     format!(
-        "Usage: shellcheck [OPTIONS...] FILES...\n{}",
+        "Usage: rshellcheck [OPTIONS...] FILES...\n{}",
         usage_table(OPTS.iter())
     )
 }
@@ -354,13 +354,39 @@ pub fn list_optional_text() -> String {
 
 /// The version banner (`printVersion`), using the crate version and the
 /// upstream ShellCheck pin from `tools/oracle.json`.
+///
+/// With `links`, each URL is an OSC 8 hyperlink, each name links to its GitHub
+/// repository, and each version links to its GitHub release page. Release tags
+/// are `rshellcheck-v<version>` here and `v<version>` upstream.
 #[must_use]
-pub fn version_banner() -> String {
+pub fn version_banner(links: bool) -> String {
+    const UPSTREAM_REPOSITORY: &str = "https://github.com/koalaman/shellcheck";
+    let link = |text: &str, url: &str| {
+        if links {
+            format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+        } else {
+            text.to_string()
+        }
+    };
+    let url = |url: &str| link(url, url);
+    let repository = env!("CARGO_PKG_REPOSITORY");
+    let version = env!("CARGO_PKG_VERSION");
+    let upstream = env!("RSHELLCHECK_UPSTREAM_VERSION");
     format!(
-        "ShellCheck - shell script analysis tool\nversion: {}\nupstream: {} (git {})\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net",
-        env!("CARGO_PKG_VERSION"),
-        env!("RSHELLCHECK_UPSTREAM_VERSION"),
-        &env!("RSHELLCHECK_UPSTREAM_REVISION")[..12]
+        "{} - shell script analysis tool\nversion: {}\nlicense: GNU General Public License, version 3\nwebsite: {}\nupstream: {} {} (git {}), {}",
+        link("RShellCheck", repository),
+        link(
+            version,
+            &format!("{repository}/releases/tag/rshellcheck-v{version}")
+        ),
+        url(repository),
+        link("ShellCheck", UPSTREAM_REPOSITORY),
+        link(
+            upstream,
+            &format!("{UPSTREAM_REPOSITORY}/releases/tag/v{upstream}")
+        ),
+        &env!("RSHELLCHECK_UPSTREAM_REVISION")[..12],
+        url("https://www.shellcheck.net"),
     )
 }
 
@@ -1164,14 +1190,71 @@ mod tests {
     {
         let pin: crate::oracle::UpstreamPin =
             serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
-        let banner = version_banner();
+        let banner = version_banner(false);
         let lines: Vec<&str> = banner.lines().collect();
-        assert_eq!(lines[1], concat!("version: ", env!("CARGO_PKG_VERSION")));
         assert_eq!(
-            lines[2],
-            format!("upstream: {} (git {})", pin.version, &pin.revision[..12])
+            lines,
+            [
+                "RShellCheck - shell script analysis tool".to_string(),
+                concat!("version: ", env!("CARGO_PKG_VERSION")).to_string(),
+                "license: GNU General Public License, version 3".to_string(),
+                "website: https://github.com/kjanat/shellcheck-rs".to_string(),
+                format!(
+                    "upstream: ShellCheck {} (git {}), https://www.shellcheck.net",
+                    pin.version,
+                    &pin.revision[..12]
+                ),
+            ]
         );
         assert_ne!(pin.version, env!("CARGO_PKG_VERSION"));
+        Ok(())
+    }
+
+    #[test]
+    fn version_banner_links_its_urls_on_request() -> Result<(), Box<dyn std::error::Error>> {
+        let pin: crate::oracle::UpstreamPin =
+            serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
+        let version = env!("CARGO_PKG_VERSION");
+        let link = |text: &str, url: &str| format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\");
+        let ours = "https://github.com/kjanat/shellcheck-rs";
+        let theirs = "https://github.com/koalaman/shellcheck";
+        let linked = version_banner(true);
+        let lines: Vec<&str> = linked.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                format!("{} - shell script analysis tool", link("RShellCheck", ours)),
+                format!(
+                    "version: {}",
+                    link(
+                        version,
+                        &format!("{ours}/releases/tag/rshellcheck-v{version}")
+                    )
+                ),
+                "license: GNU General Public License, version 3".to_string(),
+                format!("website: {}", link(ours, ours)),
+                format!(
+                    "upstream: {} {} (git {}), {}",
+                    link("ShellCheck", theirs),
+                    link(
+                        &pin.version,
+                        &format!("{theirs}/releases/tag/v{}", pin.version)
+                    ),
+                    &pin.revision[..12],
+                    link("https://www.shellcheck.net", "https://www.shellcheck.net")
+                ),
+            ]
+        );
+        // Stripping each `ESC ] 8 ; ; <url> ESC \` opener and closer leaves the plain banner.
+        let mut plain = String::new();
+        let mut rest = linked.as_str();
+        while let Some(start) = rest.find("\x1b]8;;") {
+            plain.push_str(&rest[..start]);
+            let end = rest[start..].find("\x1b\\").ok_or("unterminated OSC 8")?;
+            rest = &rest[start + end + 2..];
+        }
+        plain.push_str(rest);
+        assert_eq!(plain, version_banner(false));
         Ok(())
     }
 

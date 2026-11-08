@@ -19,6 +19,13 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   more of `/usr`, and globs such as `rm -rf /boot/*`
 - `--list-optional` prints `id:` and `wiki:` for each optional check
 
+### Changed
+
+- `--version` names RShellCheck and links its repository, with the upstream
+  ShellCheck version and site on the last line. In a terminal every URL is an
+  OSC 8 link, each name links to its GitHub repository and each version to its
+  GitHub release page. `--help` names `rshellcheck`
+
 ### Fixed
 
 - The SC2292 fix adds no second `]` when the test was closed with `]]`

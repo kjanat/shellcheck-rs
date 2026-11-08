@@ -4,6 +4,7 @@ version                = "1.0.0"
 edition.workspace      = true
 rust-version.workspace = true
 description            = "ShellCheck CLI and output formatters (TTY/JSON/JSON1/GCC/CheckStyle/Diff/Quiet)."
+repository.workspace   = true
 license.workspace      = true
 
 [[bin]]
