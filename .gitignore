@@ -14,3 +14,8 @@ __pycache__/
 /.ruff_cache/
 /.pytest_cache/
 /dist/
+# What `master` leaves behind when this checkout switches from it.
+/.github/release/
+/bindings/
+/mutants.out/
+/_caught-up-*.txt
