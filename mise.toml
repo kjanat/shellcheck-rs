@@ -61,6 +61,12 @@ run         = "uv run python -m unittest discover -s tests -p test_memory.py -v"
 description = "Verify preparation, measurement, and reporting contracts"
 run         = "uv run python -m unittest discover -s tests -v"
 
+# The repository's pre-push hook runs `check-py` on every branch.
+[tasks.check-py]
+description = "Check Python"
+run         = ["uv run ruff check src tests", "uv run --all-extras ty check"]
+
 [tasks.check]
 description = "Check Python, configuration, and CI"
-run         = ["uv run ruff check src tests", "uv run ty check", "actionlint .github/workflows/bench.yml", "dprint check"]
+depends     = ["check-py"]
+run         = ["actionlint .github/workflows/bench.yml", "dprint check"]
