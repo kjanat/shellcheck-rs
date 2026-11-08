@@ -25,6 +25,10 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   ShellCheck version and site on the last line. In a terminal every URL is an
   OSC 8 link, each name links to its GitHub repository and each version to its
   GitHub release page. `--help` names `rshellcheck`
+- The crates are renamed for crates.io: the CLI package `shellcheck-cli` is
+  `rshellcheck` and the analysis library `shellcheck-rs` is `rshellcheck-core`,
+  imported as `rshellcheck` and `rshellcheck_core`. Each carries a README and
+  crates.io metadata. Installs from git name `rshellcheck`
 
 ### Fixed
 

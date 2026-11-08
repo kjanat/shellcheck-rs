@@ -28,12 +28,12 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use shellcheck_rs::analytics;
-use shellcheck_rs::analyzer_lib;
-use shellcheck_rs::cfg::CFGParameters;
-use shellcheck_rs::cfg_analysis;
-use shellcheck_rs::interface::CheckSpec;
-use shellcheck_rs::parser;
+use rshellcheck_core::analytics;
+use rshellcheck_core::analyzer_lib;
+use rshellcheck_core::cfg::CFGParameters;
+use rshellcheck_core::cfg_analysis;
+use rshellcheck_core::interface::CheckSpec;
+use rshellcheck_core::parser;
 
 use crate::Args;
 use crate::corpus;
@@ -56,7 +56,7 @@ fn parses(fragment: &str) -> bool {
         && !out
             .notes
             .iter()
-            .any(|n| n.severity == shellcheck_rs::interface::Severity::ErrorC)
+            .any(|n| n.severity == rshellcheck_core::interface::Severity::ErrorC)
 }
 
 /// Generate a deterministic script of at least `lines` lines.
@@ -127,7 +127,7 @@ fn time_port(script: &str, filename: &str) -> Result<Split, String> {
         shell_flag_specified: false,
         shell_hint: None,
         rc_annotations: Vec::new(),
-        sys: std::rc::Rc::new(shellcheck_rs::interface::NoExternalSources),
+        sys: std::rc::Rc::new(rshellcheck_core::interface::NoExternalSources),
     });
     let d_parse = t0.elapsed();
     let root = parse
@@ -174,7 +174,7 @@ fn time_port(script: &str, filename: &str) -> Result<Split, String> {
     // difference between the whole public entry point and the phases above,
     // which is the only way to reach code that is private to `checker`.
     let t5 = Instant::now();
-    let result = shellcheck_rs::check_script(&spec);
+    let result = rshellcheck_core::check_script(&spec);
     let d_whole = t5.elapsed();
     let d_resolve = d_whole
         .saturating_sub(d_parse)

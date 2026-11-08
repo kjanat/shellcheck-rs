@@ -1,7 +1,7 @@
 //! ShellCheck CLI (Rust port). Reads scripts from files or stdin, runs the
 //! analyzer core, and emits the requested format.
 //!
-//! Option parsing lives in `shellcheck_cli::options` and mirrors the Haskell
+//! Option parsing lives in `rshellcheck::options` and mirrors the Haskell
 //! `shellcheck.hs` driver (option set, `getOpt Permute` semantics, exit codes).
 //! Output formatting mirrors `ShellCheck.Formatter.*`: tty (default), gcc,
 //! checkstyle, json, json1, quiet, and diff.
@@ -13,13 +13,13 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use shellcheck_cli::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
-use shellcheck_cli::options::{self, Outcome, RunConfig};
-use shellcheck_cli::paths::{combine, drop_file_name, io_error_message, normalize_path};
-use shellcheck_cli::rc::{self, ConfigLookup};
-use shellcheck_rs::Dialect;
-use shellcheck_rs::cfg::InternalError;
-use shellcheck_rs::interface::{
+use rshellcheck::formatter::{self, checkstyle, diff, fixer, gcc, json, json1, tty};
+use rshellcheck::options::{self, Outcome, RunConfig};
+use rshellcheck::paths::{combine, drop_file_name, io_error_message, normalize_path};
+use rshellcheck::rc::{self, ConfigLookup};
+use rshellcheck_core::Dialect;
+use rshellcheck_core::cfg::InternalError;
+use rshellcheck_core::interface::{
     CheckSpec, ErrorMessage, PositionedComment, RSC_DATAFLOW_SKIPPED, System, decode_bytes,
 };
 
@@ -160,7 +160,7 @@ impl System for IoSystem {
             return Ok(hit.clone());
         }
         if !self.allowable(external_sources, file) {
-            return Err(shellcheck_rs::interface::not_an_input(
+            return Err(rshellcheck_core::interface::not_an_input(
                 external_sources,
                 file,
             ));
@@ -353,7 +353,7 @@ fn prepare_spec(
 
 fn analyze_input(spec: CheckSpec, dialect: Option<Dialect>, sys: Rc<IoSystem>) -> Input {
     let sys_dyn = Rc::clone(&sys) as Rc<dyn System>;
-    let result = shellcheck_rs::checker::check_script_as(sys_dyn, &spec, dialect);
+    let result = rshellcheck_core::checker::check_script_as(sys_dyn, &spec, dialect);
     Input::Ok(Loaded {
         name: spec.filename,
         sys,
@@ -404,7 +404,7 @@ fn load_parallel(
                         let Ok((index, spec)) = task else { break };
                         let system = Rc::new(sys.for_input(&inputs[index]));
                         let result =
-                            shellcheck_rs::checker::check_script_as(system, &spec, dialect);
+                            rshellcheck_core::checker::check_script_as(system, &spec, dialect);
                         if results.send((index, result)).is_err() {
                             break;
                         }
@@ -763,7 +763,7 @@ fn write_tty(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shellcheck_rs::interface::{Comment, Position, Severity};
+    use rshellcheck_core::interface::{Comment, Position, Severity};
 
     fn comment_in(file: &str, line: i64) -> PositionedComment {
         let pos = Position {
@@ -800,7 +800,7 @@ mod tests {
             file_groups(&[]),
             [] as [(
                 std::string::String,
-                std::vec::Vec<shellcheck_rs::PositionedComment>
+                std::vec::Vec<rshellcheck_core::PositionedComment>
             ); 0]
         );
     }

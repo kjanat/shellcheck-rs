@@ -17,7 +17,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use shellcheck_rs::Dialect;
+use rshellcheck_core::Dialect;
 
 use crate::CommentKey;
 use crate::oracle::Oracle;
@@ -81,17 +81,18 @@ const STABLE_TRAP_VARIABLES: Deviation = Deviation {
 /// directive.
 const UNKNOWN_INTERPRETER_CODES: [i64; 3] = [1071, 1008, 1103];
 
-fn parsed_root(script: &str) -> Option<shellcheck_rs::ast::Token> {
-    shellcheck_rs::parser::parse_script_with("-", script, false, None)
+fn parsed_root(script: &str) -> Option<rshellcheck_core::ast::Token> {
+    rshellcheck_core::parser::parse_script_with("-", script, false, None)
         .root
         .or_else(|| {
             let first = script.lines().next()?;
-            shellcheck_rs::parser::parse_script_with("-", &format!("{first}\n"), false, None).root
+            rshellcheck_core::parser::parse_script_with("-", &format!("{first}\n"), false, None)
+                .root
         })
 }
 
-fn upstream_refuses_body(root: &shellcheck_rs::ast::Token) -> bool {
-    use shellcheck_rs::ast::{Annotation, InnerToken};
+fn upstream_refuses_body(root: &rshellcheck_core::ast::Token) -> bool {
+    use rshellcheck_core::ast::{Annotation, InnerToken};
     let InnerToken::T_Annotation { annotations, token } = &*root.inner else {
         return false;
     };
@@ -107,8 +108,9 @@ fn upstream_refuses_body(root: &shellcheck_rs::ast::Token) -> bool {
     let InnerToken::T_Literal(sb) = &*shebang.inner else {
         return false;
     };
-    shellcheck_rs::parser::is_valid_shell(&shellcheck_rs::ast_lib::executable_from_shebang(sb))
-        == Some(false)
+    rshellcheck_core::parser::is_valid_shell(&rshellcheck_core::ast_lib::executable_from_shebang(
+        sb,
+    )) == Some(false)
 }
 
 fn added_dialect(
@@ -122,7 +124,7 @@ fn added_dialect(
         return None;
     }
     let root = parsed_root(script)?;
-    let dialect = shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())?;
+    let dialect = rshellcheck_core::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())?;
     let flagged: Vec<_> = oracle
         .iter()
         .filter(|k| UNKNOWN_INTERPRETER_CODES.contains(&k.code))
@@ -145,7 +147,7 @@ fn added_dialect(
     }
     let floor_name = Dialect::from(dialect.floor()).name();
     let (comments, _) = runner?.check_one(script, Some(floor_name)).ok()?;
-    let policy = shellcheck_rs::dialect_policy::Policy::of(dialect, &root);
+    let policy = rshellcheck_core::dialect_policy::Policy::of(dialect, &root);
     Some(
         crate::oracle_keys(&comments)
             .into_iter()
@@ -181,7 +183,7 @@ fn completed_statement_notes(
         .filter(|(_, c)| matches!(c, ';' | '\n' | '&'))
         .any(|(i, c)| {
             let prefix = &script[..i + c.len_utf8()];
-            let parsed = shellcheck_rs::parser::parse_script_with(
+            let parsed = rshellcheck_core::parser::parse_script_with(
                 "-",
                 prefix,
                 shell.is_some(),
@@ -275,7 +277,7 @@ fn function_tail_cd(
     port: &[CommentKey],
     oracle: &[CommentKey],
 ) -> bool {
-    use shellcheck_rs::ast::InnerToken;
+    use rshellcheck_core::ast::InnerToken;
     let extra: Vec<_> = port.iter().filter(|k| !oracle.contains(k)).collect();
     if extra.is_empty() || extra.iter().any(|k| k.code != 2164) {
         return false;
@@ -284,7 +286,7 @@ fn function_tail_cd(
     if !remaining.iter().copied().eq(oracle.iter()) {
         return false;
     }
-    let parsed = shellcheck_rs::parser::parse_script_with(
+    let parsed = rshellcheck_core::parser::parse_script_with(
         "-",
         script,
         shell.is_some(),
@@ -293,14 +295,14 @@ fn function_tail_cd(
     let Some(root) = parsed.root else {
         return false;
     };
-    let (parents, tokens) = shellcheck_rs::analyzer_lib::build_maps(&root);
+    let (parents, tokens) = rshellcheck_core::analyzer_lib::build_maps(&root);
     extra.iter().all(|finding| {
         tokens.values().any(|command| {
             if !matches!(&*command.inner, InnerToken::T_SimpleCommand { .. })
                 || !(match &*command.inner {
                     InnerToken::T_SimpleCommand { words, .. } => words
                         .first()
-                        .and_then(shellcheck_rs::ast_lib::get_literal_string),
+                        .and_then(rshellcheck_core::ast_lib::get_literal_string),
                     _ => None,
                 })
                 .is_some_and(|name| matches!(name.as_str(), "cd" | "pushd" | "popd"))
@@ -323,7 +325,7 @@ fn function_tail_cd(
             let mut child = command;
             let mut overwritten = false;
             while let Some(parent) = parents.get(&child.id()).and_then(|id| tokens.get(id)) {
-                let follows = |commands: &[shellcheck_rs::ast::Token]| {
+                let follows = |commands: &[rshellcheck_core::ast::Token]| {
                     commands.iter().any(|t| t.id() == child.id())
                         && commands.last().is_some_and(|t| t.id() != child.id())
                 };
@@ -349,7 +351,7 @@ fn function_tail_cd(
                     InnerToken::T_CaseExpression { cases, .. } => {
                         overwritten |= cases.iter().any(|(kind, _, body)| {
                             follows(body)
-                                || (*kind != shellcheck_rs::ast::CaseType::CaseBreak
+                                || (*kind != rshellcheck_core::ast::CaseType::CaseBreak
                                     && body.iter().any(|t| t.id() == child.id()))
                         });
                     }
@@ -376,15 +378,15 @@ fn function_tail_cd(
 fn port_parameters(
     script: &str,
     shell: Option<&str>,
-) -> Option<shellcheck_rs::analyzer_lib::Parameters> {
+) -> Option<rshellcheck_core::analyzer_lib::Parameters> {
     let dialect = shell.and_then(crate::parse_dialect);
-    let parsed = shellcheck_rs::parser::parse_script_with(
+    let parsed = rshellcheck_core::parser::parse_script_with(
         "-",
         script,
         shell.is_some(),
         dialect.map(Dialect::floor),
     );
-    Some(shellcheck_rs::analyzer_lib::make_parameters_as(
+    Some(rshellcheck_core::analyzer_lib::make_parameters_as(
         parsed.root?,
         parsed.positions,
         dialect,
@@ -404,7 +406,7 @@ fn without_withheld_traps(
     }
     let params = port_parameters(script, shell)?;
     let withheld = crate::json1_keys(
-        &shellcheck_rs::checks::commands::withheld_trap_warnings(&params),
+        &rshellcheck_core::checks::commands::withheld_trap_warnings(&params),
         script,
         "-",
     )
@@ -428,7 +430,7 @@ fn without_cleanup_traps(
     }
     let params = port_parameters(script, shell)?;
     let reported = crate::json1_keys(
-        &shellcheck_rs::analytics::cleanup_trap_warnings(&params),
+        &rshellcheck_core::analytics::cleanup_trap_warnings(&params),
         script,
         "-",
     )
@@ -981,7 +983,7 @@ mod tests {
     fn stable_trap_variables_fail_closed_when_the_script_does_not_parse() {
         let script = "ENGINE=podman; trap \"$ENGINE rm -f x\" EXIT\nif\n";
         assert!(
-            shellcheck_rs::parser::parse_script_with("-", script, false, None)
+            rshellcheck_core::parser::parse_script_with("-", script, false, None)
                 .root
                 .is_none()
         );

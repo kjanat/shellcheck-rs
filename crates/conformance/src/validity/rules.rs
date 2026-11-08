@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use shellcheck_rs::Dialect;
+use rshellcheck_core::Dialect;
 
 use super::matrix::{self, Matrix, version_cmp};
 use super::outcomes::{self, Outcome, Outcomes};

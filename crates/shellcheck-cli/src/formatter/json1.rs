@@ -6,8 +6,8 @@
 //! must match exactly. `sources` is the port's: the sourced files that were
 //! read.
 
+use rshellcheck_core::interface::{InsertionPoint, PositionedComment};
 use serde::Serialize;
-use shellcheck_rs::interface::{InsertionPoint, PositionedComment};
 
 /// The json1 document: `{"comments": [...], "sources": [...]}`.
 #[derive(Serialize)]

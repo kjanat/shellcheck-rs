@@ -1,9 +1,9 @@
 //! Core-only JSON API shared by native parity tests and an import-free WASM ABI.
 
+use rshellcheck_core::interface::{InsertionPoint, System};
+use rshellcheck_core::{CheckSpec, Dialect, Severity};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
-use shellcheck_rs::interface::{InsertionPoint, System};
-use shellcheck_rs::{CheckSpec, Dialect, Severity};
 use std::{collections::BTreeMap, rc::Rc};
 
 /// Maximum serialized request size, including virtual source files.
@@ -134,7 +134,7 @@ fn analyze(input: &[u8]) -> Result<Value, String> {
         min_severity: severity,
         ..CheckSpec::default()
     };
-    let result = shellcheck_rs::checker::check_script_as(Rc::new(system), &spec, shell);
+    let result = rshellcheck_core::checker::check_script_as(Rc::new(system), &spec, shell);
     let comments: Vec<_> = result.comments.iter().map(|c| {
         let fix = c.fix.as_ref().map(|f| json!({"replacements": f.replacements.iter().map(|r| json!({
             "file": r.start.file, "line": r.start.line, "column": r.start.column,

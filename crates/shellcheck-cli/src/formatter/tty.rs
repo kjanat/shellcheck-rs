@@ -7,7 +7,7 @@
 
 use std::fmt::Write;
 
-use shellcheck_rs::interface::{PositionedComment, Severity};
+use rshellcheck_core::interface::{PositionedComment, Severity};
 
 use super::ColorFunc;
 use super::fixer::{apply_fix, fix_mconcat, lines as hs_lines, map_positions, unlines};
@@ -82,9 +82,9 @@ fn source_line(file_lines: &[String], line: i64) -> String {
 
 /// `sliceFile`: rebase a fix (and the excerpt lines) to the lines it spans.
 fn slice_file(
-    fix: &shellcheck_rs::interface::Fix,
+    fix: &rshellcheck_core::interface::Fix,
     file_lines: &[String],
-) -> (shellcheck_rs::interface::Fix, Vec<String>) {
+) -> (rshellcheck_core::interface::Fix, Vec<String>) {
     let mut min_line = i64::MAX;
     let mut max_line = i64::MIN;
     for r in &fix.replacements {
@@ -99,7 +99,7 @@ fn slice_file(
     let excerpt: Vec<String> = (min_line.max(1)..=max_line.max(1))
         .map(|line| source_line(file_lines, line))
         .collect();
-    let adjusted = map_positions(fix, |p| shellcheck_rs::interface::Position {
+    let adjusted = map_positions(fix, |p| rshellcheck_core::interface::Position {
         line: p.line - min_line + 1,
         ..p.clone()
     });
@@ -113,7 +113,7 @@ fn show_fixed_string(
     file_lines: &[String],
     out: &mut String,
 ) {
-    let fixes: Vec<shellcheck_rs::interface::Fix> =
+    let fixes: Vec<rshellcheck_core::interface::Fix> =
         comments.iter().filter_map(|c| c.fix.clone()).collect();
     if fixes.is_empty() {
         return;

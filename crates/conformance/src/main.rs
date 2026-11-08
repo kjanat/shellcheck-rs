@@ -18,7 +18,7 @@
 //!   `fuzz` is the normal state of an incomplete port, and the reason `gate`
 //!   alone must never be read as "parity".
 //!
-//! The port runs in-process (`shellcheck_rs::check_script`); only the oracle
+//! The port runs in-process (`rshellcheck_core::check_script`); only the oracle
 //! costs a process, and those are batched.
 //!
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
@@ -39,10 +39,10 @@ use std::rc::Rc;
 
 use actions_rs::{Annotation, Cell, Summary, log, output};
 use clap::{ArgAction, Parser, ValueEnum};
+use rshellcheck::formatter::{fixer, json1};
+use rshellcheck::options::parse_dialect;
+use rshellcheck_core::interface::{CheckSpec, NoExternalSources, PositionedComment};
 use serde_json::Value;
-use shellcheck_cli::formatter::{fixer, json1};
-use shellcheck_cli::options::parse_dialect;
-use shellcheck_rs::interface::{CheckSpec, NoExternalSources, PositionedComment};
 
 // Comparison keys
 
@@ -199,7 +199,7 @@ pub fn port_keys_with(
         optional_checks: optional.to_vec(),
         ..CheckSpec::default()
     };
-    let result = shellcheck_rs::checker::check_script_as(
+    let result = rshellcheck_core::checker::check_script_as(
         Rc::new(NoExternalSources),
         &spec,
         shell.and_then(parse_dialect),
@@ -489,7 +489,7 @@ fn audit(args: &Args) -> Result<bool, String> {
             fuzz::sample_scripts(&scripts.clone(), args.fuzzing.seed, args.fuzzing.iterations);
         scripts.extend(generated);
         for script in &scripts {
-            for site in shellcheck_rs::parser::audit_commitment_backtracks("-", script) {
+            for site in rshellcheck_core::parser::audit_commitment_backtracks("-", script) {
                 let e = sites.entry(site).or_insert_with(|| (0, script.clone()));
                 e.0 += 1;
                 if script.len() < e.1.len() {

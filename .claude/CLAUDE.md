@@ -118,7 +118,9 @@ We never diverge on:
 
 ## Syncing upstream
 
-1. Move the pin in `UPSTREAM.md` and add one table row per imported commit.
+1. Move the pin in `UPSTREAM.md`, `tools/oracle.json` and
+   `crates/shellcheck-cli/upstream.json`, and add one table row per imported
+   commit.
 2. Port each commit with its `prop_` tests in the matching Rust module.
 3. Rebuild the oracle with `python tools/oracle.py`.
 4. Run `cargo conformance-snapshot`, review the diff, commit it with the port.

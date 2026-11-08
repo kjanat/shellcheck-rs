@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::path::Path;
 
+use rshellcheck_core::Dialect;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use shellcheck_rs::Dialect;
 
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 pub struct Matrix {

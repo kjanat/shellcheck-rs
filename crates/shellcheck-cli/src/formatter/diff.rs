@@ -5,7 +5,7 @@
 //! `git`-style unified diff. A `no-newline-at-end-of-file` marker is emitted
 //! when the last hunk covers a final line that lacked a trailing newline.
 
-use shellcheck_rs::interface::{Fix, PositionedComment};
+use rshellcheck_core::interface::{Fix, PositionedComment};
 
 use super::fixer::{apply_fix, fix_mconcat, lines as hs_lines, unlines};
 

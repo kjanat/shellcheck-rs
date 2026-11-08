@@ -5,15 +5,17 @@ edition.workspace      = true
 rust-version.workspace = true
 description            = "Portable JSON ABI for the ShellCheck analysis core"
 license.workspace      = true
+# npm, PyPI and the Go module ship the built `.wasm`.
+publish                = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-schemars                = { workspace = true, optional = true }
-serde.workspace         = true
-serde_json.workspace    = true
-shellcheck-rs.workspace = true
+rshellcheck-core.workspace = true
+schemars                   = { workspace = true, optional = true }
+serde.workspace            = true
+serde_json.workspace       = true
 
 [features]
 schema = ["dep:schemars"]

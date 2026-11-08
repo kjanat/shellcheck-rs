@@ -387,7 +387,7 @@ impl Parser {
                 match v.as_str() {
                     // `readAnnotationWithoutPrefix sandboxed`: this path is the
                     // sandboxed one (a script), where enabling external sources
-                    // is refused. The rc-file parser (`shellcheck_cli::rc`) is
+                    // is refused. The rc-file parser (`rshellcheck::rc`) is
                     // the unsandboxed caller and allows it.
                     "true" => {
                         self.note_at(

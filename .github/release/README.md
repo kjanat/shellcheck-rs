@@ -40,9 +40,10 @@ changes. `rshellcheck --version` prints the ported upstream ShellCheck version
 on its `upstream:` line, and the `upstream-<version>` aliases below map that
 version to the newest port release.
 
-1. Set the same version in the `shellcheck-cli`, `shellcheck-rs` and
-   `shellcheck-wasm` manifests and in the four binding manifests under
-   `bindings/`. Refresh `Cargo.lock` with `cargo check -p shellcheck-cli` and
+1. Set the same version in the `rshellcheck`, `rshellcheck-core` and
+   `shellcheck-wasm` manifests, in the `rshellcheck` and `rshellcheck-core`
+   entries of `[workspace.dependencies]`, and in the four binding manifests
+   under `bindings/`. Refresh `Cargo.lock` with `cargo check -p rshellcheck` and
    `package-lock.json` with `npm install --package-lock-only`, and include
    both in the version commit; release builds use `--locked`.
 2. Review the tests and build artifacts from the pull request. The workflow

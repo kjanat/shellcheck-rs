@@ -318,7 +318,7 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
             .map_err(|e| format!("{}: {e}", cabal_path.display()))?
     } else {
         let path = std::path::Path::new(repo).join("tools/oracle.json");
-        let pin: shellcheck_cli::oracle::UpstreamPin = serde_json::from_str(
+        let pin: rshellcheck::oracle::UpstreamPin = serde_json::from_str(
             &std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?,
         )
         .map_err(|e| e.to_string())?;
@@ -421,5 +421,21 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let banner = verify(&o, &root.to_string_lossy(), false).unwrap();
         assert!(banner.starts_with("oracle: "), "{banner}");
+    }
+
+    /// The published `rshellcheck` package cannot reach `tools/oracle.json`, so
+    /// it builds its banner from a copy that a pin move has to update too.
+    #[test]
+    fn the_cli_copy_of_the_pin_matches_tools_oracle_json() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |path: &str| -> rshellcheck::oracle::UpstreamPin {
+            let text = std::fs::read_to_string(root.join(path)).unwrap();
+            serde_json::from_str(&text).unwrap()
+        };
+        assert_eq!(
+            read("crates/shellcheck-cli/upstream.json"),
+            read("tools/oracle.json"),
+            "copy the pin in tools/oracle.json to crates/shellcheck-cli/upstream.json"
+        );
     }
 }

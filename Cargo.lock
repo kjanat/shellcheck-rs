@@ -136,11 +136,11 @@ dependencies = [
  "actions-rs",
  "clap",
  "json-schema-sort",
+ "rshellcheck",
+ "rshellcheck-core",
  "schemars",
  "serde",
  "serde_json",
- "shellcheck-cli",
- "shellcheck-rs",
  "shellcheck-wasm",
  "toml",
 ]
@@ -343,6 +343,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rshellcheck"
+version = "1.0.0"
+dependencies = [
+ "rshellcheck-core",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rshellcheck-core"
+version = "1.0.0"
+dependencies = [
+ "im-rc",
+ "reblessive",
+ "regex",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -446,32 +465,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "shellcheck-cli"
-version = "1.0.0"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
- "shellcheck-rs",
-]
-
-[[package]]
-name = "shellcheck-rs"
-version = "1.0.0"
-dependencies = [
- "im-rc",
- "reblessive",
- "regex",
-]
-
-[[package]]
 name = "shellcheck-wasm"
 version = "1.0.0"
 dependencies = [
+ "rshellcheck-core",
  "schemars",
  "serde",
  "serde_json",
- "shellcheck-rs",
 ]
 
 [[package]]

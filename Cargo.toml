@@ -3,15 +3,18 @@ resolver = "3"
 members  = ["crates/*"]
 
 [workspace.package]
+authors      = ["Kaj Kowalski <info@kajkowalski.nl>"]
 edition      = "2024"
 rust-version = "1.99"
 repository   = "https://github.com/kjanat/shellcheck-rs"
 license      = "GPL-3.0-or-later"
 
+# A release sets these versions together with the package versions. The exact
+# pin builds a published `rshellcheck` only with the core it was released with.
 [workspace.dependencies]  # workspace
-shellcheck-cli  = { path = "crates/shellcheck-cli" }
-shellcheck-rs   = { path = "crates/shellcheck-rs" }
-shellcheck-wasm = { path = "crates/shellcheck-wasm" }
+rshellcheck      = { path = "crates/shellcheck-cli", version = "=1.0.0" }
+rshellcheck-core = { path = "crates/shellcheck-rs", version = "=1.0.0" }
+shellcheck-wasm  = { path = "crates/shellcheck-wasm" }
 
 # own shit
 actions-rs       = "0.1.2"

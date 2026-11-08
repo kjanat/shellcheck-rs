@@ -120,11 +120,11 @@ jobs:
       - name: Build Rust port (release)
         run: cargo build --release
 
-      - name: Test shellcheck-rs
-        run: cargo test -p shellcheck-rs
+      - name: Test rshellcheck-core
+        run: cargo test -p rshellcheck-core
 
-      - name: Test shellcheck-cli
-        run: cargo test -p shellcheck-cli
+      - name: Test rshellcheck
+        run: cargo test -p rshellcheck
 
       - name: Conformance gate
         run: cargo conformance-gate

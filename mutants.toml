@@ -31,7 +31,7 @@ exclude_re = [
 
 # The ported prop_ suite is the fast signal; the snapshot and the oracle gate
 # are separate (and slower) instruments, run per commit rather than per mutant.
-additional_cargo_test_args = ["-p", "shellcheck-rs", "--lib"]
+additional_cargo_test_args = ["-p", "rshellcheck-core", "--lib"]
 
 # A mutant that makes the parser loop forever must not hang the run. The suite
 # takes ~8s, so this is generous.

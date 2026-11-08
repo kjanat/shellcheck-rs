@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use shellcheck_rs::Dialect;
+use rshellcheck_core::Dialect;
 
 use crate::{Args, port_keys};
 
@@ -241,7 +241,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
 mod tests {
     use std::path::Path;
 
-    use shellcheck_rs::Dialect;
+    use rshellcheck_core::Dialect;
 
     use crate::port_keys;
 
@@ -263,19 +263,19 @@ mod tests {
         let mut scripts_losing = 0;
         for script in frozen_corpus() {
             let Some(root) =
-                shellcheck_rs::parser::parse_script_with("-", &script, false, None).root
+                rshellcheck_core::parser::parse_script_with("-", &script, false, None).root
             else {
                 continue;
             };
             let Some(dialect) =
-                shellcheck_rs::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())
+                rshellcheck_core::analyzer_lib::named_dialect(&root).filter(|d| d.is_added())
             else {
                 continue;
             };
             let checked = port_keys(&script, "-", None).unwrap();
             let floor =
                 port_keys(&script, "-", Some(Dialect::from(dialect.floor()).name())).unwrap();
-            let policy = shellcheck_rs::dialect_policy::Policy::of(dialect, &root);
+            let policy = rshellcheck_core::dialect_policy::Policy::of(dialect, &root);
             let kept: Vec<_> = floor
                 .iter()
                 .filter(|k| policy.keeps(k.code))

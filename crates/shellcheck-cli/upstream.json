@@ -1,0 +1,6 @@
+{
+	"$schema": "../../schemas/upstream-pin.schema.json",
+	"repository": "koalaman/shellcheck",
+	"revision": "919d37c4d77a7ce16cfc76ebdd781dd6e8081fa5",
+	"version": "0.11.0"
+}

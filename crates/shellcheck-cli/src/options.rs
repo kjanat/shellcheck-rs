@@ -31,8 +31,8 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use shellcheck_rs::interface::{CheckSpec, ColorOption, Severity, Shell};
-use shellcheck_rs::{Dialect, optional_checks};
+use rshellcheck_core::interface::{CheckSpec, ColorOption, Severity, Shell};
+use rshellcheck_core::{Dialect, optional_checks};
 
 /// Formats the port implements. `getOpt`'s format validation lists exactly
 /// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
@@ -353,7 +353,7 @@ pub fn list_optional_text() -> String {
 }
 
 /// The version banner (`printVersion`), using the crate version and the
-/// upstream ShellCheck pin from `tools/oracle.json`.
+/// upstream ShellCheck pin from `upstream.json`.
 ///
 /// With `links`, each URL is an OSC 8 hyperlink, each name links to its GitHub
 /// repository, and each version links to its GitHub release page. Release tags
@@ -1189,7 +1189,7 @@ mod tests {
     fn version_banner_names_the_port_and_the_upstream_pin() -> Result<(), Box<dyn std::error::Error>>
     {
         let pin: crate::oracle::UpstreamPin =
-            serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
+            serde_json::from_str(include_str!("../upstream.json"))?;
         let banner = version_banner(false);
         let lines: Vec<&str> = banner.lines().collect();
         assert_eq!(
@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn version_banner_links_its_urls_on_request() -> Result<(), Box<dyn std::error::Error>> {
         let pin: crate::oracle::UpstreamPin =
-            serde_json::from_str(include_str!("../../../tools/oracle.json"))?;
+            serde_json::from_str(include_str!("../upstream.json"))?;
         let version = env!("CARGO_PKG_VERSION");
         let link = |text: &str, url: &str| format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\");
         let ours = "https://github.com/kjanat/shellcheck-rs";

@@ -4,7 +4,7 @@
 //! other than error/warning is rendered as `note`, and internal newlines in the
 //! message are removed (`concat . lines`).
 
-use shellcheck_rs::interface::{PositionedComment, Severity};
+use rshellcheck_core::interface::{PositionedComment, Severity};
 
 use super::fixer::make_non_virtual;
 

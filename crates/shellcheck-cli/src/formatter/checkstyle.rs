@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use shellcheck_rs::interface::{PositionedComment, Severity};
+use rshellcheck_core::interface::{PositionedComment, Severity};
 
 use super::fixer::make_non_virtual;
 

@@ -49,7 +49,7 @@ impl OptionalCheck {
 /// enable checks in the engine. The special selector `all` is omitted.
 ///
 /// ```
-/// use shellcheck_rs::optional_checks;
+/// use rshellcheck_core::optional_checks;
 ///
 /// let names: Vec<_> = optional_checks().iter().map(|check| check.name).collect();
 /// assert!(names.contains(&"clarify-parse-errors"));

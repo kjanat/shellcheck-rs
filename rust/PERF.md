@@ -139,9 +139,9 @@ Callgrind on medium (9.67 G instructions): `analyze_control_flow` 87 %; inside i
 
 ```sh
 # 23 s: unit tests (1 517)
-cargo test -p shellcheck-rs
+cargo test -p rshellcheck-core
 # 4 min: release build of the CLI and the harness (thin LTO)
-cargo build --release -p shellcheck-cli -p conformance
+cargo build --release -p rshellcheck -p conformance
 # 10 s: the oracle gate (0 divergences required)
 target/release/conformance gate --oracle "$ORACLE" --quiet
 # 1–3 min: the fuzzer (0 divergences required)
