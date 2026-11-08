@@ -28,6 +28,7 @@ mod corpus;
 mod delta;
 mod deviations;
 mod fuzz;
+mod judge;
 mod oracle;
 mod schemas;
 mod shells;
@@ -535,6 +536,8 @@ pub enum Command {
     Validity,
     /// Write the JSON Schemas of the files and messages the crates own.
     Schemas,
+    /// Classify files named on standard input: identical, sanctioned or differs.
+    Judge,
 }
 
 #[derive(Parser)]
@@ -738,6 +741,7 @@ fn main() -> ExitCode {
         Command::Bench => bench::run(&args),
         Command::Validity => validity::run(args.step, &args.validity),
         Command::Schemas => schemas::run(),
+        Command::Judge => judge::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
             corpus::coverage(&src).and_then(|coverage| {
