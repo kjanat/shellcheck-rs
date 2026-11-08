@@ -1,6 +1,8 @@
-[candidates.upstream-release]
-binary = "shellcheck"
-tool   = "shellcheck"
+[candidates.rshellcheck]
+repo    = "https://github.com/kjanat/shellcheck-rs.git"
+ref     = "master"
+package = "rshellcheck"
+tools   = ["rust"]
 
 [candidates.upstream-head]
 baseline = true
@@ -12,11 +14,9 @@ binary   = "shellcheck"
 release  = "upstream-release"
 tools    = ["ghcup", "ghc", "cabal"]
 
-[candidates.rshellcheck]
-repo    = "https://github.com/kjanat/shellcheck-rs.git"
-ref     = "master"
-package = "rshellcheck"
-tools   = ["rust"]
+[candidates.upstream-release]
+binary = "shellcheck"
+tool   = "shellcheck"
 
 [candidates.h2r]
 repo    = "https://github.com/kjanat/shellcheck-rs.git"

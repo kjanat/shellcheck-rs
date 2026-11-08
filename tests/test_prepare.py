@@ -291,7 +291,7 @@ tools = ["rust"]
         self.assertEqual(recorded["notes"], plan["notes"])
         self.cli("report", str(out))
         report = (out / "report.md").read_text()
-        self.assertIn("Baseline: **upstream-release**", report)
+        self.assertIn("Baseline: **upstream-release-vfixture**", report)
         self.assertIn(plan["notes"][0], report)
 
     def test_head_past_release_tag_keeps_the_source_build_as_baseline(self):

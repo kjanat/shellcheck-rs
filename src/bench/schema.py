@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 
 type Kind = Literal["release", "git", "path"]
 type Status = Literal["ok", "slow", "failed", "limited", "skipped"]
-type Parity = Literal["baseline", "identical", "differs", "unknown"]
+# "sanctioned": the output differs only where the candidate's own conformance
+# judge proves a sanctioned deviation, so its timings compare like "identical".
+type Parity = Literal["baseline", "identical", "sanctioned", "differs", "unknown"]
 
 
 class CandidateSpec(BaseModel):
@@ -219,6 +221,8 @@ class Precheck(BaseModel):
     reason: str | None
     parity: Parity
     diff_lines: int | None = None
+    # Deviation class ids the judge named for a "sanctioned" parity.
+    deviations: list[str] = []
 
 
 class Round(BaseModel):

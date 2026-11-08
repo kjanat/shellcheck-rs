@@ -2,10 +2,16 @@
 
 import argparse
 import re
+import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from bench.schema import Manifest, Run, Summary
+from bench.schema import Manifest, Precheck, Run, Summary
+
+CANDIDATES = Path(__file__).resolve().parent / "candidates.toml"
+
+# Parities whose timings may be compared with the baseline.
+COMPARABLE = ("baseline", "identical", "sanctioned")
 
 
 def actions_summary(results: Path, artifact_url: str) -> str:
@@ -64,6 +70,32 @@ def workload(run: Run, name: str) -> str:
     return f"{context}{size} · {output}"
 
 
+def label(candidate: Manifest) -> str:
+    """The candidate's display name. An `upstream-` candidate carries the
+    revision it measured, since its name alone does not say which ShellCheck
+    that was."""
+    if not candidate.name.startswith("upstream-") or not candidate.pin:
+        return candidate.name
+    if candidate.kind == "release":
+        return f"{candidate.name}-v{candidate.pin.removeprefix('v')}"
+    if candidate.kind == "git":
+        return f"{candidate.name}-{candidate.pin[:7]}"
+    return candidate.name
+
+
+def ordered(run: Run) -> list[Manifest]:
+    """Candidates in the order candidates.toml lists them; any candidate the
+    file no longer names follows in run order."""
+    with CANDIDATES.open("rb") as file:
+        rank = {name: i for i, name in enumerate(tomllib.load(file)["candidates"])}
+    return sorted(run.candidates, key=lambda c: rank.get(c.name, len(rank)))
+
+
+def once(check: Precheck) -> bool:
+    """Whether a correct pre-check run was the only timing of this cell."""
+    return check.status == "slow"
+
+
 def revision(candidate: Manifest) -> str:
     label = candidate.pin[:12] or "supplied binary"
     if candidate.repo and candidate.repo.startswith("https://github.com/"):
@@ -77,7 +109,20 @@ def revision(candidate: Manifest) -> str:
 
 def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None) -> str:
     baseline = run.baseline
-    names = [candidate.name for candidate in run.candidates]
+    candidates = ordered(run)
+    names = [candidate.name for candidate in candidates]
+    shown = {candidate.name: label(candidate) for candidate in candidates}
+
+    def observed(scenario: str, name: str) -> float | None:
+        """The median, or the single pre-check time of a cell timed once."""
+        cell = summary.descriptives[scenario][name]
+        if cell:
+            return cell.median
+        check = run.precheck[scenario][name]
+        if once(check) or run.samples[scenario][name].stop_reason:
+            return check.wall_s
+        return None
+
     comparisons = {
         (pair.scenario, pair.candidate): pair
         for pair in summary.comparisons
@@ -105,7 +150,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
     lines += [
         "## Where to look first",
         "",
-        f"Baseline: **{baseline}**. Ratios are candidate ÷ baseline; higher means more cost.",
+        f"Baseline: **{shown[baseline]}**. Ratios are candidate ÷ baseline; higher means more cost.",
         "",
     ]
     for note in run.notes:
@@ -123,17 +168,17 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             flags = summary.flags[scenario][name] + summary.flags[scenario][baseline]
             if check.parity == "differs":
                 actions.append(
-                    f"{name}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
+                    f"{shown[name]}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
                 )
             if check.status == "limited":
                 actions.append(
-                    f"{name}, **{workload(run, scenario)}**: this workload stopped at the total measurement budget; its output agreement is unknown."
+                    f"{shown[name]}, **{workload(run, scenario)}**: this workload stopped at the total measurement budget; its output agreement is unknown."
                 )
             elif check.status == "failed":
                 actions.append(
-                    f"{name}, **{workload(run, scenario)}**: investigate {check.reason}."
+                    f"{shown[name]}, **{workload(run, scenario)}**: investigate {check.reason}."
                 )
-            if not cell or not base or check.parity != "identical":
+            if not cell or not base or check.parity not in ("identical", "sanctioned"):
                 continue
             pair = comparisons.get((scenario, name))
             unstable = any(
@@ -161,15 +206,15 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             base = summary.descriptives[scenario][baseline]
             assert cell and base
             actions.append(
-                f"{name}: profile the **{workload(run, scenario)}**: "
-                f"**{duration(cell.median)}** vs {baseline} **{duration(base.median)}** "
+                f"{shown[name]}: profile the **{workload(run, scenario)}**: "
+                f"**{duration(cell.median)}** vs {shown[baseline]} **{duration(base.median)}** "
                 f"(**{ratio:.2f}× time**)."
             )
         if memory:
             ratio, scenario, rss = max(memory)
             if ratio > 1:
                 actions.append(
-                    f"{name}: largest observed memory ratio is on the **{workload(run, scenario)}** "
+                    f"{shown[name]}: largest observed memory ratio is on the **{workload(run, scenario)}** "
                     f"(**{rss / 2**20:.0f} MiB**, **{ratio:.2f}× baseline**)."
                 )
     if actions:
@@ -197,12 +242,14 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             "|---|---|---:|---:|---:|---:|---|",
         ]
         base = summary.descriptives[scenario][baseline]
+        base_check = run.precheck[scenario][baseline]
+        base_value = observed(scenario, baseline)
         eligible = {
-            name: cell.median
+            name: value
             for name in names
-            if (cell := summary.descriptives[scenario][name]) is not None
-            and run.precheck[scenario][name].status == "ok"
-            and run.precheck[scenario][name].parity in ("baseline", "identical")
+            if (value := observed(scenario, name)) is not None
+            and run.precheck[scenario][name].status in ("ok", "slow")
+            and run.precheck[scenario][name].parity in COMPARABLE
             and not any(
                 flag.startswith("not comparable")
                 for flag in summary.flags[scenario][name]
@@ -214,9 +261,11 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             cell = summary.descriptives[scenario][name]
             flags = summary.flags[scenario][name]
             pair = comparisons.get((scenario, name))
+            value = observed(scenario, name)
             output = {
                 "baseline": "baseline",
                 "identical": "matches",
+                "sanctioned": f"matches up to sanctioned deviations ({', '.join(check.deviations)}; [diff](precheck/{scenario}/{name}.diff))",
                 "unknown": "unknown",
                 "differs": f"[diff](precheck/{scenario}/{name}.diff)",
             }[check.parity]
@@ -224,7 +273,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 duration(cell.median)
                 if cell
                 else duration(check.wall_s) + " (once)"
-                if check.status == "slow" or run.samples[scenario][name].stop_reason
+                if once(check) or run.samples[scenario][name].stop_reason
                 else duration(check.wall_s) + " (stopped)"
                 if check.status == "limited"
                 else "-"
@@ -236,6 +285,14 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                     low, high = pair.speedup_median_ci
                     if low > 0:
                         ratio += f" [{1 / high:.2f}, {1 / low:.2f}]"
+            elif (
+                name != baseline
+                and value is not None
+                and base_value
+                and check.parity in COMPARABLE
+            ):
+                # One side was timed once: a point ratio, never an interval.
+                ratio = f"≈{value / base_value:.2f}× (no CI)"
             rss = cell.peak_rss_median if cell else check.peak_rss_bytes
             rss_ratio = (
                 f"{rss / base.peak_rss_median:.2f}×"
@@ -253,10 +310,16 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 status = run.samples[scenario][name].stop_reason
             elif check.status != "ok":
                 status = check.reason or check.status
-            elif check.parity not in ("baseline", "identical") or any(
+            elif check.parity not in COMPARABLE or any(
                 flag.startswith("not comparable") for flag in flags + base_flags
             ):
                 status = "not comparable"
+            elif once(base_check) and name != baseline:
+                limit = run.scenarios[scenario].max_run_seconds or run.config.max_run_s
+                status = (
+                    f"{shown[baseline]} timed once ({base_check.wall_s:.1f}s, over the "
+                    f"{limit:g}s per-run budget); ratio without interval"
+                )
             elif unstable or base_unstable:
                 status = (
                     "repeat: noise/drift"
@@ -276,13 +339,13 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 median = f"***🏆 {median}***"
             rss_text = "-" if check.status == "skipped" else f"{rss / 2**20:.0f} MiB"
             lines.append(
-                f"| {name} | {output} | {median} | {ratio} | {rss_text} | {rss_ratio} | {status} |"
+                f"| {shown[name]} | {output} | {median} | {ratio} | {rss_text} | {rss_ratio} | {status} |"
             )
     lines += ["", "Candidates:", ""]
-    for candidate in run.candidates:
+    for candidate in candidates:
         dirty = " + local changes" if candidate.dirty else ""
         lines.append(
-            f"- **{candidate.name}**: {revision(candidate)}{dirty}; "
+            f"- **{shown[candidate.name]}**: {revision(candidate)}{dirty}; "
             f"{candidate.binary_bytes / 2**20:.1f} MiB binary; "
             f"SHA-256 [{candidate.binary_sha256[:12]}](run.json)."
         )
@@ -290,7 +353,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
     for name, limit in config.candidate_budget_s.items():
         lines += [
             "",
-            f"**{name} total measurement budget: {duration(limit)}**; used **{duration(run.candidate_elapsed_s.get(name, 0))}** across initial checks, warm-ups and timed runs. Compilation is separate. Budget-limited and skipped workloads are marked above.",
+            f"**{shown.get(name, name)} total measurement budget: {duration(limit)}**; used **{duration(run.candidate_elapsed_s.get(name, 0))}** across initial checks, warm-ups and timed runs. Compilation is separate. Budget-limited and skipped workloads are marked above.",
         ]
     budgets = sorted(
         {
