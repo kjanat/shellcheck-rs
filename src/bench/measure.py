@@ -64,6 +64,7 @@ from bench.schema import (
     Environment,
     HyperfineExport,
     HyperfineResult,
+    JudgeReport,
     Manifest,
     Precheck,
     Round,
@@ -464,6 +465,7 @@ def precheck(
                 check(sname, c)
 
         base = results[sname][baseline]
+        oracle = next(c.binary for c in candidates if c.name == baseline)
         base_out = (
             canonical(sc.format, (pdir / f"{baseline}.stdout").read_bytes())
             if base.status in ("ok", "slow")
@@ -479,6 +481,17 @@ def precheck(
             mine = canonical(sc.format, (pdir / f"{c.name}.stdout").read_bytes())
             same = mine == base_out and r.exit == base.exit
             r.parity = "identical" if same else "differs"
+            if not same and c.judge:
+                sanctioned = judged(
+                    c.judge,
+                    oracle,
+                    sc,
+                    corpus / sc.cwd,
+                    pdir / f"{c.name}.judge.json",
+                )
+                if sanctioned is not None:
+                    r.parity = "sanctioned"
+                    r.deviations = sanctioned
             if not same:
                 diff = difflib.unified_diff(
                     base_out.decode(errors="replace").splitlines(),
@@ -493,9 +506,14 @@ def precheck(
                     1 for l in lines if l[:1] in "+-" and l[:3] not in ("+++", "---")
                 )
                 _ = (pdir / f"{c.name}.diff").write_text("\n".join(lines) + "\n")
-                warn(
-                    f"{sname}: {c.name} output differs from {baseline} ({r.diff_lines} lines; see {pdir / (c.name + '.diff')})"
-                )
+                if r.parity == "sanctioned":
+                    log(
+                        f"{sname}: {c.name} differs from {baseline} only by sanctioned deviations: {', '.join(r.deviations)}"
+                    )
+                else:
+                    warn(
+                        f"{sname}: {c.name} output differs from {baseline} ({r.diff_lines} lines; see {pdir / (c.name + '.diff')})"
+                    )
     return results
 
 
@@ -506,12 +524,53 @@ def wrap(pin: str | None, cmd: list[str]) -> list[str]:
     return ["taskset", "-c", pin, *cmd] if pin else cmd
 
 
+def scenario_args(scenario: Scenario) -> list[str]:
+    """The scenario's arguments relative to its working directory."""
+    prefix = scenario.cwd.rstrip("/") + "/" if scenario.cwd else ""
+    return [arg.removeprefix(prefix) if prefix else arg for arg in scenario.args]
+
+
 def scenario_command(
     candidate: Manifest, scenario: Scenario, pin: str | None
 ) -> list[str]:
-    prefix = scenario.cwd.rstrip("/") + "/" if scenario.cwd else ""
-    args = [arg.removeprefix(prefix) if prefix else arg for arg in scenario.args]
-    return wrap(pin, [candidate.binary, *args])
+    return wrap(pin, [candidate.binary, *scenario_args(scenario)])
+
+
+def judged(
+    judge: str, oracle: str, scenario: Scenario, cwd: Path, report: Path
+) -> list[str] | None:
+    """The sanctioned deviation ids when the judge finds every file of the
+    scenario identical to the oracle or sanctioned, else None.
+
+    The judge's JSON goes to `report` either way, as evidence."""
+    shell: str | None = None
+    files: list[str] = []
+    args = iter(scenario_args(scenario))
+    for arg in args:
+        if arg in ("-s", "--shell"):
+            shell = next(args, None)
+        elif arg in ("-f", "--format"):
+            _ = next(args, None)
+        elif not arg.startswith("-"):
+            files.append(arg)
+    argv = [judge, "judge", "--oracle", oracle]
+    if shell:
+        argv += ["--shell", shell]
+    proc = subprocess.run(
+        argv,
+        cwd=cwd,
+        input="\n".join(files) + "\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _ = report.write_text(proc.stdout + proc.stderr)
+    if proc.returncode != 0:
+        if proc.returncode != 1:
+            warn(f"judge exited {proc.returncode}; see {report}")
+        return None
+    verdicts = JudgeReport.model_validate_json(proc.stdout)
+    return sorted({d for f in verdicts.files for d in f.deviations})
 
 
 class TimedRoundTimeout(ValueError):

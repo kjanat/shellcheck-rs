@@ -3,6 +3,7 @@ repo    = "https://github.com/kjanat/shellcheck-rs.git"
 ref     = "master"
 package = "rshellcheck"
 tools   = ["rust"]
+judge   = "conformance"
 
 [candidates.upstream-head]
 baseline = true

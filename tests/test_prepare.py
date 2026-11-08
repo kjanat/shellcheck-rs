@@ -1,5 +1,6 @@
 """Exercise preparation through the CLI with disposable repositories and a build fixture."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -8,6 +9,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from bench.candidates import read_manifest
 
 
 class PreparationTests(unittest.TestCase):
@@ -80,7 +83,7 @@ if '--' in sys.argv and sys.argv[sys.argv.index('--') + 1] == 'cargo':
     if pathlib.Path(os.environ['TEST_BUILD_FAILURE']).exists():
         sys.exit(7)
     (target / 'release').mkdir(exist_ok=True)
-    binary = target / 'release' / 'rshellcheck'
+    binary = target / 'release' / sys.argv[sys.argv.index('--bin') + 1]
     shutil.copy2({str(self.binary)!r}, binary)
     with binary.open('a') as output:
         output.write('# ' + pathlib.Path('main.rs').read_text() + '\\n')
@@ -174,6 +177,23 @@ tools = ["rust"]
         self.assertIn("binary cache hit", warm.stderr)
         self.assertEqual(self.count(), 1)
         self.assertEqual(first, self.manifest())
+
+    def test_judge_is_built_from_the_candidate_revision_and_published(self):
+        self.config.write_text(self.config.read_text() + 'judge = "conformance"\n')
+        self.prepare()
+        first = self.manifest()
+        judge = self.prepared / "rshellcheck" / first["judge"]
+        self.assertTrue(os.access(judge, os.X_OK))
+        self.assertEqual(
+            first["judge_sha256"], hashlib.sha256(judge.read_bytes()).hexdigest()
+        )
+        self.assertIn("# initial", judge.read_text())
+        warm = self.prepare()
+        self.assertIn("binary cache hit", warm.stderr)
+        self.assertEqual(first, self.manifest())
+        judge.write_text("tampered")
+        with self.assertRaisesRegex(ValueError, "prepared judge checksum differs"):
+            read_manifest(self.prepared / "rshellcheck")
 
     def test_missing_candidate_tool_lock_uses_harness_fallback(self):
         (self.source / "mise.lock").unlink()

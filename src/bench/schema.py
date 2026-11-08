@@ -20,6 +20,10 @@ class CandidateSpec(BaseModel):
     tools: list[str] = []
     tool: str | None = None
     jobs: int = Field(default=2, ge=1)
+    # Cargo package, built at the candidate's revision, whose same-named binary
+    # has a `judge` subcommand that classifies an output difference as a
+    # sanctioned deviation or a defect.
+    judge: str = ""
 
 
 class CandidatesFile(BaseModel):
@@ -40,6 +44,8 @@ class Manifest(BaseModel):
     dirty: bool = False
     source_sha256: str | None = None
     build_key: str | None = None
+    judge: str | None = None
+    judge_sha256: str | None = None
 
 
 class ScenarioSpec(BaseModel):
@@ -223,6 +229,18 @@ class Precheck(BaseModel):
     diff_lines: int | None = None
     # Deviation class ids the judge named for a "sanctioned" parity.
     deviations: list[str] = []
+
+
+class Judgement(BaseModel):
+    """One file's verdict from a candidate's `judge` subcommand."""
+
+    path: str
+    verdict: Literal["identical", "sanctioned", "differs"]
+    deviations: list[str] = []
+
+
+class JudgeReport(BaseModel):
+    files: list[Judgement]
 
 
 class Round(BaseModel):

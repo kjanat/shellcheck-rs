@@ -348,7 +348,18 @@ def read_manifest(directory: Path) -> Manifest:
         )
     if not os.access(path, os.X_OK):
         raise ValueError(f"{manifest.name}: prepared binary is not executable")
-    return manifest.model_copy(update={"binary": str(path.resolve())})
+    update = {"binary": str(path.resolve())}
+    if manifest.judge:
+        judge = Path(manifest.judge)
+        judge = judge if judge.is_absolute() else directory / judge
+        if digest(judge.read_bytes()) != manifest.judge_sha256:
+            raise ValueError(
+                f"{manifest.name}: prepared judge checksum differs; run bench prepare"
+            )
+        if not os.access(judge, os.X_OK):
+            raise ValueError(f"{manifest.name}: prepared judge is not executable")
+        update["judge"] = str(judge.resolve())
+    return manifest.model_copy(update=update)
 
 
 def verify_source(build: Build, stage: str) -> None:
@@ -364,7 +375,9 @@ def verify_source(build: Build, stage: str) -> None:
     )
 
 
-def publish(binary: Path, build: Build, directory: Path) -> Manifest:
+def publish(
+    binary: Path, build: Build, directory: Path, judge: Path | None = None
+) -> Manifest:
     directory.mkdir(parents=True, exist_ok=True)
     temp = directory / "rshellcheck.tmp"
     shutil.copy2(binary, temp)
@@ -378,6 +391,14 @@ def publish(binary: Path, build: Build, directory: Path) -> Manifest:
     destination.parent.mkdir(exist_ok=True)
     # A previously prepared revision stays executable while another is published.
     temp.replace(destination)
+    judge_relative: Path | None = None
+    judge_sha: str | None = None
+    if judge:
+        judge_relative = Path(sha) / "judge"
+        staged = directory / "judge.tmp"
+        shutil.copy2(judge, staged)
+        judge_sha = digest(staged.read_bytes())
+        staged.replace(directory / judge_relative)
     version = command([str(destination), "--version"])
     kind = "git" if build.source else "path" if build.spec.repo else "release"
     pin = release_version(version) if kind == "release" else build.pin
@@ -400,17 +421,20 @@ def publish(binary: Path, build: Build, directory: Path) -> Manifest:
         dirty=build.dirty,
         source_sha256=build.source_sha256 or None,
         build_key=build.key,
+        judge=str(judge_relative) if judge_relative else None,
+        judge_sha256=judge_sha,
     )
     write_model(directory / "manifest.json", manifest)
     return read_manifest(directory)
 
 
-def build_candidate(build: Build, state: Path) -> Path:
+def build_candidate(build: Build, state: Path) -> tuple[Path, Path | None]:
+    """The candidate's binary and, when its spec names one, its judge."""
     if build.binary:
         binary = Path(build.binary)
         if digest(binary.read_bytes()) != build.binary_sha256:
             raise ValueError(f"{build.name}: supplied binary changed after resolution")
-        return binary
+        return binary, None
     if build.source is None:
         raise ValueError(f"{build.name}: missing source")
     source = Path(build.source)
@@ -501,7 +525,7 @@ def build_candidate(build: Build, state: Path) -> Path:
             text=True,
             check=True,
         ).stdout.strip()
-        return Path(listed)
+        return Path(listed), None
     run([
         *execute,
         "cargo",
@@ -513,7 +537,21 @@ def build_candidate(build: Build, state: Path) -> Path:
         "--bin",
         build.spec.binary,
     ])
-    return target / "release" / build.spec.binary
+    judge = None
+    if build.spec.judge:
+        run([
+            *execute,
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            build.spec.judge,
+            "--bin",
+            build.spec.judge,
+        ])
+        judge = target / "release" / build.spec.judge
+    return target / "release" / build.spec.binary, judge
 
 
 def prepare(plan: Plan, state: Path, prepared: Path, names: str = "") -> None:
@@ -579,7 +617,12 @@ def prepare(plan: Plan, state: Path, prepared: Path, names: str = "") -> None:
                 pass
             if manifest:
                 print(f"{name}: binary cache hit", file=sys.stderr, flush=True)
-                publish(Path(manifest.binary), build, prepared / name)
+                publish(
+                    Path(manifest.binary),
+                    build,
+                    prepared / name,
+                    Path(manifest.judge) if manifest.judge else None,
+                )
             else:
                 status = (
                     "supplied binary"
@@ -598,10 +641,16 @@ def prepare(plan: Plan, state: Path, prepared: Path, names: str = "") -> None:
                     file=sys.stderr,
                     flush=True,
                 )
-                binary = build_candidate(build, state)
+                binary, judge = build_candidate(build, state)
                 verify_source(build, "during preparation")
-                publish(binary, build, cache)
-                publish(Path(read_manifest(cache).binary), build, prepared / name)
+                publish(binary, build, cache, judge)
+                cached = read_manifest(cache)
+                publish(
+                    Path(cached.binary),
+                    build,
+                    prepared / name,
+                    Path(cached.judge) if cached.judge else None,
+                )
             print(
                 f"{name}: ready in {time.monotonic() - started:.1f}s",
                 file=sys.stderr,
