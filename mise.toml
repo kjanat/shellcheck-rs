@@ -9,7 +9,6 @@ cabal                        = "latest"
 ghc                          = "9.14.1"
 ghcup                        = "latest"
 hyperfine                    = "2.0.0"
-python                       = "3.15"
 ruff                         = "latest"
 rust                         = "latest"
 uv                           = "0.13.7"
@@ -19,6 +18,10 @@ uv                           = "0.13.7"
 
 [tool_alias]
 ghc = "mise-ghcup:ghc"
+
+[wrappers.python]
+command = "uv"
+args    = ["run", "python"]
 
 [plugins]
 "vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
