@@ -21,7 +21,7 @@ go             = { prefix = "1.27" }
 node           = "26"
 python         = "3.15"                                           # conformance harness (rust/harness/*.py)
 uv             = { prefix = "0.13" }
-npm            = "12.2.0"
+npm            = "12.2.2"
 
 [tools."http:actionlint"]
 version          = "343"
