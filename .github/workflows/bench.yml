@@ -143,7 +143,8 @@ jobs:
         run: |
           mkdir -p .bench/prepared
           for directory in .bench/artifacts/prepared-*; do mv "${directory}" ".bench/prepared/${directory##*/prepared-}"; done
-          chmod +x .bench/prepared/*/*/rshellcheck
+          # Artifacts drop the executable bit of every published binary, the judge included.
+          find .bench/prepared -mindepth 3 -maxdepth 3 -type f \( -name rshellcheck -o -name judge \) -exec chmod +x {} +
           uv run bench prepare --verify --plan .bench/plan.json
       - name: Restore pinned Omarchy source
         uses: actions/cache@v6
