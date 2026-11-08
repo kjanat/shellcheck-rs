@@ -15,7 +15,7 @@ tools    = ["ghcup", "ghc", "cabal"]
 [candidates.rshellcheck]
 repo    = "https://github.com/kjanat/shellcheck-rs.git"
 ref     = "master"
-package = "shellcheck-cli"
+package = "rshellcheck"
 tools   = ["rust"]
 
 [candidates.h2r]

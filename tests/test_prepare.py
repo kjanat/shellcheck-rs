@@ -107,7 +107,7 @@ baseline = true
 [candidates.rshellcheck]
 repo = {json.dumps(str(self.source))}
 ref = "main"
-package = "shellcheck-cli"
+package = "rshellcheck"
 tools = ["rust"]
 """)
         self.flags = [
@@ -235,7 +235,7 @@ tools = ["ghcup", "ghc", "cabal"]
 [candidates.rshellcheck]
 repo = {json.dumps(str(self.source))}
 ref = "main"
-package = "shellcheck-cli"
+package = "rshellcheck"
 tools = ["rust"]
 """)
         return ["--config", str(config), *self.flags[2:]]

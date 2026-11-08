@@ -6,7 +6,7 @@ Compare upstream ShellCheck with the handwritten Rust port and the GHC Core → 
 | ------------------ | --------------------------------------------------------------------- |
 | `upstream-release` | latest `koalaman/shellcheck` release binary, pinned by `mise.lock`    |
 | `upstream-head`    | `koalaman/shellcheck` default branch HEAD, built with Cabal; baseline |
-| `rshellcheck`      | `master` branch, package `shellcheck-cli`                             |
+| `rshellcheck`      | `master` branch, package `rshellcheck`                                |
 | `h2r`              | `h2r-compiler` branch                                                 |
 
 Requires Linux, [mise](https://mise.jdx.dev), git, and GNU time (`/usr/bin/time`). For cold upstream-head and h2r builds, install GHC's system dependencies (`libgmp-dev libnuma-dev zlib1g-dev pkg-config` on Debian/Ubuntu). The first h2r preparation can take several hours.
