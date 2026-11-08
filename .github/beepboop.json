@@ -1,0 +1,80 @@
+{
+  "$schema": "https://beepboop.kjanat.dev/schema/v1.json",
+  "streams": {
+    "main": {
+      "packages": [
+        "pkg:cargo/rshellcheck-core",
+        "pkg:cargo/rshellcheck",
+        "pkg:golang/github.com/kjanat/shellcheck-rs/go"
+      ],
+      "versioning": "workspace",
+      "required": [
+        "pkg:cargo/rshellcheck-core",
+        "pkg:cargo/rshellcheck",
+        "pkg:golang/github.com/kjanat/shellcheck-rs/go"
+      ],
+      "versionFiles": [
+        {
+          "path": "bindings/wasm/js/package.json",
+          "template": "{version}",
+          "format": "json",
+          "key": ["version"]
+        },
+        {
+          "path": "bindings/native/npm/package.json",
+          "template": "{version}",
+          "format": "json",
+          "key": ["version"]
+        },
+        {
+          "path": "bindings/wasm/python/pyproject.toml",
+          "template": "{version}",
+          "format": "toml",
+          "key": ["project", "version"]
+        },
+        {
+          "path": "bindings/native/python/pyproject.toml",
+          "template": "{version}",
+          "format": "toml",
+          "key": ["project", "version"]
+        }
+      ],
+      "credentials": ["crates-io"],
+      "workflows": {
+        "release": {
+          "file": "release.yml",
+          "mode": "observe",
+          "ref": "refs/tags/rshellcheck-v*",
+          "publications": [
+            "pkg:npm/%40kjanat/rshellcheck",
+            "pkg:npm/%40kjanat/rshellcheck-wasm"
+          ]
+        }
+      },
+      "prepare": {
+        "strategy": "managed",
+        "workflow": {
+          "file": "prepare-release.yml",
+          "ref": "master"
+        }
+      },
+      "promote": {
+        "approval": "required",
+        "workflow": {
+          "file": "release-crates.yml",
+          "ref": "master",
+          "publications": [
+            "pkg:cargo/rshellcheck-core",
+            "pkg:cargo/rshellcheck",
+            "pkg:golang/github.com/kjanat/shellcheck-rs/go"
+          ],
+          "refs": {
+            "phase": "version",
+            "prefix": "rshellcheck-v"
+          }
+        }
+      }
+    }
+  },
+  "managers": ["cargo", "go", "workflow"]
+}
