@@ -21,6 +21,7 @@
 use std::io::BufRead;
 use std::path::Path;
 
+use rshellcheck_core::interface::decode_bytes;
 use serde::Serialize;
 
 use crate::{Args, deviations, keys_match, oracle, oracle_keys, port_keys};
@@ -70,7 +71,9 @@ pub fn judge(
 ) -> Result<Vec<Judgement>, String> {
     let mut named = Vec::with_capacity(paths.len());
     for path in paths {
-        let script = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        // Upstream's lenient decoding, as the CLI reads a file.
+        let script = decode_bytes(&bytes);
         // Both tools infer a dialect from a recognised extension, so the copy
         // the oracle reads keeps the file's own name after a unique prefix.
         let base = Path::new(path)
@@ -180,14 +183,21 @@ mod tests {
         );
     }
 
+    /// A shell script standing in for the oracle, printing `stdout`.
+    #[cfg(unix)]
+    fn fake_oracle(dir: &Path, stdout: &str) -> oracle::Oracle {
+        let fake = dir.join("oracle");
+        std::fs::write(&fake, format!("#!/bin/sh\necho '{stdout}'\n")).expect("write oracle");
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .expect("chmod oracle");
+        oracle::Oracle::new(&fake.to_string_lossy()).expect("oracle")
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_file_the_oracle_cannot_answer_for_differs() {
         let dir = Scratch::new("unanswered");
-        let fake = dir.path().join("oracle");
-        std::fs::write(&fake, "#!/bin/sh\necho 'not json'\n").expect("write oracle");
-        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .expect("chmod oracle");
-        let oracle = oracle::Oracle::new(&fake.to_string_lossy()).expect("oracle");
+        let oracle = fake_oracle(dir.path(), "not json");
         let path = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
         let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
         assert_eq!(
@@ -200,13 +210,30 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_invalid_utf8_is_judged() {
+        let dir = Scratch::new("latin1");
+        let oracle = fake_oracle(dir.path(), "{\"comments\":[]}");
+        let path = dir.path().join("latin1.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho caf\xe9\n").expect("write fixture");
+        let path = path.to_string_lossy().into_owned();
+        let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
+        assert_eq!(
+            got,
+            [Judgement {
+                path,
+                verdict: Verdict::Identical,
+                deviations: Vec::new(),
+            }]
+        );
+    }
+
     #[test]
     fn a_missing_file_is_a_harness_error() {
         let dir = Scratch::new("missing");
         let fake = dir.path().join("oracle");
-        std::fs::write(&fake, "#!/bin/sh\necho '{\"comments\":[]}'\n").expect("write oracle");
-        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .expect("chmod oracle");
+        std::fs::write(&fake, "").expect("write oracle");
         let oracle = oracle::Oracle::new(&fake.to_string_lossy()).expect("oracle");
         let missing = dir.path().join("absent.sh").to_string_lossy().into_owned();
         let err = judge(&oracle, std::slice::from_ref(&missing), None).expect_err("missing file");
