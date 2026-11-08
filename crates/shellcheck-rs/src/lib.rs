@@ -23,6 +23,9 @@
     html_logo_url = "https://cdn.jsdelivr.net/gh/kjanat/shellcheck-rs@f666e756494d37a132ae6a37c44dc6b3fe01a57e/doc/shellcheck_logo.svg",
     html_favicon_url = "https://cdn.jsdelivr.net/gh/kjanat/shellcheck-rs@f666e756494d37a132ae6a37c44dc6b3fe01a57e/doc/shellcheck_logo.svg"
 )]
+// The parser's futures nest one production inside the next until a recursion
+// point, and computing their layout goes deeper than the default 128 queries.
+#![recursion_limit = "256"]
 
 pub mod ast;
 pub mod interface;

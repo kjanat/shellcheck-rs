@@ -1,27 +1,39 @@
 //! Parser unit tests (ports of the `Parser.hs` props and regression cases).
 use super::*;
+use reblessive::Stk;
 
 pub(super) fn parses_cleanly<T>(
     script: &str,
-    parser: impl FnOnce(&mut Parser) -> PResult<T>,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
 ) -> Option<bool> {
     let mut p = Parser::new("-", script);
-    let parsed = parser(&mut p);
+    let parsed = reblessive::Stack::new()
+        .enter(|stk| parser(&mut p, stk))
+        .finish();
     if parsed.is_err() || p.has_committed_failure() || !p.eof() {
         return None;
     }
     Some(p.notes.is_empty() && p.problems.is_empty())
 }
 
-pub(super) fn is_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_ok<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser) == Some(true)
 }
 
-pub(super) fn is_warning<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_warning<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser) == Some(false)
 }
 
-pub(super) fn is_not_ok<T>(script: &str, parser: impl FnOnce(&mut Parser) -> PResult<T>) -> bool {
+pub(super) fn is_not_ok<T>(
+    script: &str,
+    parser: impl AsyncFnOnce(&mut Parser, &mut Stk) -> PResult<T>,
+) -> bool {
     parses_cleanly(script, parser).is_none()
 }
 
@@ -32,49 +44,52 @@ mod spacing_tests {
 
     #[test]
     fn prop_spacing1() {
-        assert!(is_ok("  \\\n # Comment", |p| {
+        assert!(is_ok("  \\\n # Comment", async |p, _stk| {
             p.spacing();
             Ok(())
         }));
     }
     #[test]
     fn prop_spacing2() {
-        assert!(is_ok("# We can continue lines with \\", |p| {
+        assert!(is_ok("# We can continue lines with \\", async |p, _stk| {
             p.spacing();
             Ok(())
         }));
     }
     #[test]
     fn prop_spacing3() {
-        assert!(is_warning("   \\\n #  --verbose=true \\", |p| {
-            p.spacing();
-            Ok(())
-        }));
+        assert!(is_warning(
+            "   \\\n #  --verbose=true \\",
+            async |p, _stk| {
+                p.spacing();
+                Ok(())
+            }
+        ));
     }
     #[test]
     fn prop_allspacing() {
-        assert!(is_ok("#foo", |p| {
-            p.allspacing();
+        assert!(is_ok("#foo", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_allspacing2() {
-        assert!(is_ok(" #foo\n # bar\n#baz\n", |p| {
-            p.allspacing();
+        assert!(is_ok(" #foo\n # bar\n#baz\n", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_allspacing3() {
-        assert!(is_ok("#foo\n#bar\n#baz\n", |p| {
-            p.allspacing();
+        assert!(is_ok("#foo\n#bar\n#baz\n", async |p, stk| {
+            p.allspacing(stk).await;
             Ok(())
         }));
     }
     #[test]
     fn prop_readAnyComment() {
-        assert!(is_ok("# Comment", Parser::read_any_comment));
+        assert!(is_ok("# Comment", async |p, _stk| p.read_any_comment()));
     }
 }
 
@@ -85,12 +100,16 @@ fn lookahead_restores_context_frames_even_when_the_prefix_was_replaced() {
         parser.push_ctx("outer");
     }
     let before = parser.contexts.clone();
-    let answer = parser.peek_ahead(|p| {
-        p.contexts.truncate(10);
-        p.push_ctx("replacement");
-        p.commit();
-        Err::<(), ()>(())
-    });
+    let answer = reblessive::Stack::new()
+        .enter(|stk| {
+            parser.peek_ahead(stk, async |p, _stk| {
+                p.contexts.truncate(10);
+                p.push_ctx("replacement");
+                p.commit();
+                Err::<(), ()>(())
+            })
+        })
+        .finish();
     assert!(answer.is_none());
     assert_eq!(parser.contexts, before);
     assert!(!parser.committed);
@@ -115,6 +134,33 @@ fn deeply_nested_if_statements_parse_without_losing_contexts() {
                 ..ParseSpec::default()
             });
             assert!(result.root.is_some());
+            assert!(result.notes.is_empty(), "{:?}", result.notes);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn a_long_statement_list_parses_in_constant_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let script = format!("#!/bin/bash\n{}", "echo \"$a\"; echo b &\n".repeat(10_000));
+            let result = parse_script_spec(&ParseSpec {
+                filename: "long.sh".to_string(),
+                script,
+                ..ParseSpec::default()
+            });
+            let root = result.root.unwrap();
+            let InnerToken::T_Annotation { token, .. } = &*root.inner else {
+                panic!("root is not an annotation");
+            };
+            let InnerToken::T_Script { commands, .. } = &*token.inner else {
+                panic!("annotation holds no script");
+            };
+            assert_eq!(commands.len(), 20_000);
+            assert!(matches!(&*commands[1].inner, InnerToken::T_Backgrounded(_)));
             assert!(result.notes.is_empty(), "{:?}", result.notes);
         })
         .unwrap()
@@ -253,7 +299,7 @@ mod redirect_heredoc_tests {
         out.notes.iter().any(|n| n.code == code)
     }
 
-    // ---- gap 1: `&>` / `&>>` combined redirect --------------------------
+    // gap 1: `&>` / `&>>` combined redirect
 
     #[test]
     fn ampersand_redirect_is_single_fd_redirect() {
@@ -288,7 +334,7 @@ mod redirect_heredoc_tests {
         assert_eq!(ops, vec![true], "&>> should carry a T_DGREAT operator");
     }
 
-    // ---- gap 3: glued fd redirect operator span (SC2210) ----------------
+    // gap 3: glued fd redirect operator span (SC2210)
 
     #[test]
     fn glued_fd_redirect_anchors_iofile_at_operator() {
@@ -301,7 +347,7 @@ mod redirect_heredoc_tests {
         assert_eq!(fds, vec![(1, 5, 1, 8)]);
     }
 
-    // ---- gap 2: heredoc body expansions ---------------------------------
+    // gap 2: heredoc body expansions
 
     #[test]
     fn unquoted_heredoc_parses_command_substitution() {
@@ -403,7 +449,7 @@ mod parser_gap_tests {
         found
     }
 
-    // ---- gap 1: TC_Unary span anchors on the operator alone ---------------
+    // gap 1: TC_Unary span anchors on the operator alone
 
     #[test]
     fn tc_unary_op_span_is_operator_only() {
@@ -445,7 +491,7 @@ mod parser_gap_tests {
         assert_eq!(spans, vec![(1, 3, 1, 5)]);
     }
 
-    // ---- gap 2: regex RHS preserves backslash escapes raw -----------------
+    // gap 2: regex RHS preserves backslash escapes raw
 
     #[test]
     fn regex_rhs_preserves_backslash_escape() {
@@ -472,7 +518,7 @@ mod parser_gap_tests {
         );
     }
 
-    // ---- gap 3: mid-pipeline `!` becomes T_Banged -------------------------
+    // gap 3: mid-pipeline `!` becomes T_Banged
 
     #[test]
     fn mid_pipeline_bang_is_banged() {
@@ -492,7 +538,7 @@ mod parser_gap_tests {
         assert_eq!(spans, vec![(1, 1, 1, 2)]);
     }
 
-    // ---- gap 4: `${{var}` parses the `${...}` as an expansion -------------
+    // gap 4: `${{var}` parses the `${...}` as an expansion
 
     #[test]
     fn dollar_brace_open_brace_is_expansion() {
@@ -508,7 +554,7 @@ mod parser_gap_tests {
         );
     }
 
-    // ---- gap 5: `time` as a pipeline prefix -------------------------------
+    // gap 5: `time` as a pipeline prefix
 
     #[test]
     fn time_wraps_pipeline_in_suffix() {
@@ -590,7 +636,7 @@ mod coproc_glob_dollar_tests {
             .any(|n| n.code == code)
     }
 
-    // ---- P1: coproc parsing -----------------------------------------------
+    // P1: coproc parsing
 
     #[test]
     fn coproc_compound_with_name() {
@@ -670,7 +716,7 @@ mod coproc_glob_dollar_tests {
         );
     }
 
-    // ---- P2: glob class no longer swallows expansions ---------------------
+    // P2: glob class no longer swallows expansions
 
     #[test]
     fn glob_class_stops_at_dollar() {
@@ -718,7 +764,7 @@ mod coproc_glob_dollar_tests {
         );
     }
 
-    // ---- P3a: SC1037 note is zero-width at the `$` -------------------------
+    // P3a: SC1037 note is zero-width at the `$`
 
     #[test]
     fn sc1037_note_is_zero_width_at_dollar() {
@@ -741,7 +787,7 @@ mod coproc_glob_dollar_tests {
         );
     }
 
-    // ---- P3b: inner literal word of `$name` starts after the `$` -----------
+    // P3b: inner literal word of `$name` starts after the `$`
 
     #[test]
     fn dollar_var_inner_word_starts_after_dollar() {
@@ -775,7 +821,7 @@ mod coproc_glob_dollar_tests {
         assert_eq!(inner_word, Some((1, 7)), "inner word starts after the `$`");
     }
 
-    // ---- SC1008: unrecognized shebang -------------------------------------
+    // SC1008: unrecognized shebang
 
     #[test]
     fn sc1008_unrecognized_shebang() {
@@ -859,7 +905,7 @@ mod coproc_glob_dollar_tests {
         assert!(!parses("# shellcheck shell=mksh\n! # negate nothing\n"));
     }
 
-    // ---- modifier suffix: an unterminated array assignment ----------------
+    // modifier suffix: an unterminated array assignment
 
     #[test]
     fn unterminated_array_after_a_modifier_command_fails_the_command() {
@@ -877,7 +923,7 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("readonly f=(1 2)\n", 1073));
     }
 
-    // ---- SC1017: a literal carriage return --------------------------------
+    // SC1017: a literal carriage return
 
     #[test]
     fn sc1017_carriage_return_in_a_comment() {
@@ -890,7 +936,7 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("# hello\necho hi\n", 1017));
     }
 
-    // ---- SC1019: a unary test operator with no argument -------------------
+    // SC1019: a unary test operator with no argument
 
     #[test]
     fn sc1019_missing_argument_to_a_unary_condition() {
@@ -903,7 +949,7 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("[ -n x ]", 1019));
     }
 
-    // ---- SC1133: a line starting with |/||/&& -----------------------------
+    // SC1133: a line starting with |/||/&&
 
     #[test]
     fn sc1133_line_starting_with_an_operator() {
@@ -932,7 +978,7 @@ mod coproc_glob_dollar_tests {
         assert!(!has_note("echo a\necho b\n", 1133));
     }
 
-    // ---- SC1014: command used as a test operand ---------------------------
+    // SC1014: command used as a test operand
 
     #[test]
     fn sc1014_command_in_single_bracket() {
@@ -1323,7 +1369,7 @@ mod coproc_glob_dollar_tests {
         );
     }
 
-    // ---- SC1127: command word that looks like a comment -------------------
+    // SC1127: command word that looks like a comment
 
     #[test]
     fn sc1127_slash_star() {
@@ -1381,7 +1427,7 @@ mod coproc_glob_dollar_tests {
         ));
     }
 
-    // ---- `!` with nothing to negate ---------------------------------------
+    // `!` with nothing to negate
     //
     // The port's one deliberate departure from upstream's parse decisions: bash
     // negates the null command, upstream rejects the file for every dialect and
@@ -1535,7 +1581,7 @@ mod keyword_separator_and_failure_tests {
         .any(|c| c.comment.code == code && c.start.line == line && c.start.column == column)
     }
 
-    // ---- keywordSeparator = eof <|> void (try allspacingOrFail) <|> ... ----
+    // keywordSeparator = eof <|> void (try allspacingOrFail) <|> ...
 
     #[test]
     fn a_comment_after_a_keyword_separates_only_when_a_newline_follows() {
@@ -1594,7 +1640,7 @@ mod keyword_separator_and_failure_tests {
         );
     }
 
-    // ---- prefix failures from tryParseWordToken (anycaseString) -----------
+    // prefix failures from tryParseWordToken (anycaseString)
 
     #[test]
     fn a_keyword_prefix_positions_the_failure_past_the_prefix() {
@@ -1671,7 +1717,7 @@ mod keyword_separator_and_failure_tests {
         );
     }
 
-    // ---- readAssignmentWordExt: `$` and left space ------------------------
+    // readAssignmentWordExt: `$` and left space
 
     #[test]
     fn a_dollar_on_the_left_of_an_assignment_gets_sc1066_when_a_paren_follows() {
@@ -1697,7 +1743,7 @@ mod keyword_separator_and_failure_tests {
         );
     }
 
-    // ---- arithmetic: readComboOp's failIfIncompleteOp and consuming failures
+    // arithmetic: readComboOp's failIfIncompleteOp and consuming failures
 
     #[test]
     fn an_incomplete_arithmetic_operator_fails_one_past_the_operator() {
@@ -1735,7 +1781,7 @@ mod keyword_separator_and_failure_tests {
         );
     }
 
-    // ---- case separators and the elif/case-item `many` ---------------------
+    // case separators and the elif/case-item `many`
 
     #[test]
     fn a_fallthrough_separator_is_not_read_as_a_command_separator() {
@@ -1844,7 +1890,10 @@ mod double_escape_tests {
 
     fn double_quoted_literal(script: &str) -> String {
         let mut p = Parser::new("-", script);
-        let word = p.read_normal_word().expect("a word");
+        let word = reblessive::Stack::new()
+            .enter(|stk| p.read_normal_word(stk))
+            .finish()
+            .expect("a word");
         let mut out = String::new();
         word.visit_preorder(&mut |t| {
             if let InnerToken::T_Literal(s) = &*t.inner {

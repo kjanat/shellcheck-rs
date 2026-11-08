@@ -19,6 +19,13 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   more of `/usr`, and globs such as `rm -rf /boot/*`
 - `--list-optional` prints `id:` and `wiki:` for each optional check
 
+### Changed
+
+- `--version` names RShellCheck and links its repository, with the upstream
+  ShellCheck version and site on the last line. In a terminal every URL is an
+  OSC 8 link, each name links to its GitHub repository and each version to its
+  GitHub release page. `--help` names `rshellcheck`
+
 ### Fixed
 
 - The SC2292 fix adds no second `]` when the test was closed with `]]`
@@ -31,6 +38,22 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   `stderr_lines` under `--separate-stderr`, so SC2034 and SC2154 treat them as
   assigned
 - SC2312 accepts `command || echo ...` as handling the return status
+- SC2333 and SC2252 look through their own operator only, so
+  `[ "$a" = 1 ] || x && [ "$a" = 2 ]` gives no SC2333, as upstream gives none
+- A script with tens of thousands of statements no longer overflows the stack
+- Nesting of any depth no longer overflows the stack: subshells, groups,
+  `if`/loops, functions, `$(..)`, `${..}`, `$((..))`, `[[ .. ]]` and long
+  `&&`/`||`/`!` chains. The WASM module checks them in Node, browsers,
+  wasmtime and wazero alike, where a few hundred levels used to trap
+- Deep nesting and long chains cost time and memory in proportion to the
+  script: 10,000 nested functions took 107 s and take 0.4 s, and 10,000 nested
+  `$(..)` took 6.7 s and 673 MB and take 0.8 s and 300 MB
+- Checking allocates 30% less: the parser tracks line and column and adds the
+  file name only to reported positions, command names and `${..}` references
+  are read in place, and tree walks, `oversimplify` and dropping the tree run
+  on the call stack up to 64 levels deep without a work list. A 4,300-line
+  script checks 5% faster than before the nesting fixes, which cost nothing on
+  shorter scripts
 
 ## v1.0.0 - 2026-10-15
 

@@ -32,7 +32,10 @@ pub fn cleanup_trap_warnings(params: &Parameters) -> Vec<crate::interface::Posit
 /// A check function, as the `treeChecks` and `nodeChecks` lists hold them.
 type CheckPtr = fn(&Parameters, &crate::ast::Token, &mut Out);
 
-/// `treeChecks`, less `checkUncheckedCdPushdPopd`, which `checker` runs as a node check.
+/// `treeChecks`, less `checkUncheckedCdPushdPopd`, which `checker` runs as a
+/// node check. The list also holds the node checks
+/// `checkPrefixAssignmentReference` and `checkSubshelledTests`, which each
+/// walk the tree once with the open tokens on a stack.
 const TREE_CHECKS: &[CheckPtr] = &[
     variables::check_subshell_assignment,
     quoting::check_quotes_in_literals,
@@ -49,6 +52,8 @@ const TREE_CHECKS: &[CheckPtr] = &[
     script::check_use_before_definition,
     script::check_alias_used_in_same_parsing_unit,
     variables::check_array_value_used_as_index,
+    variables::check_prefix_assignment_reference,
+    conditions::check_subshelled_tests,
 ];
 
 /// Keep upstream check order while declaring the node kinds each check reads.
@@ -115,7 +120,6 @@ node_checks! {
     quoting::check_unquoted_expansions => T_DollarExpansion(..) | T_Backticked(..) | T_DollarBraceCommandExpansion { .. },
     quoting::check_single_quoted_variables => T_SingleQuoted(..),
     redirections::check_redirect_to_same => T_Pipeline { .. },
-    variables::check_prefix_assignment_reference => T_DollarBraced { .. },
     loops::check_loop_keyword_scope => _,
     commands::check_cd_and_back => _,
     arithmetic::check_wrong_arithmetic_assignment => T_SimpleCommand { .. },
@@ -146,7 +150,6 @@ node_checks! {
     conditions::check_empty_condition => TC_Empty { .. },
     redirections::check_pipe_to_nowhere => _,
     loops::check_for_loop_glob_variables => T_ForIn { .. },
-    conditions::check_subshelled_tests => T_Subshell(..),
     redirections::check_redirection_to_command => T_IoFile { .. },
     quoting::check_dollar_quote_paren => T_DollarDoubleQuoted(..),
     conditions::check_useless_bang => _,

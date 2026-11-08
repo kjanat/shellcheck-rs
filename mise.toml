@@ -49,7 +49,7 @@ uv_venv_auto = "source"
 alias = ["f", "fmt"]
 run   = "kprint fmt"
 
-# --- Refactor safety net -----------------------------------------------------
+# Refactor safety net
 # The oracle answers "does the port agree with ShellCheck?". These three answer
 # the questions a refactor asks instead: did anything change, is any of it
 # untested, and would the tests have noticed?

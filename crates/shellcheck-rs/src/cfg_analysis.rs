@@ -14,8 +14,9 @@ use crate::idhash::IdMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use im_rc::OrdMap;
 use im_rc::ordmap::DiffItem;
+use im_rc::{OrdMap, OrdSet};
+use reblessive::Stk;
 
 use crate::ast::{Id, Token};
 use crate::cfg::{
@@ -31,9 +32,7 @@ const FALLBACK_THRESHOLD: i64 = 10_000;
 // The number of cache entries to keep per node
 const CACHE_ENTRIES: usize = 10;
 
-// ===========================================================================
 // Externally-exposed lattice values
-// ===========================================================================
 
 /// Whether or not the value needs quoting (has spaces/globs), or we don't know.
 ///
@@ -105,9 +104,10 @@ pub struct ProgramState {
     global_values: ScopeValues,
     local_values: ScopeValues,
     prefix_values: ScopeValues,
-    /// The tokens whose exit code `$?` may hold, shared between snapshots.
-    /// Use `Rc::make_mut` when modifying an owned snapshot.
-    pub exit_codes: Rc<BTreeSet<Id>>,
+    /// The tokens whose exit code `$?` may hold. The set is persistent.
+    /// Snapshots share structure, and a change to one snapshot leaves the
+    /// others unchanged.
+    pub exit_codes: OrdSet<Id>,
     /// Whether any execution path reaches this state.
     pub state_is_reachable: bool,
 }
@@ -220,7 +220,7 @@ impl ProgramState {
     }
     /// `exitCodes`.
     #[must_use]
-    pub fn exit_codes(&self) -> &BTreeSet<Id> {
+    pub const fn exit_codes(&self) -> &OrdSet<Id> {
         &self.exit_codes
     }
 
@@ -297,9 +297,7 @@ impl CFGAnalysis {
     }
 }
 
-// ===========================================================================
 // Internal lattice/state types
-// ===========================================================================
 
 /// A function definition, or lack thereof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -327,7 +325,7 @@ enum StateDependency {
     DepProperties(Scope, String, VariableProperties),
     DepFunction(String, FunctionValue),
     DepIsRecursive(Node, bool),
-    DepExitCodes(Rc<BTreeSet<Id>>),
+    DepExitCodes(OrdSet<Id>),
 }
 
 /// A `Map` that keeps an integer version to quickly determine if it changed.
@@ -449,7 +447,7 @@ struct InternalState {
     s_local_values: VMap<VariableState>,
     s_prefix_values: VMap<VariableState>,
     s_function_targets: VMap<FunctionValue>,
-    s_exit_codes: Option<Rc<BTreeSet<Id>>>,
+    s_exit_codes: Option<OrdSet<Id>>,
     s_is_reachable: Option<bool>,
 }
 
@@ -492,7 +490,7 @@ fn state_eq(a: &InternalState, b: &InternalState) -> bool {
     state_is_quick_equal(a, b) || state_is_slow_equal(a, b)
 }
 
-// --- Value abstractions ---
+// Value abstractions
 
 const fn unknown_variable_value() -> VariableValue {
     VariableValue {
@@ -660,7 +658,7 @@ fn literal_to_variable_value(s: &str) -> VariableValue {
     }
 }
 
-// --- state field mutators (all set version = -1 via `modified`) ---
+// state field mutators (all set version = -1 via `modified`)
 
 fn insert_global(name: &str, val: VariableState, state: &InternalState) -> InternalState {
     let mut s = state.clone();
@@ -682,27 +680,27 @@ fn insert_function(name: &str, val: FunctionValue, state: &InternalState) -> Int
     s.s_function_targets = s.s_function_targets.insert(name, val);
     modified(s)
 }
-/// Exit-code sets are immutable between updates. Keep state snapshots cheap,
-/// and reuse either operand when a merge adds no possible exit code.
-fn union_exit_codes(a: &Rc<BTreeSet<Id>>, b: &Rc<BTreeSet<Id>>) -> Rc<BTreeSet<Id>> {
-    if Rc::ptr_eq(a, b) || b.is_subset(a) {
+/// Exit-code sets are persistent. A union inserts the smaller set into the
+/// larger one and shares the rest. A chain of merges that each add one exit
+/// code therefore costs logarithmic time per merge. When a merge adds no
+/// exit code, the function returns an operand unchanged.
+fn union_exit_codes(a: &OrdSet<Id>, b: &OrdSet<Id>) -> OrdSet<Id> {
+    if a.ptr_eq(b) || b.is_subset(a) {
         a.clone()
     } else if a.is_subset(b) {
         b.clone()
     } else {
-        Rc::new(a.union(b).copied().collect())
+        a.clone().union(b.clone())
     }
 }
 
-fn set_exit_codes(set: Rc<BTreeSet<Id>>, state: &InternalState) -> InternalState {
+fn set_exit_codes(set: OrdSet<Id>, state: &InternalState) -> InternalState {
     let mut s = state.clone();
     s.s_exit_codes = Some(set);
     modified(s)
 }
 fn set_exit_code(id: Id, state: &InternalState) -> InternalState {
-    let mut set = BTreeSet::new();
-    set.insert(id);
-    set_exit_codes(Rc::new(set), state)
+    set_exit_codes(OrdSet::unit(id), state)
 }
 
 fn get_variable_with_scope(s: &InternalState, name: &str) -> Option<(VariableState, Scope)> {
@@ -718,7 +716,7 @@ fn get_variable_with_scope(s: &InternalState, name: &str) -> Option<(VariableSta
     None
 }
 
-// --- patch / vmPatch ---
+// patch / vmPatch
 
 fn vm_patch<V>(base: &VMap<V>, diff: &VMap<V>) -> VMap<V> {
     if base.version == 0 {
@@ -761,9 +759,7 @@ fn patch_state(base: &InternalState, diff: &InternalState) -> InternalState {
     }
 }
 
-// ===========================================================================
 // Environment state (createEnvironmentState) + variable data
-// ===========================================================================
 
 fn create_environment_state() -> InternalState {
     let mut state = new_internal_state();
@@ -805,18 +801,90 @@ fn create_environment_state() -> InternalState {
     state
 }
 
-// ===========================================================================
 // The DFA context
-// ===========================================================================
 
 /// Whenever a function (or subshell) is invoked, an entry is pushed.
 #[derive(Debug, Clone)]
 struct StackEntry {
     entry_point: Node,
     is_function_call: bool,
-    call_site: Node,
+    /// `callSite` of this frame, then those of every frame below it.
+    calls: CallSites,
     dependencies: BTreeSet<StateDependency>,
     stack_state: InternalState,
+}
+
+/// One call site in a [`CallSites`] list.
+#[derive(Debug)]
+struct CallSite {
+    node: Node,
+    outer: CallSites,
+}
+
+/// The call sites of the open frames, innermost first. This is the tail of
+/// the upstream invocation path `entry : current : map callSite stack`.
+/// Frames share their tails, and recording an invocation costs one handle.
+/// The ordering equals that of the plain list.
+#[derive(Debug, Clone, Default)]
+struct CallSites(Option<Rc<CallSite>>);
+
+impl CallSites {
+    fn push(&self, node: Node) -> Self {
+        Self(Some(Rc::new(CallSite {
+            node,
+            outer: self.clone(),
+        })))
+    }
+}
+
+impl Ord for CallSites {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        let (mut a, mut b) = (self.0.as_deref(), other.0.as_deref());
+        loop {
+            match (a, b) {
+                (None, None) => return Equal,
+                (None, Some(_)) => return Less,
+                (Some(_), None) => return Greater,
+                (Some(x), Some(y)) => {
+                    if std::ptr::eq(x, y) {
+                        return Equal;
+                    }
+                    match x.node.cmp(&y.node) {
+                        Equal => (a, b) = (x.outer.0.as_deref(), y.outer.0.as_deref()),
+                        unequal => return unequal,
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for CallSites {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for CallSites {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for CallSites {}
+
+/// Drops the list one call site at a time. The list is as long as the
+/// deepest nesting.
+impl Drop for CallSite {
+    fn drop(&mut self) {
+        let mut next = self.outer.0.take();
+        while let Some(site) = next {
+            next = Rc::try_unwrap(site)
+                .ok()
+                .and_then(|mut site| site.outer.0.take());
+        }
+    }
 }
 
 type StateMap = BTreeMap<Node, (InternalState, InternalState)>;
@@ -838,7 +906,7 @@ struct Ctx {
     enable_cache: bool,
     // Invocation paths determine the order of state merges, as in Haskell's
     // Data.Map. Randomized iteration must not decide state/version ordering.
-    invocations: BTreeMap<Vec<Node>, (BTreeSet<StateDependency>, StateMap)>,
+    invocations: BTreeMap<(Node, Node, CallSites), (BTreeSet<StateDependency>, StateMap)>,
     // Graph adjacency, derived from CFGraph.
     labels: IdMap<Node, CFNode>,
     pred_flow: IdMap<Node, Vec<Node>>,
@@ -906,7 +974,7 @@ impl Ctx {
         state
     }
 
-    // --- stack lookups (lookupStack' / peekStack) ---
+    // stack lookups (lookupStack' / peekStack)
 
     fn lookup_stack<V, G, D>(&mut self, function_only: bool, get: G, make_dep: D, def: V) -> V
     where
@@ -1031,16 +1099,16 @@ impl Ctx {
             unknown_function_value(),
         )
     }
-    fn read_exit_codes(&mut self) -> Rc<BTreeSet<Id>> {
+    fn read_exit_codes(&mut self) -> OrdSet<Id> {
         self.lookup_stack(
             false,
             |s| s.s_exit_codes.clone(),
-            |v: &Rc<BTreeSet<Id>>| StateDependency::DepExitCodes(v.clone()),
-            Rc::default(),
+            |v: &OrdSet<Id>| StateDependency::DepExitCodes(v.clone()),
+            OrdSet::new(),
         )
     }
 
-    // --- peek (no dependency) ---
+    // peek (no dependency)
 
     fn peek_var_with_scope(
         &self,
@@ -1068,7 +1136,7 @@ impl Ctx {
         }
         unknown_function_value()
     }
-    fn peek_exit_codes(&self) -> Rc<BTreeSet<Id>> {
+    fn peek_exit_codes(&self) -> OrdSet<Id> {
         if let Some(v) = &self.input.s_exit_codes {
             return v.clone();
         }
@@ -1077,10 +1145,10 @@ impl Ctx {
                 return v.clone();
             }
         }
-        Rc::default()
+        OrdSet::new()
     }
 
-    // --- writes ---
+    // writes
 
     fn write_global(&mut self, name: &str, val: VariableState) {
         self.output = insert_global(name, val, &self.output);
@@ -1152,7 +1220,7 @@ impl Ctx {
 }
 
 impl Ctx {
-    // --- value abstraction ---
+    // value abstraction
 
     fn cf_value_to_variable_value(&mut self, val: &CFValue) -> VariableValue {
         match val {
@@ -1190,7 +1258,7 @@ impl Ctx {
         }
     }
 
-    // --- effect transfer ---
+    // effect transfer
 
     fn transfer_effect(&mut self, effect: &CFEffect) {
         match effect {
@@ -1263,7 +1331,7 @@ impl Ctx {
         }
     }
 
-    // --- merges (join) ---
+    // merges (join)
 
     fn merge_maps_var(
         &mut self,
@@ -1342,9 +1410,9 @@ impl Ctx {
 
     fn merge_maybes_exit(
         &mut self,
-        a: Option<&Rc<BTreeSet<Id>>>,
-        b: Option<&Rc<BTreeSet<Id>>>,
-    ) -> Option<Rc<BTreeSet<Id>>> {
+        a: Option<&OrdSet<Id>>,
+        b: Option<&OrdSet<Id>>,
+    ) -> Option<OrdSet<Id>> {
         match (a, b) {
             (None, None) => None,
             (Some(v), None) | (None, Some(v)) => {
@@ -1418,24 +1486,36 @@ impl Ctx {
         acc
     }
 
-    // --- stack frame management ---
+    // stack frame management
 
     fn patch_output(&mut self, diff: &InternalState) {
         self.output = patch_state(&self.output, diff);
     }
 
-    fn with_new_stack_frame<R>(
+    /// `withNewStackFrame node isCall (dataflow node)`. Runs the dataflow from
+    /// `node` in a fresh frame and returns it with the dependencies the frame
+    /// collected.
+    ///
+    /// A function or subshell body is a dataflow of its own, so the analysis
+    /// recurses here. The call goes through `stk.run`.
+    async fn dataflow_in_new_frame(
         &mut self,
+        stk: &mut Stk,
         node: Node,
         is_call: bool,
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> (R, BTreeSet<StateDependency>) {
+    ) -> (StateMap, BTreeSet<StateDependency>) {
         let call_site = self.node;
         let state = self.output.clone();
+        let calls = self
+            .stack
+            .last()
+            .map(|s| s.calls.clone())
+            .unwrap_or_default()
+            .push(call_site);
         let entry = StackEntry {
             entry_point: node,
             is_function_call: is_call,
-            call_site,
+            calls,
             dependencies: BTreeSet::new(),
             stack_state: state,
         };
@@ -1444,7 +1524,7 @@ impl Ctx {
         let saved_node = self.node;
         self.node = node;
         self.stack.push(entry);
-        let x = f(self);
+        let x = stk.run(|stk| self.dataflow(stk, node)).await;
         let deps = self.stack.pop().map_or_else(
             || {
                 self.fail("Missing stack frame");
@@ -1479,19 +1559,20 @@ impl Ctx {
     fn register_flow_result(
         &mut self,
         entry: Node,
-        states: &StateMap,
+        states: StateMap,
         deps: &BTreeSet<StateDependency>,
     ) {
         let current = self.node;
-        let mut path = vec![entry, current];
-        for s in self.stack.iter().rev() {
-            path.push(s.call_site);
-        }
+        let calls = self
+            .stack
+            .last()
+            .map(|s| s.calls.clone())
+            .unwrap_or_default();
         self.invocations
-            .insert(path, (deps.clone(), states.clone()));
+            .insert((entry, current, calls), (deps.clone(), states));
     }
 
-    // --- cache ---
+    // cache
 
     fn fulfills_dependency(&self, entry: Node, dep: &StateDependency) -> bool {
         match dep {
@@ -1541,35 +1622,44 @@ impl Ctx {
         None
     }
 
-    fn run_cached(
-        &mut self,
-        node: Node,
-        f: impl FnOnce(&mut Self) -> (BTreeSet<StateDependency>, InternalState),
-    ) {
-        if let Some(v) = self.get_cache(node) {
-            self.patch_output(&v);
-        } else {
-            let (deps, diff) = f(self);
-            let old = self.cache.remove(&node).unwrap_or_default();
-            let mut newlist = vec![(deps, diff.clone())];
-            newlist.extend(old.into_iter().take(CACHE_ENTRIES));
-            self.cache.insert(node, newlist);
-            self.patch_output(&diff);
-        }
+    /// The first half of `runCached`. With a cached result for `node`, it
+    /// patches the result in and returns `true`. Otherwise it returns `false`,
+    /// and the caller computes the result and passes it to
+    /// [`Self::cache_result`].
+    fn use_cached(&mut self, node: Node) -> bool {
+        let Some(v) = self.get_cache(node) else {
+            return false;
+        };
+        self.patch_output(&v);
+        true
     }
 
-    // --- transfer ---
+    /// The second half of `runCached`. It stores a computed result and patches
+    /// it in.
+    fn cache_result(
+        &mut self,
+        node: Node,
+        (deps, diff): (BTreeSet<StateDependency>, InternalState),
+    ) {
+        let old = self.cache.remove(&node).unwrap_or_default();
+        let mut newlist = vec![(deps, diff.clone())];
+        newlist.extend(old.into_iter().take(CACHE_ENTRIES));
+        self.cache.insert(node, newlist);
+        self.patch_output(&diff);
+    }
 
-    fn transfer(&mut self, label: &CFNode) {
+    // transfer
+
+    async fn transfer(&mut self, stk: &mut Stk, label: &CFNode) {
         match label {
             CFNode::CFStructuralNode
             | CFNode::CFEntryPoint(_)
             | CFNode::CFImpliedExit
             | CFNode::CFResolvedExit
             | CFNode::CFSetBackgroundPid(_) => {}
-            CFNode::CFExecuteCommand(cmd) => self.transfer_command(cmd.clone()),
+            CFNode::CFExecuteCommand(cmd) => self.transfer_command(stk, cmd.clone()).await,
             CFNode::CFExecuteSubshell(_reason, entry, exit) => {
-                self.transfer_subshell(*entry, *exit);
+                self.transfer_subshell(stk, *entry, *exit).await;
             }
             CFNode::CFApplyEffects(effects) => {
                 for e in effects {
@@ -1590,21 +1680,25 @@ impl Ctx {
         }
     }
 
-    fn transfer_subshell(&mut self, entry: Node, exit: Node) {
+    async fn transfer_subshell(&mut self, stk: &mut Stk, entry: Node, exit: Node) {
         let initial = self.output.clone();
-        self.run_cached(entry, move |s| s.subshell_recompute(entry, exit));
+        if !self.use_cached(entry) {
+            let result = self.subshell_recompute(stk, entry, exit).await;
+            self.cache_result(entry, result);
+        }
         let res_exit = self.output.s_exit_codes.clone();
         let mut newout = initial;
         newout.s_exit_codes = res_exit;
         self.output = newout;
     }
 
-    fn subshell_recompute(
+    async fn subshell_recompute(
         &mut self,
+        stk: &mut Stk,
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, false).await;
         let res = states.get(&exit).map_or_else(
             || {
                 self.fail("Subshell has no exit");
@@ -1612,25 +1706,25 @@ impl Ctx {
             },
             |(_, res)| res.clone(),
         );
-        self.register_flow_result(entry, &states, &deps);
+        self.register_flow_result(entry, states, &deps);
         (deps, res)
     }
 
-    fn transfer_command(&mut self, name: Option<String>) {
+    async fn transfer_command(&mut self, stk: &mut Stk, name: Option<String>) {
         let Some(name) = name else {
             return;
         };
         let targets = self.read_function(&name);
         let funcs: Vec<FunctionDefinition> = targets.into_iter().collect();
-        self.transfer_multiple(&funcs);
+        self.transfer_multiple(stk, &funcs).await;
     }
 
-    fn transfer_multiple(&mut self, funcs: &[FunctionDefinition]) {
+    async fn transfer_multiple(&mut self, stk: &mut Stk, funcs: &[FunctionDefinition]) {
         let original = self.output.clone();
         let mut branches = Vec::new();
         for f in funcs {
             self.output = original.clone();
-            self.transfer_function_value(f);
+            self.transfer_function_value(stk, f).await;
             branches.push(self.output.clone());
         }
         let merged = self.merge_states(original.clone(), &branches);
@@ -1638,7 +1732,7 @@ impl Ctx {
         self.output = patched;
     }
 
-    fn transfer_function_value(&mut self, fv: &FunctionDefinition) {
+    async fn transfer_function_value(&mut self, stk: &mut Stk, fv: &FunctionDefinition) {
         match fv {
             FunctionDefinition::FunctionUnknown => {}
             FunctionDefinition::FunctionDefinition(_name, entry, exit) => {
@@ -1646,19 +1740,21 @@ impl Ctx {
                 let is_recursive = self.would_be_recursive(entry);
                 if is_recursive {
                     // TODO: Find a better strategy for recursion
-                } else {
-                    self.run_cached(entry, move |s| s.tfv_recompute(entry, exit));
+                } else if !self.use_cached(entry) {
+                    let result = self.tfv_recompute(stk, entry, exit).await;
+                    self.cache_result(entry, result);
                 }
             }
         }
     }
 
-    fn tfv_recompute(
+    async fn tfv_recompute(
         &mut self,
+        stk: &mut Stk,
         entry: Node,
         exit: Node,
     ) -> (BTreeSet<StateDependency>, InternalState) {
-        let (states, deps) = self.with_new_stack_frame(entry, true, |s| s.dataflow(entry));
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, true).await;
         let res = match states.get(&exit) {
             Some((_input, output)) => {
                 // Discard local variables.
@@ -1668,13 +1764,13 @@ impl Ctx {
             }
             None => unreachable_state(),
         };
-        self.register_flow_result(entry, &states, &deps);
+        self.register_flow_result(entry, states, &deps);
         (deps, res)
     }
 
-    // --- the iterative DFA ---
+    // the iterative DFA
 
-    fn process(&mut self, states: &mut StateMap, node: Node) -> Vec<Node> {
+    async fn process(&mut self, stk: &mut Stk, states: &mut StateMap, node: Node) -> Vec<Node> {
         let incoming = self.pred_flow.get(&node).cloned().unwrap_or_default();
         let outgoing = self.succ_all.get(&node).cloned().unwrap_or_default();
         let label = self
@@ -1702,7 +1798,7 @@ impl Ctx {
         self.input = input.clone();
         self.output = input.clone();
         self.node = node;
-        self.transfer(&label);
+        self.transfer(stk, &label).await;
         let new_output = self.output.clone();
         let result = if outgoing.len() >= 2 {
             self.version_state(new_output)
@@ -1723,7 +1819,7 @@ impl Ctx {
         }
     }
 
-    fn dataflow(&mut self, entry: Node) -> StateMap {
+    async fn dataflow(&mut self, stk: &mut Stk, entry: Node) -> StateMap {
         let mut pending: BTreeSet<Node> = BTreeSet::new();
         pending.insert(entry);
         let mut states: StateMap = BTreeMap::new();
@@ -1744,7 +1840,7 @@ impl Ctx {
                 break;
             };
             pending.remove(&next);
-            let nexts = self.process(&mut states, next);
+            let nexts = self.process(stk, &mut states, next).await;
             for x in nexts {
                 pending.insert(x);
             }
@@ -1755,36 +1851,46 @@ impl Ctx {
         states
     }
 
-    fn run_root(&mut self, env: InternalState, entry: Node, exit: Node) -> InternalState {
+    async fn run_root(
+        &mut self,
+        stk: &mut Stk,
+        env: InternalState,
+        entry: Node,
+        exit: Node,
+    ) -> InternalState {
         self.input = env.clone();
         self.output = env;
         self.node = entry;
-        let (states, deps) = self.with_new_stack_frame(entry, false, |s| s.dataflow(entry));
-        self.register_flow_result(entry, &states, &deps);
-        states.get(&exit).map_or_else(
+        let (states, deps) = self.dataflow_in_new_frame(stk, entry, false).await;
+        let res = states.get(&exit).map_or_else(
             || {
                 self.fail("Missing exit state");
                 unreachable_state()
             },
             |(_, res)| res.clone(),
-        )
+        );
+        self.register_flow_result(entry, states, &deps);
+        res
     }
 
-    fn analyze_stragglers(&mut self, state: &InternalState, stragglers: &[FunctionDefinition]) {
+    async fn analyze_stragglers(
+        &mut self,
+        stk: &mut Stk,
+        state: &InternalState,
+        stragglers: &[FunctionDefinition],
+    ) {
         for def in stragglers {
             self.input = state.clone();
             self.output = state.clone();
             if let FunctionDefinition::FunctionDefinition(_, entry, _) = def {
                 self.node = *entry;
             }
-            self.transfer_function_value(def);
+            self.transfer_function_value(stk, def).await;
         }
     }
 }
 
-// ===========================================================================
 // Top-level orchestration helpers
-// ===========================================================================
 
 fn insert_in(
     overwrite: bool,
@@ -1914,8 +2020,14 @@ pub fn analyze_control_flow(
     let mut ctx = Ctx::new(&cfg.cf_graph);
     let env = create_environment_state();
 
+    // The analysis recurses into function and subshell bodies as deep as the
+    // script nests them, and it runs on a heap stack.
+    let mut stack = reblessive::Stack::new();
+
     // Do a dataflow analysis starting on the root node.
-    let exit_state = ctx.run_root(env.clone(), entry, exit);
+    let exit_state = stack
+        .enter(|stk| ctx.run_root(stk, env.clone(), entry, exit))
+        .finish();
 
     // All nodes we've touched.
     let mut invoked_nodes: BTreeSet<Node> = BTreeSet::new();
@@ -1938,7 +2050,9 @@ pub fn analyze_control_flow(
         s.s_exit_codes = None;
         s
     };
-    ctx.analyze_stragglers(&straggler_input, &uninvoked);
+    stack
+        .enter(|stk| ctx.analyze_stragglers(stk, &straggler_input, &uninvoked))
+        .finish();
 
     // Round up all the states from all data flows:
     // flattenByNode ∘ groupByNode ∘ addDeps, then internalToExternal.
@@ -2008,7 +2122,6 @@ pub fn analyze_control_flow(
     })
 }
 
-// ===========================================================================
 // Tests
 //
 // NB: CFGAnalysis.hs itself defines NO `prop_` tests (its `$quickCheckAll`
@@ -2016,7 +2129,6 @@ pub fn analyze_control_flow(
 // SC2154/SC2086/SC2034, carry the prop_ tests, in Analytics.hs). These tests
 // therefore exercise the ported abstract interpretation directly against the
 // documented lattice semantics, via a faithful parse+analyze helper.
-// ===========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -2025,42 +2137,91 @@ mod tests {
     use crate::parser::parse_script;
 
     #[test]
+    fn call_sites_order_as_the_list_they_stand_for() {
+        let mut seed: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut next = |bound: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from((seed >> 33) % bound).unwrap_or(0)
+        };
+        // Each list grows from a shared tail, as frames grow them. Beside each
+        // list lies its plain vector, innermost first.
+        let mut made: Vec<(CallSites, Vec<Node>)> = vec![(CallSites::default(), Vec::new())];
+        for _ in 0..200 {
+            let (base, plain) = made[next(made.len() as u64)].clone();
+            let node = next(4);
+            let mut grown = vec![node];
+            grown.extend(&plain);
+            made.push((base.push(node), grown));
+        }
+        for (a, va) in &made {
+            for (b, vb) in &made {
+                assert_eq!(a.cmp(b), va.cmp(vb), "{va:?} {vb:?}");
+                assert_eq!(a == b, va == vb);
+            }
+        }
+    }
+
+    #[test]
+    fn a_deep_call_site_list_drops_in_a_small_stack() {
+        let dropped = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut calls = CallSites::default();
+                for node in 0..200_000 {
+                    calls = calls.push(node);
+                }
+                drop(calls);
+            })
+            .and_then(|h| h.join().map_err(|_| std::io::Error::other("panicked")));
+        assert!(dropped.is_ok());
+    }
+
+    #[test]
     fn exit_code_snapshots_share_storage_without_changing_older_states() {
         let original = set_exit_code(Id(1), &new_internal_state());
         let snapshot = original.clone();
-        assert!(Rc::ptr_eq(
-            original.s_exit_codes.as_ref().unwrap(),
-            snapshot.s_exit_codes.as_ref().unwrap()
-        ));
+        assert!(
+            original
+                .s_exit_codes
+                .as_ref()
+                .unwrap()
+                .ptr_eq(snapshot.s_exit_codes.as_ref().unwrap())
+        );
         let mut external = internal_to_external(&snapshot);
-        assert!(Rc::ptr_eq(
-            &external.exit_codes,
-            snapshot.s_exit_codes.as_ref().unwrap()
-        ));
-        Rc::make_mut(&mut external.exit_codes).insert(Id(3));
-        assert_eq!(external.exit_codes(), &[Id(1), Id(3)].into());
+        assert!(
+            external
+                .exit_codes
+                .ptr_eq(snapshot.s_exit_codes.as_ref().unwrap())
+        );
+        external.exit_codes.insert(Id(3));
+        assert_eq!(external.exit_codes(), &OrdSet::from(vec![Id(1), Id(3)]));
         let changed = set_exit_code(Id(2), &snapshot);
         assert_eq!(
             internal_to_external(&original).exit_codes(),
-            &[Id(1)].into()
+            &OrdSet::unit(Id(1))
         );
-        assert_eq!(internal_to_external(&changed).exit_codes(), &[Id(2)].into());
+        assert_eq!(
+            internal_to_external(&changed).exit_codes(),
+            &OrdSet::unit(Id(2))
+        );
     }
 
     #[test]
     fn exit_code_unions_preserve_values_and_reuse_containing_sets() {
-        let small = Rc::new([Id(1)].into());
-        let large = Rc::new([Id(1), Id(2)].into());
-        assert!(Rc::ptr_eq(&union_exit_codes(&small, &large), &large));
-        assert!(Rc::ptr_eq(&union_exit_codes(&large, &small), &large));
-        assert!(Rc::ptr_eq(&union_exit_codes(&large, &large), &large));
-        let other = Rc::new([Id(2), Id(3)].into());
+        let small = OrdSet::unit(Id(1));
+        let large = OrdSet::from(vec![Id(1), Id(2)]);
+        assert!(union_exit_codes(&small, &large).ptr_eq(&large));
+        assert!(union_exit_codes(&large, &small).ptr_eq(&large));
+        assert!(union_exit_codes(&large, &large).ptr_eq(&large));
+        let other = OrdSet::from(vec![Id(2), Id(3)]);
         assert_eq!(
-            *union_exit_codes(&large, &other),
-            [Id(1), Id(2), Id(3)].into()
+            union_exit_codes(&large, &other),
+            OrdSet::from(vec![Id(1), Id(2), Id(3)])
         );
-        assert_eq!(*large, [Id(1), Id(2)].into());
-        assert_eq!(*other, [Id(2), Id(3)].into());
+        assert_eq!(large, OrdSet::from(vec![Id(1), Id(2)]));
+        assert_eq!(other, OrdSet::from(vec![Id(2), Id(3)]));
     }
 
     #[test]
@@ -2335,7 +2496,7 @@ mod tests {
             "d".into(),
             int_props,
         ));
-        deps.insert(StateDependency::DepExitCodes(Rc::new([Id(7)].into())));
+        deps.insert(StateDependency::DepExitCodes(OrdSet::unit(Id(7))));
         let base = deps_to_state(&deps);
 
         let diff = insert_global("a", val("a b"), &new_internal_state());

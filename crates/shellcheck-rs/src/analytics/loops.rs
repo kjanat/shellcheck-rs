@@ -382,57 +382,73 @@ fn stdin_redirect(r: &Token) -> bool {
 }
 
 fn check_muncher(params: &Parameters, while_id: Id, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if !commands.is_empty() => {
-            if let InnerToken::T_Redirecting { redirs, cmd } = &*commands[0].inner {
-                // Check command substitutions regardless of the command.
+    /// `Visit` visits a command. `Check` checks the first command of a pipeline
+    /// after the walk has visited everything nested in it.
+    enum Step {
+        Visit(Token),
+        Check(Token),
+    }
+    let mut pending = vec![Step::Visit(t.clone())];
+    while let Some(step) = pending.pop() {
+        let t = match step {
+            Step::Visit(t) => t,
+            Step::Check(cmd) => {
+                check_muncher_command(params, while_id, &cmd, out);
+                continue;
+            }
+        };
+        match &*t.inner {
+            InnerToken::T_Pipeline { commands, .. } if !commands.is_empty() => {
+                let InnerToken::T_Redirecting { redirs, cmd } = &*commands[0].inner else {
+                    continue;
+                };
+                // Visited in this order: the command substitutions (checked
+                // regardless of the command), then, if this doesn't redirect,
+                // the ifs/loops/groups/etc inside it, then the command itself.
+                let mut next = Vec::new();
                 if let InnerToken::T_SimpleCommand { assignments, words } = &*cmd.inner {
                     for w in assignments.iter().chain(words.iter()) {
                         for part in get_words(w) {
                             for seq in get_command_sequences(part) {
-                                for c in &seq {
-                                    check_muncher(params, while_id, c, out);
-                                }
+                                next.extend(seq.into_iter().map(Step::Visit));
                             }
                         }
                     }
                 }
-
                 if !redirs.iter().any(stdin_redirect) {
-                    // Recurse into ifs/loops/groups/etc if this doesn't redirect.
                     for seq in get_command_sequences(cmd) {
-                        for c in &seq {
-                            check_muncher(params, while_id, c, out);
-                        }
+                        next.extend(seq.into_iter().map(Step::Visit));
                     }
-
-                    // Check the actual command.
-                    if let Some(name) = get_command_basename(cmd)
-                        && let Some((check, fixkind, flag)) = muncher(&name)
-                        && !run_munch_check(check, flag, cmd)
-                    {
-                        info(
-                            out,
-                            while_id,
-                            2095,
-                            &format!(
-                                "{name} may swallow stdin, preventing this loop from working properly."
-                            ),
-                        );
-                        let fix = build_munch_fix(params, fixkind, flag, cmd);
-                        warn_with_fix(
-                            out,
-                            cmd.id(),
-                            2095,
-                            &format!("Use {name} {flag} to prevent {name} from swallowing stdin."),
-                            fix,
-                        );
-                    }
+                    next.push(Step::Check(cmd.clone()));
                 }
+                pending.extend(next.into_iter().rev());
             }
+            InnerToken::T_Backgrounded(inner) => pending.push(Step::Visit(inner.clone())),
+            _ => {}
         }
-        InnerToken::T_Backgrounded(inner) => check_muncher(params, while_id, inner, out),
-        _ => {}
+    }
+}
+
+/// Check the actual command of a pipeline in a `while read` loop body.
+fn check_muncher_command(params: &Parameters, while_id: Id, cmd: &Token, out: &mut Out) {
+    if let Some(name) = get_command_basename(cmd)
+        && let Some((check, fixkind, flag)) = muncher(&name)
+        && !run_munch_check(check, flag, cmd)
+    {
+        info(
+            out,
+            while_id,
+            2095,
+            &format!("{name} may swallow stdin, preventing this loop from working properly."),
+        );
+        let fix = build_munch_fix(params, fixkind, flag, cmd);
+        warn_with_fix(
+            out,
+            cmd.id(),
+            2095,
+            &format!("Use {name} {flag} to prevent {name} from swallowing stdin."),
+            fix,
+        );
     }
 }
 
@@ -487,12 +503,15 @@ fn get_command_argv(t: &Token) -> Option<Vec<Token>> {
 }
 
 /// `getCommandSequences`: command lists inside compound tokens.
-fn get_command_sequences(t: &Token) -> Vec<Vec<Token>> {
+fn get_command_sequences(mut t: &Token) -> Vec<Vec<Token>> {
     use InnerToken::{
         T_Annotation, T_Backticked, T_BraceGroup, T_DollarBraceCommandExpansion, T_DollarExpansion,
         T_ForArithmetic, T_ForIn, T_IfExpression, T_Script, T_Subshell, T_UntilExpression,
         T_WhileExpression,
     };
+    while let T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
     match &*t.inner {
         T_Script { commands: cmds, .. }
         | T_BraceGroup(cmds)
@@ -514,7 +533,6 @@ fn get_command_sequences(t: &Token) -> Vec<Vec<Token>> {
             out.push(elses.clone());
             out
         }
-        T_Annotation { token, .. } => get_command_sequences(token),
         _ => vec![],
     }
 }
@@ -940,11 +958,11 @@ mod tests {
         ));
     }
 
-    // ---- SC2210 checkRedirectionToNumber ----
+    // SC2210 checkRedirectionToNumber
 
-    // ---- SC2206 / SC2207 checkSplittingInArrays ----
+    // SC2206 / SC2207 checkSplittingInArrays
 
-    // ---- SC2268 checkComparisonWithLeadingX ----
+    // SC2268 checkComparisonWithLeadingX
 
     #[test]
     fn prop_checkForInQuoted() {
@@ -1036,7 +1054,7 @@ mod tests {
         ));
     }
 
-    // ---- checkFindExec ----
+    // checkFindExec
 
     #[test]
     fn prop_lks_break_toplevel() {
@@ -1066,7 +1084,7 @@ mod tests {
         ));
     }
 
-    // ---- checkFunctionDeclarations ----
+    // checkFunctionDeclarations
 
     #[test]
     fn prop_checkLoopVariableReassignment1() {
@@ -1100,7 +1118,7 @@ mod tests {
         ));
     }
 
-    // ---- checkForLoopGlobVariables ----
+    // checkForLoopGlobVariables
 
     #[test]
     fn prop_checkForLoopGlobVariables1() {
@@ -1126,5 +1144,5 @@ mod tests {
         ));
     }
 
-    // ---- checkAliasUsedInSameParsingUnit ----
+    // checkAliasUsedInSameParsingUnit
 }

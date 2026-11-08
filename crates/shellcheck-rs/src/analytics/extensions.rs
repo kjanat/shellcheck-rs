@@ -145,12 +145,28 @@ fn cleans_up(action: &str) -> bool {
 }
 
 pub(super) fn check_cleanup_traps(_params: &Parameters, root: &Token, out: &mut Out) {
-    fn scope(root: &Token, out: &mut Out) {
-        fn collect<'a>(
-            token: &'a Token,
-            traps: &mut Vec<(&'a Token, String, Vec<String>)>,
-            out: &mut Out,
-        ) {
+    /// An execution scope that the walk is collecting. It holds the traps found
+    /// so far and the tokens still to visit, with the last token first.
+    struct Scope<'a> {
+        traps: Vec<(&'a Token, String, Vec<String>)>,
+        pending: Vec<&'a Token>,
+    }
+    impl<'a> Scope<'a> {
+        fn new(root: &'a Token) -> Self {
+            let mut pending = Vec::new();
+            root.inner.for_each_child(|c| pending.push(c));
+            pending.reverse();
+            Self {
+                traps: Vec::new(),
+                pending,
+            }
+        }
+    }
+    // The walk reports a nested scope as soon as it finishes collecting it,
+    // before the scope around it.
+    let mut scopes = vec![Scope::new(root)];
+    while let Some(scope) = scopes.last_mut() {
+        if let Some(token) = scope.pending.pop() {
             // A trap in a function/subshell/substitution cannot establish an
             // EXIT handler in the enclosing execution scope.
             if matches!(
@@ -160,20 +176,20 @@ pub(super) fn check_cleanup_traps(_params: &Parameters, root: &Token, out: &mut 
                     | InnerToken::T_DollarExpansion(_)
                     | InnerToken::T_Backticked(_)
             ) {
-                scope(token, out);
-                return;
+                scopes.push(Scope::new(token));
+                continue;
             }
             if let Some((action, signals)) = trap(token) {
-                traps.push((token, action, signals));
+                scope.traps.push((token, action, signals));
             }
-            for child in token.children() {
-                collect(child, traps, out);
-            }
+            let first = scope.pending.len();
+            token.inner.for_each_child(|c| scope.pending.push(c));
+            scope.pending[first..].reverse();
+            continue;
         }
-        let mut traps = Vec::new();
-        for child in root.children() {
-            collect(child, &mut traps, out);
-        }
+        let Some(Scope { traps, .. }) = scopes.pop() else {
+            break;
+        };
         for (token, action, signals) in &traps {
             let exit = |s: &String| matches!(s.as_str(), "EXIT" | "0");
             if signals.iter().any(exit)
@@ -202,7 +218,6 @@ pub(super) fn check_cleanup_traps(_params: &Parameters, root: &Token, out: &mut 
             }
         }
     }
-    scope(root, out);
 }
 
 #[cfg(test)]

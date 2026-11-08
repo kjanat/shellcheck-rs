@@ -3,15 +3,16 @@ use super::{
     COMMON_COMMANDS, ConditionType, InnerToken, PResult, Parser, Position, Severity, Token,
     ast_lib, columns,
 };
+use reblessive::Stk;
 
 impl Parser {
     /// `readConditionCommand`: a condition plus optional redirects, wrapped in
     /// `T_Redirecting` like every other command. Returns Err (with full reset)
     /// on any failure so the caller can fall back to a simple command.
-    pub(super) fn read_condition_command(&mut self) -> PResult<Token> {
+    pub(super) async fn read_condition_command(&mut self, stk: &mut Stk) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
-        let Ok(cond) = self.read_condition() else {
+        let Ok(cond) = self.read_condition(stk).await else {
             // As in `readCommand`'s `choice`: once the test expression has
             // consumed input there is no falling back to a simple command.
             if self.idx != m.idx {
@@ -21,21 +22,21 @@ impl Parser {
             self.reset(m);
             return Err(());
         };
-        let redirs = self.read_redirect_list()?;
+        let redirs = self.read_redirect_list(stk).await?;
         let id = self.next_id_between(start, self.pos());
         let pos = self.pos();
         let has_dash_ao = ["-o", "-a", "or", "and"]
             .into_iter()
             .find(|s| self.string_peek(s));
         if let Some(c) = has_dash_ao {
-            let mut end = pos.clone();
+            let mut end = pos;
             end.column += columns(c.len());
             let alt = match c {
                 "or" | "-o" => "||",
                 _ => "&&",
             };
             self.problem_at(
-                pos.clone(),
+                pos,
                 end,
                 Severity::ErrorC,
                 1139,
@@ -49,7 +50,7 @@ impl Parser {
         // attempts left -- `g_Else` reading the `e` of `esac` -- are given up
         // with it, so what the parse reports is the missing `)` after them.
         let keyword_failure = self.failure.clone();
-        let has_keyword = self.keyword_len().is_some();
+        let has_keyword = self.keyword_len(stk).await.is_some();
         if has_keyword {
             self.failure = keyword_failure;
         }
@@ -59,7 +60,12 @@ impl Parser {
         let has_word = {
             let w = self.mark();
             let failure = self.failure.clone();
-            let ok = self.try_parse(|p| p.read_normal_word().map(|_| ())).is_ok();
+            let ok = self
+                .try_parse(stk, async |p, stk| {
+                    p.read_normal_word(stk).await.map(|_| ())
+                })
+                .await
+                .is_ok();
             if ok {
                 // `lookAhead` replies with an unknown error at its own position
                 // when `p` succeeds, which loses the merge against whatever
@@ -86,11 +92,36 @@ impl Parser {
         ))
     }
 
-    pub(super) fn read_condition(&mut self) -> PResult<Token> {
-        self.called("test expression", Self::read_condition_body)
+    pub(super) async fn read_condition(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "test expression", async |p, stk| {
+            p.read_condition_body(stk).await
+        })
+        .await
     }
 
-    fn read_condition_body(&mut self) -> PResult<Token> {
+    /// SC1014: mirror Parser.hs `readConditionContents`'s `attempting`
+    /// lookahead — peek a variable name followed by whitespace; if it names a
+    /// common command, warn that a command is being used as a test operand.
+    /// Non-consuming (lookAhead), so the cursor is always restored.
+    fn warn_command_as_condition(&mut self) {
+        let m = self.mark();
+        let pos = self.pos();
+        if let Ok(name) = self.read_variable_name()
+            && self.spacing1().is_ok()
+            && COMMON_COMMANDS.contains(&name.as_str())
+        {
+            self.problem_at(
+                pos,
+                pos,
+                Severity::WarningC,
+                1014,
+                "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.",
+            );
+        }
+        self.reset(m);
+    }
+
+    async fn read_condition_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         if self.peek() != Some('[') {
             return Err(());
         }
@@ -106,11 +137,11 @@ impl Parser {
 
         // required space after the bracket
         let space_pos = self.pos();
-        let space = self.cond_spacing();
+        let space = self.cond_spacing(stk).await;
         if space.is_empty() {
             self.problem_at(
-                start.clone(),
-                space_pos.clone(),
+                start,
+                space_pos,
                 Severity::ErrorC,
                 1035,
                 if single {
@@ -122,7 +153,7 @@ impl Parser {
         }
         if single && space.contains('\n') {
             self.problem_at(
-                space_pos.clone(),
+                space_pos,
                 space_pos,
                 Severity::ErrorC,
                 1080,
@@ -130,30 +161,10 @@ impl Parser {
             );
         }
 
-        // SC1014: mirror Parser.hs `readConditionContents`'s `attempting`
-        // lookahead — peek a variable name followed by whitespace; if it names a
-        // common command, warn that a command is being used as a test operand.
-        // Non-consuming (lookAhead), so the cursor is always restored.
-        {
-            let m = self.mark();
-            let pos = self.pos();
-            if let Ok(name) = self.read_variable_name()
-                && self.spacing1().is_ok()
-                && COMMON_COMMANDS.contains(&name.as_str())
-            {
-                self.problem_at(
-                        pos.clone(),
-                        pos,
-                        Severity::WarningC,
-                        1014,
-                        "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.",
-                    );
-            }
-            self.reset(m);
-        }
+        self.warn_command_as_condition();
 
         let contents_start = self.mark();
-        let contents = self.read_cond_contents(single).ok();
+        let contents = self.read_cond_contents(stk, single).await.ok();
         if contents.is_none() && self.idx != contents_start.idx {
             // The contents committed before failing, so the `<|>` that would
             // have made this an empty condition is never reached.
@@ -171,7 +182,7 @@ impl Parser {
                 self.fail_implicitly();
                 return Err(());
             }
-            let id = self.next_id_between(start.clone(), self.pos());
+            let id = self.next_id_between(start, self.pos());
             Token::new(id, InnerToken::TC_Empty { typ })
         };
         // `try (string "]]") <|> string "]"`: whichever bracket is actually
@@ -186,7 +197,7 @@ impl Parser {
         };
         if dbl && close != ConditionType::DoubleBracket {
             self.problem_at(
-                close_pos.clone(),
+                close_pos,
                 close_pos,
                 Severity::ErrorC,
                 1033,
@@ -195,8 +206,8 @@ impl Parser {
         }
         if single && close != ConditionType::SingleBracket {
             self.problem_at(
-                start.clone(),
-                start.clone(),
+                start,
+                start,
                 Severity::ErrorC,
                 1034,
                 "Test expression was opened with single [ but closed with double ]]. Make sure they match.",
@@ -214,13 +225,18 @@ impl Parser {
 
     /// `condSpacing`: spacing within a condition, where the shell needs it and
     /// where a bare line feed inside `[ ]` does not continue the expression.
-    pub(super) fn cond_spacing_checked(&mut self, single: bool, required: bool) -> String {
+    pub(super) async fn cond_spacing_checked(
+        &mut self,
+        stk: &mut Stk,
+        single: bool,
+        required: bool,
+    ) -> String {
         let pos = self.pos();
-        let space = self.cond_spacing();
+        let space = self.cond_spacing(stk).await;
         if required && space.is_empty() {
             self.problem_at(
-                pos.clone(),
-                pos.clone(),
+                pos,
+                pos,
                 Severity::ErrorC,
                 1035,
                 "You are missing a required space here.",
@@ -228,7 +244,7 @@ impl Parser {
         }
         if single && space.contains('\n') {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1080,
@@ -241,25 +257,30 @@ impl Parser {
     /// Spacing within a condition: `condSpacing`'s `space <- allspacing`, so a
     /// comment counts as spacing here as it does anywhere else -- `[ -x# ]`
     /// has no argument for the `-x` rather than a word beginning with `#`.
-    pub(super) fn cond_spacing(&mut self) -> String {
-        self.allspacing()
+    pub(super) async fn cond_spacing(&mut self, stk: &mut Stk) -> String {
+        self.allspacing(stk).await
     }
 
     // contents = or-level (chained by && / -a → TC_And)
-    pub(super) fn read_cond_contents(&mut self, single: bool) -> PResult<Token> {
-        self.read_cond_or(single)
+    pub(super) async fn read_cond_contents(
+        &mut self,
+        stk: &mut Stk,
+        single: bool,
+    ) -> PResult<Token> {
+        self.read_cond_or(stk, single).await
     }
 
-    pub(super) fn read_cond_or(&mut self, single: bool) -> PResult<Token> {
-        let mut left = self.read_cond_and(single)?;
+    pub(super) async fn read_cond_or(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
+        let mut left = self.read_cond_and(stk, single).await?;
         loop {
             let m = self.mark();
             let op_start = self.pos();
             if let Some(op) = self.read_cond_and_op() {
                 let op_end = self.pos();
                 // `readAndOrOp .. requiresSpacing`: only the word forms need it.
-                self.cond_spacing_checked(single, op.starts_with('-'));
-                if let Ok(right) = self.read_cond_and(single) {
+                self.cond_spacing_checked(stk, single, op.starts_with('-'))
+                    .await;
+                if let Ok(right) = self.read_cond_and(stk, single).await {
                     let typ = Self::cond_typ(single);
                     let id = self.next_id_between(op_start, op_end);
                     left = Token::new(
@@ -283,8 +304,8 @@ impl Parser {
         Ok(left)
     }
 
-    pub(super) fn read_cond_and(&mut self, single: bool) -> PResult<Token> {
-        let mut left = self.read_cond_term(single)?;
+    pub(super) async fn read_cond_and(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
+        let mut left = self.read_cond_term(stk, single).await?;
         loop {
             let m = self.mark();
             let op_start = self.pos();
@@ -292,8 +313,9 @@ impl Parser {
             self.guard_arithmetic(single);
             if let Some(op) = self.read_cond_or_op() {
                 let op_end = self.pos();
-                self.cond_spacing_checked(single, op.starts_with('-'));
-                if let Ok(right) = self.read_cond_term(single) {
+                self.cond_spacing_checked(stk, single, op.starts_with('-'))
+                    .await;
+                if let Ok(right) = self.read_cond_term(stk, single).await {
                     let typ = Self::cond_typ(single);
                     let id = self.next_id_between(op_start, op_end);
                     left = Token::new(
@@ -353,27 +375,27 @@ impl Parser {
         None
     }
 
-    pub(super) fn read_cond_term(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_term(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         // `readCondNot <|> readCondExpr`: a `!` is a negation, whatever
         // follows it -- `[ != x ]` is `!` with a missing space and then the
         // word `=`, which is what upstream reports (SC1035, then SC1108).
         let t = if self.peek() == Some('!') {
-            self.read_cond_not(single)?
+            self.read_cond_not(stk, single).await?
         } else {
-            self.read_cond_expr(single)?
+            self.read_cond_expr(stk, single).await?
         };
-        self.cond_spacing_checked(single, false);
+        self.cond_spacing_checked(stk, single, false).await;
         Ok(t)
     }
 
-    pub(super) fn read_cond_not(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_not(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         let start = self.pos();
         self.char('!')?;
         // `readCondNot`: the TC_Unary id spans the `!` alone (`endSpan start`
         // immediately after `char '!'`), not the whole negated expression.
         let id = self.next_id_between(start, self.pos());
-        self.cond_spacing_checked(single, true);
-        let expr = self.read_cond_expr(single)?;
+        self.cond_spacing_checked(stk, single, true).await;
+        let expr = stk.run(|stk| self.read_cond_expr(stk, single)).await?;
         let typ = Self::cond_typ(single);
         Ok(Token::new(
             id,
@@ -385,12 +407,12 @@ impl Parser {
         ))
     }
 
-    pub(super) fn read_cond_expr(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_expr(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         // `readCondGroup <|> readCondUnaryExp <|> readCondNullaryOrBinary`:
         // bare alternations, so an alternative that consumed before failing
         // leaves the others out of reach.
         let m = self.mark();
-        match self.read_cond_group(single) {
+        match self.read_cond_group(stk, single).await {
             Ok(g) => return Ok(g),
             Err(()) => {
                 if self.idx != m.idx {
@@ -398,7 +420,7 @@ impl Parser {
                 }
             }
         }
-        match self.read_cond_unary(single) {
+        match self.read_cond_unary(stk, single).await {
             Ok(u) => return Ok(u),
             Err(()) => {
                 if self.idx != m.idx {
@@ -406,10 +428,10 @@ impl Parser {
                 }
             }
         }
-        self.read_cond_nullary_or_binary(single)
+        self.read_cond_nullary_or_binary(stk, single).await
     }
 
-    pub(super) fn read_cond_group(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_group(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
         // `readRegularOrEscaped (string "(")`: `\(`, `'('` and `"("` all read as
@@ -428,8 +450,8 @@ impl Parser {
         // Only the opening paren is inside the `try`: past it the contents and
         // the closing paren have consumed, so `[ \( ]` is a group with nothing
         // in it rather than a word that happens to look like one.
-        self.cond_spacing_checked(single, single);
-        let inner = self.read_cond_contents(single)?;
+        self.cond_spacing_checked(stk, single, single).await;
+        let inner = stk.run(|stk| self.read_cond_contents(stk, single)).await?;
         let cpos = self.pos();
         let rparen = if let Some(s) = self.read_cond_escaped_lit(")") {
             s
@@ -438,7 +460,7 @@ impl Parser {
         } else {
             return Err(());
         };
-        self.cond_spacing_checked(single, single);
+        self.cond_spacing_checked(stk, single, single).await;
         self.warn_cond_paren(single, rparen == ")", &cpos);
         let typ = Self::cond_typ(single);
         let id = self.next_id_between(start, self.pos());
@@ -492,10 +514,10 @@ impl Parser {
         } else {
             return;
         };
-        self.problem_at(pos.clone(), pos.clone(), Severity::ErrorC, code, msg);
+        self.problem_at(*pos, *pos, Severity::ErrorC, code, msg);
     }
 
-    pub(super) fn read_cond_unary(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_unary(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         let m = self.mark();
         let start = self.pos();
         // ShellCheck's `readCondUnaryOp` uses `readOp` with NO exclusion of
@@ -516,7 +538,7 @@ impl Parser {
         // problem back with it.
         // `spacingOrLf` reports the missing space and carries on, so `-v=` is
         // still a unary operator with a bad argument rather than one long word.
-        self.cond_spacing_checked(single, true);
+        self.cond_spacing_checked(stk, single, true).await;
         // `pos` is taken before `readCondWord`, so a missing argument is
         // reported where it should have been -- not wherever the attempt to
         // read one gave up.
@@ -525,7 +547,10 @@ impl Parser {
         // argument that fails *after consuming* (`[ -n $(`) rewinds like any
         // other -- commitment included. Without that, the point of no return
         // set inside the argument would silence the SC1019 below.
-        if let Ok(word) = self.try_parse(|p| p.read_cond_word(single)) {
+        if let Ok(word) = self
+            .try_parse(stk, async |p, stk| p.read_cond_word(stk, single).await)
+            .await
+        {
             let typ = Self::cond_typ(single);
             let id = self.next_id_between(start, op_end);
             Ok(Token::new(
@@ -538,7 +563,7 @@ impl Parser {
             ))
         } else {
             self.problem_at(
-                arg_pos.clone(),
+                arg_pos,
                 arg_pos,
                 Severity::ErrorC,
                 1019,
@@ -575,7 +600,11 @@ impl Parser {
         Some(s)
     }
 
-    pub(super) fn read_cond_nullary_or_binary(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_nullary_or_binary(
+        &mut self,
+        stk: &mut Stk,
+        single: bool,
+    ) -> PResult<Token> {
         let start = self.pos();
         // `attempting`: the branch runs first, so a `[` where an operand
         // belongs is flagged as a grouping attempt with the wrong brackets
@@ -583,7 +612,7 @@ impl Parser {
         if self.peek() == Some('[') {
             let pos = self.pos();
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1026,
@@ -594,21 +623,21 @@ impl Parser {
                 },
             );
         }
-        let x = self.read_cond_word(single)?;
+        let x = self.read_cond_word(stk, single).await?;
         // try binary op
         let m = self.mark();
         let op_start = self.pos();
         // `regexOperatorAhead`: a lookahead (non-consuming) for `=~`/`~=`. When
         // true the RHS is read as a regex rather than a normal condition word.
         let is_regex = self.regex_operator_ahead();
-        if let Some((op, op_end)) = self.read_cond_binary_op(single) {
+        if let Some((op, op_end)) = self.read_cond_binary_op(stk, single).await {
             // TC_Binary inherits the operator token's span (ShellCheck's
             // `getOp`: `startSpan .. endSpan`), so checks emit on the operator.
             let ym = self.mark();
             let y = if is_regex {
-                self.read_regex()
+                self.read_regex(stk).await
             } else {
-                self.read_cond_word(single)
+                self.read_cond_word(stk, single).await
             };
             if let Ok(y) = y {
                 let typ = Self::cond_typ(single);
@@ -633,7 +662,7 @@ impl Parser {
                 // The operator was there, so there is no falling back to
                 // a nullary expression: what is missing is its argument.
                 self.problem_at(
-                    op_start.clone(),
+                    op_start,
                     op_start,
                     Severity::ErrorC,
                     1027,
@@ -683,7 +712,7 @@ impl Parser {
         }
         let pos = self.pos();
         self.problem_at(
-            pos.clone(),
+            pos,
             pos,
             Severity::ErrorC,
             1076,
@@ -699,21 +728,25 @@ impl Parser {
     /// Returns the operator string (with a leading `\` re-added for
     /// escaped/quoted `<`/`>`/`(`/`)`, matching `escaped`) and the position just
     /// after the operator (before spacing), used for the `TC_Binary` span.
-    pub(super) fn read_cond_binary_op(&mut self, single: bool) -> Option<(String, Position)> {
+    pub(super) async fn read_cond_binary_op(
+        &mut self,
+        stk: &mut Stk,
+        single: bool,
+    ) -> Option<(String, Position)> {
         let m = self.mark();
         // `optional guardArithmetic`
         self.guard_arithmetic(single);
         // readEscaped anyOp  (\op  or  'op' / "op")
-        if let Some(op) = self.read_cond_escaped_op() {
+        if let Some(op) = self.read_cond_escaped_op(stk).await {
             let end = self.pos();
-            self.cond_spacing_checked(single, true);
+            self.cond_spacing_checked(stk, single, true).await;
             return Some((op, end));
         }
         self.reset(m);
         // plain anyOp
         if let Some(op) = self.read_cond_any_op() {
             let end = self.pos();
-            self.cond_spacing_checked(single, true);
+            self.cond_spacing_checked(stk, single, true).await;
             return Some((op, end));
         }
         self.reset(m);
@@ -752,7 +785,7 @@ impl Parser {
     /// `readEscaped anyOp`: `\op` or a quote-wrapped `'op'` / `"op"`. Per
     /// ShellCheck's `escaped`, if the operator contains any of `<>()` a leading
     /// backslash is re-added to the returned string.
-    pub(super) fn read_cond_escaped_op(&mut self) -> Option<String> {
+    pub(super) async fn read_cond_escaped_op(&mut self, stk: &mut Stk) -> Option<String> {
         let m = self.mark();
         // A `try`, as `read_cond_escaped_lit` is: what stood before it merges
         // with what it leaves.
@@ -786,7 +819,8 @@ impl Parser {
         // quoted word. Let the word parser diagnose it without consuming input.
         if matches!(self.peek(), Some('\'' | '"')) {
             let operator_failure = self.failure.clone();
-            self.peek_ahead(Self::read_normal_word);
+            self.peek_ahead(stk, async |p, stk| p.read_normal_word(stk).await)
+                .await;
             if !self.failure.as_ref().is_some_and(|f| {
                 matches!(
                     f.message.as_str(),
@@ -818,7 +852,7 @@ impl Parser {
 
     /// A condition word: a normal word, not the closing bracket. Stops at
     /// whitespace/operators/brackets like the normal word reader.
-    pub(super) fn read_cond_word(&mut self, single: bool) -> PResult<Token> {
+    pub(super) async fn read_cond_word(&mut self, stk: &mut Stk, single: bool) -> PResult<Token> {
         // `notFollowedBy2 (try (spacing >> string "]"))`: the closing bracket is
         // not a word. The error is recorded from past it, where the `fail`
         // inside the lookahead happens.
@@ -832,7 +866,7 @@ impl Parser {
             }
             self.reset(m);
         }
-        let w = self.read_normal_word()?;
+        let w = self.read_normal_word(stk).await?;
         let pos = self.pos();
         // A word ending in the closing bracket swallowed it, unless it is an
         // array index (`$x[1]`) — which starts with a literal `[`.
@@ -858,7 +892,7 @@ impl Parser {
         if !is_array_index && tail.ends_with(']') && !contains_open_bracket {
             let bracket = if single { "]" } else { "]]" };
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1020,
@@ -868,7 +902,7 @@ impl Parser {
         }
         if single && tail.ends_with(')') {
             self.problem_at(
-                pos.clone(),
+                pos,
                 pos,
                 Severity::ErrorC,
                 1021,
@@ -890,16 +924,17 @@ impl Parser {
     /// The parts absorb regex syntax (groups, glob chars, `|`) so that an
     /// unquoted `]]`/`)` inside a `( .. )` group does not terminate the
     /// condition, while unquoted whitespace outside a group ends the regex.
-    pub(super) fn read_regex(&mut self) -> PResult<Token> {
-        self.called("regex", Self::read_regex_body)
+    pub(super) async fn read_regex(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "regex", async |p, stk| p.read_regex_body(stk).await)
+            .await
     }
 
-    fn read_regex_body(&mut self) -> PResult<Token> {
+    async fn read_regex_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let mut parts = Vec::new();
         loop {
             let before = self.idx;
-            match self.read_regex_part() {
+            match self.read_regex_part(stk).await {
                 Ok(p) => {
                     // guard against a zero-width part looping forever
                     if self.idx == before {
@@ -925,18 +960,18 @@ impl Parser {
 
     /// One `readPart` of a regex: group, quoted string, `$`-expression, a normal
     /// literal (stopping at `(`/space), a literal `|`, or a glob literal char.
-    pub(super) fn read_regex_part(&mut self) -> PResult<Token> {
+    pub(super) async fn read_regex_part(&mut self, stk: &mut Stk) -> PResult<Token> {
         match self.peek() {
-            Some('(') => return self.read_regex_group(),
-            Some('\'') => return self.read_single_quoted(),
-            Some('"') => return self.read_double_quoted(),
+            Some('(') => return self.read_regex_group(stk).await,
+            Some('\'') => return self.read_single_quoted(stk).await,
+            Some('"') => return self.read_double_quoted(stk).await,
             Some('$') => {
                 // `readDollarExpression`, not `readNormalDollar`: there is no
                 // `$'..'`, `$".."` or lone `$` among its alternatives, so in a
                 // regex `$"e"` is the glob literal `$` and then a double quoted
                 // string, with the diagnostics a double quoted string gets.
                 let m = self.mark();
-                match self.read_dollar_exp() {
+                match self.read_dollar_exp(stk).await {
                     Ok(t) => return Ok(t),
                     Err(()) if self.idx != m.idx => return Err(()),
                     Err(()) => self.reset(m),
@@ -946,7 +981,7 @@ impl Parser {
             _ => {}
         }
         // readLiteralForParser (readNormalLiteral "( ")
-        if let Ok(t) = self.read_literal_for_parser_normal("( ") {
+        if let Ok(t) = self.read_literal_for_parser_normal(stk, "( ").await {
             return Ok(t);
         }
         // readLiteralString "|"
@@ -974,20 +1009,31 @@ impl Parser {
     /// to it (`readStringForParser`/`readUntil`). This preserves backslash
     /// escapes verbatim (e.g. a regex RHS `\*` stays `\*`, not `*`), and drops
     /// any notes the lookahead would have produced.
-    pub(super) fn read_literal_for_parser_normal(&mut self, custom_end: &str) -> PResult<Token> {
+    pub(super) async fn read_literal_for_parser_normal(
+        &mut self,
+        stk: &mut Stk,
+        custom_end: &str,
+    ) -> PResult<Token> {
         let start = self.pos();
-        let s = self.read_string_for_parser(|p| p.read_normal_literal(custom_end).map(|_| ()))?;
+        let s = self
+            .read_string_for_parser(stk, async |p, stk| {
+                p.read_normal_literal(stk, custom_end).await.map(|_| ())
+            })
+            .await?;
         let id = self.next_id_between(start, self.pos());
         Ok(Token::new(id, InnerToken::T_Literal(s)))
     }
 
     /// `readGroup`: `( .. )` inside a regex. Inside, `readRegexLiteral` swallows
     /// runs of chars (including spaces and `]]`) until a `` '"$`() `` boundary.
-    pub(super) fn read_regex_group(&mut self) -> PResult<Token> {
-        self.called("regex grouping", Self::read_regex_group_body)
+    pub(super) async fn read_regex_group(&mut self, stk: &mut Stk) -> PResult<Token> {
+        self.called(stk, "regex grouping", async |p, stk| {
+            p.read_regex_group_body(stk).await
+        })
+        .await
     }
 
-    fn read_regex_group_body(&mut self) -> PResult<Token> {
+    async fn read_regex_group_body(&mut self, stk: &mut Stk) -> PResult<Token> {
         let start = self.pos();
         let p1_start = self.pos();
         self.char('(')?;
@@ -1001,7 +1047,7 @@ impl Parser {
         loop {
             let m = self.mark();
             let before = self.idx;
-            match self.read_regex_part() {
+            match stk.run(|stk| self.read_regex_part(stk)).await {
                 Ok(p) if self.idx != before => {
                     parts.push(p);
                     continue;

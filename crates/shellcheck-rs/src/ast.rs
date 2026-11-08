@@ -120,13 +120,108 @@ pub struct Token {
     pub inner: std::rc::Rc<InnerToken>,
 }
 
+thread_local! {
+    /// The token pairs that the running comparison still has to compare. It is
+    /// `None` when no comparison runs on this thread.
+    static UNCOMPARED: std::cell::RefCell<Option<Vec<(Token, Token)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl PartialEq for Token {
+    /// Mirrors `instance Eq Token where OuterToken _ a == OuterToken _ b = a == b`.
+    ///
+    /// The derived `InnerToken` equality compares a node's fields and calls
+    /// this function for each child token. Inside a running comparison, that
+    /// call only queues the pair and returns `true`. The outermost call works
+    /// through the queue, so the depth of the tree never reaches the call
+    /// stack. Two trees are equal when every queued pair is equal.
     fn eq(&self, other: &Self) -> bool {
-        // Mirrors `instance Eq Token where OuterToken _ a == OuterToken _ b = a == b`
-        self.inner == other.inner
+        /// Ends the comparison on this thread on every exit path, panics included.
+        struct Running;
+        impl Drop for Running {
+            fn drop(&mut self) {
+                UNCOMPARED.with_borrow_mut(|queue| *queue = None);
+            }
+        }
+        if std::rc::Rc::ptr_eq(&self.inner, &other.inner) {
+            return true;
+        }
+        let queued = UNCOMPARED.with_borrow_mut(|queue| {
+            queue
+                .as_mut()
+                .map(|queue| queue.push((self.clone(), other.clone())))
+                .is_some()
+        });
+        if queued {
+            return true;
+        }
+        UNCOMPARED.with_borrow_mut(|queue| *queue = Some(Vec::new()));
+        let _running = Running;
+        let mut equal = *self.inner == *other.inner;
+        while equal {
+            let Some((a, b)) = UNCOMPARED.with_borrow_mut(|queue| queue.as_mut()?.pop()) else {
+                break;
+            };
+            equal = std::rc::Rc::ptr_eq(&a.inner, &b.inner) || *a.inner == *b.inner;
+        }
+        equal
     }
 }
 impl Eq for Token {}
+
+thread_local! {
+    static VACANT: std::rc::Rc<InnerToken> = std::rc::Rc::new(InnerToken::T_Semi);
+    /// How many token drops are running on this thread's call stack.
+    static DROP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Moves the payload out of `slot` when no other token shares it, and puts
+/// a shared leaf in its place. The token's own drop then has nothing to
+/// descend into.
+fn take_unique(slot: &mut std::rc::Rc<InnerToken>) -> Option<InnerToken> {
+    if std::rc::Rc::strong_count(slot) != 1 {
+        return None;
+    }
+    let vacant = VACANT.try_with(std::rc::Rc::clone).ok()?;
+    std::rc::Rc::try_unwrap(std::mem::replace(slot, vacant)).ok()
+}
+
+/// How many levels the tree walks and the tree drop descend on the call stack
+/// before they move the rest of a subtree onto a work list. Scripts seldom
+/// nest this deep, and above it a walk allocates nothing.
+pub(crate) const RECURSION_BUDGET: usize = 64;
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        let Some(payload) = std::rc::Rc::get_mut(&mut self.inner) else {
+            return;
+        };
+        // Within the budget the payload drops on the call stack, and each
+        // token inside it counts one level deeper.
+        let depth = DROP_DEPTH.get();
+        if depth < RECURSION_BUDGET {
+            DROP_DEPTH.set(depth + 1);
+            drop(std::mem::replace(payload, InnerToken::T_Semi));
+            DROP_DEPTH.set(depth);
+            return;
+        }
+        let Some(mut inner) = take_unique(&mut self.inner) else {
+            return;
+        };
+        let mut orphans = Vec::new();
+        loop {
+            let _ = inner.try_for_each_child_mut(|child| {
+                orphans.extend(take_unique(&mut child.inner));
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            drop(inner);
+            let Some(next) = orphans.pop() else {
+                break;
+            };
+            inner = next;
+        }
+    }
+}
 
 impl Token {
     /// `OuterToken id inner`.
@@ -168,7 +263,7 @@ impl Token {
 /// Variant order matches the Haskell `data InnerToken` declaration order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InnerToken {
-    // --- Arithmetic (TA_*) ---
+    // Arithmetic (TA_*)
     /// `TA_Binary`: an arithmetic binary operation.
     TA_Binary {
         /// The operator, e.g. `+`.
@@ -217,7 +312,7 @@ pub enum InnerToken {
         operand: Token,
     },
 
-    // --- Test conditions (TC_*) ---
+    // Test conditions (TC_*)
     /// `TC_And`: `&&` or `-a` in a test.
     TC_And {
         /// Which test syntax holds it.
@@ -280,7 +375,7 @@ pub enum InnerToken {
         typ: ConditionType,
     },
 
-    // --- Operator / keyword leaves ---
+    // Operator / keyword leaves
     /// `T_AND_IF`: the `&&` operator.
     T_AND_IF,
     /// `T_AndIf`: `lhs && rhs`.
@@ -906,6 +1001,15 @@ impl InnerToken {
         out
     }
 
+    /// Visit immediate children mutably in traversal order without allocating
+    /// a list.
+    pub fn for_each_child_mut<'a>(&'a mut self, mut visit: impl FnMut(&'a mut Token)) {
+        let _ = self.try_for_each_child_mut(|child| {
+            visit(child);
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    }
+
     fn try_for_each_child_mut<'a, B>(
         &'a mut self,
         mut visit: impl FnMut(&'a mut Token) -> std::ops::ControlFlow<B>,
@@ -923,8 +1027,22 @@ impl Token {
 
     /// Pre-order visit (parent before children), matching `doAnalysis f`.
     pub fn visit_preorder<F: FnMut(&Self)>(&self, f: &mut F) {
+        self.visit_preorder_within(f, RECURSION_BUDGET);
+    }
+
+    /// [`Self::visit_preorder`] on the call stack for `budget` levels, then on
+    /// a work list for the subtrees below.
+    fn visit_preorder_within<F: FnMut(&Self)>(&self, f: &mut F, budget: usize) {
+        let Some(budget) = budget.checked_sub(1) else {
+            let _ = self.try_visit_preorder_listed(&mut |t| {
+                f(t);
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            return;
+        };
         f(self);
-        self.inner.for_each_child(|c| c.visit_preorder(f));
+        self.inner
+            .for_each_child(|c| c.visit_preorder_within(f, budget));
     }
 
     /// Pre-order traversal that stops immediately when the visitor breaks.
@@ -932,18 +1050,98 @@ impl Token {
         &self,
         visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
     ) -> std::ops::ControlFlow<B> {
+        self.try_visit_preorder_within(visit, RECURSION_BUDGET)
+    }
+
+    /// [`Self::try_visit_preorder`] on the call stack for `budget` levels,
+    /// then on a work list for the subtrees below.
+    fn try_visit_preorder_within<B>(
+        &self,
+        visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
+        budget: usize,
+    ) -> std::ops::ControlFlow<B> {
+        let Some(budget) = budget.checked_sub(1) else {
+            return self.try_visit_preorder_listed(visit);
+        };
         visit(self)?;
         self.inner
-            .try_for_each_child(|child| child.try_visit_preorder(visit))
+            .try_for_each_child(|child| child.try_visit_preorder_within(visit, budget))
+    }
+
+    /// [`Self::try_visit_preorder`] with every pending token on a work list.
+    fn try_visit_preorder_listed<B>(
+        &self,
+        visit: &mut impl FnMut(&Self) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        let mut pending = vec![self];
+        let mut children = Vec::new();
+        while let Some(token) = pending.pop() {
+            visit(token)?;
+            token.inner.for_each_child(|c| children.push(c));
+            pending.extend(children.iter().rev());
+            children.clear();
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     /// Stack analysis: `start` pre-order, recurse, `end` post-order —
     /// matching `doStackAnalysis`.
-    pub fn visit_stack<S: FnMut(&Self), E: FnMut(&Self)>(&self, start: &mut S, end: &mut E) {
+    pub fn visit_stack<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+    ) {
+        self.visit_stack_within(start, end, RECURSION_BUDGET);
+    }
+
+    /// [`Self::visit_stack`] on the call stack for `budget` levels, then on a
+    /// work list for the subtrees below.
+    fn visit_stack_within<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+        budget: usize,
+    ) {
+        let Some(budget) = budget.checked_sub(1) else {
+            self.visit_stack_listed(start, end);
+            return;
+        };
         start(self);
-        self.inner.for_each_child(|c| c.visit_stack(start, end));
+        self.inner
+            .for_each_child(|c| c.visit_stack_within(start, end, budget));
         end(self);
     }
+
+    /// [`Self::visit_stack`] with every pending step on a work list.
+    fn visit_stack_listed<'a, S: FnMut(&'a Self), E: FnMut(&'a Self)>(
+        &'a self,
+        start: &mut S,
+        end: &mut E,
+    ) {
+        let mut pending = vec![Visit::Enter(self)];
+        let mut children = Vec::new();
+        while let Some(step) = pending.pop() {
+            match step {
+                Visit::Enter(token) => {
+                    start(token);
+                    pending.push(Visit::Leave(token));
+                    token.inner.for_each_child(|c| children.push(c));
+                    pending.extend(children.iter().rev().map(|c| Visit::Enter(c)));
+                    children.clear();
+                }
+                Visit::Leave(token) => end(token),
+            }
+        }
+    }
+}
+
+/// A step of a depth-first walk that sees each token on the way down and up.
+#[derive(Clone, Copy)]
+pub enum Visit<'a> {
+    /// Entering the token, before its children.
+    Enter(&'a Token),
+    /// Leaving the token, after its children.
+    Leave(&'a Token),
 }
 
 #[cfg(test)]

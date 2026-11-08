@@ -554,18 +554,11 @@ fn is_quote_free_context_strict(params: &Parameters, t: &Token) -> Option<bool> 
 }
 
 fn is_strictly_quote_free(params: &Parameters, t: &Token) -> bool {
-    if is_quote_free_element(params, t) {
-        return true;
-    }
     // msum over the ancestors (NE.tail of getPath): first `Just` wins.
-    let mut cur = t;
-    while let Some(p) = params.parent(cur) {
-        if let Some(v) = is_quote_free_context_strict(params, p) {
-            return v;
-        }
-        cur = p;
-    }
-    false
+    is_quote_free_element(params, t)
+        || params.first_decision(&params.strict_quote_free_contexts, params.parent(t), |a| {
+            is_quote_free_context_strict(params, a)
+        })
 }
 
 /// `` re = \$[{(0-9a-zA-Z_]|`[^`]+` ``
@@ -762,20 +755,24 @@ fn contains_quotes(s: &str) -> bool {
 
 /// `forToken quoteMap t`.
 fn for_token(map: &HashMap<String, Id>, t: &Token) -> Option<Id> {
-    match &*t.inner {
-        // skip getBracedReference here to avoid false positives on PE
-        InnerToken::T_DollarBraced { op, .. } => map.get(&oversimplify(op).concat()).copied(),
-        InnerToken::T_DoubleQuoted(tokens) | InnerToken::T_NormalWord(tokens) => {
-            tokens.iter().find_map(|x| for_token(map, x))
-        }
-        _ => {
-            if contains_quotes(&oversimplify(t).concat()) {
-                Some(t.id())
-            } else {
+    // `msum (map (forToken quoteMap) tokens)`. The answer comes from the first
+    // part that finds anything, depth-first and left to right.
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        let found = match &*t.inner {
+            // skip getBracedReference here to avoid false positives on PE
+            InnerToken::T_DollarBraced { op, .. } => map.get(&oversimplify(op).concat()).copied(),
+            InnerToken::T_DoubleQuoted(tokens) | InnerToken::T_NormalWord(tokens) => {
+                pending.extend(tokens.iter().rev());
                 None
             }
+            _ => contains_quotes(&oversimplify(t).concat()).then(|| t.id()),
+        };
+        if found.is_some() {
+            return found;
         }
     }
+    None
 }
 
 /// `squashesQuotes t`: a `${#...}` length reference.
@@ -835,24 +832,24 @@ fn iu_quotes_single_thing(parts: &[Token]) -> bool {
 }
 
 /// `isSpecial` over a getPath-list (path[0] is the trapped token).
-fn iu_is_special(path: &[Token]) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    match &*path[0].inner {
-        InnerToken::T_Redirecting { .. } => false,
-        InnerToken::T_DollarBraced { .. } => true,
-        _ => {
-            // (a:(TC_Binary _ _ "=~" lhs rhs):rest) -> getId a == getId rhs
-            if path.len() >= 2
-                && let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner
-                && op == "=~"
-            {
-                return path[0].id() == rhs.id();
+fn iu_is_special(mut path: &[Token]) -> bool {
+    while let Some(first) = path.first() {
+        match &*first.inner {
+            InnerToken::T_Redirecting { .. } => return false,
+            InnerToken::T_DollarBraced { .. } => return true,
+            _ => {
+                // (a:(TC_Binary _ _ "=~" lhs rhs):rest) -> getId a == getId rhs
+                if path.len() >= 2
+                    && let InnerToken::TC_Binary { op, rhs, .. } = &*path[1].inner
+                    && op == "=~"
+                {
+                    return first.id() == rhs.id();
+                }
+                path = &path[1..];
             }
-            iu_is_special(&path[1..])
         }
     }
+    false
 }
 
 fn iu_check(params: &Parameters, window: &[Token], out: &mut Out) {
@@ -995,6 +992,35 @@ pub(super) fn check_variable_braces(params: &Parameters, t: &Token, out: &mut Ou
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    #[test]
+    fn is_strictly_quote_free_equals_the_plain_climb() {
+        for shell in [Shell::Bash, Shell::Sh] {
+            let params = params_for_shell(QUOTE_CONTEXTS, shell);
+            let climb = |t| {
+                if is_quote_free_element(&params, t) {
+                    return true;
+                }
+                let mut cur = t;
+                while let Some(p) = params.parent(cur) {
+                    if let Some(v) = is_quote_free_context_strict(&params, p) {
+                        return v;
+                    }
+                    cur = p;
+                }
+                false
+            };
+            let (mut free, mut bound) = (0, 0);
+            for _ in 0..2 {
+                for t in params.id_map.values() {
+                    let expected = climb(t);
+                    assert_eq!(is_strictly_quote_free(&params, t), expected, "{t:?}");
+                    if expected { free += 1 } else { bound += 1 }
+                }
+            }
+            assert!(free > 20 && bound > 20);
+        }
+    }
 
     #[test]
     fn prop_checkUnquotedExpansions1() {
@@ -1714,7 +1740,7 @@ mod tests {
         assert!(!node_emits(check_tilde_in_quotes, "awk '$0 ~ /foo/'"));
     }
 
-    // ---- SC2026/2027/2140 checkInexplicablyUnquoted ----
+    // SC2026/2027/2140 checkInexplicablyUnquoted
 
     #[test]
     fn prop_checkInexplicablyUnquoted1() {
@@ -1809,7 +1835,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2083 checkLonelyDotDash ----
+    // SC2083 checkLonelyDotDash
 
     #[test]
     fn prop_checkSpuriousExpansion1() {
@@ -1840,7 +1866,7 @@ mod tests {
         assert!(node_emits(check_spurious_expansion, "r[]=x $()"));
     }
 
-    // ---- SC2007 checkDollarBrackets ----
+    // SC2007 checkDollarBrackets
 
     #[test]
     fn prop_checkDollarQuoteParen1() {
@@ -1862,7 +1888,7 @@ mod tests {
         assert!(!node_emits(check_dollar_quote_paren, "$\"..\""));
     }
 
-    // ---- SC2256 checkTranslatedStringVariable ----
+    // SC2256 checkTranslatedStringVariable
 
     #[test]
     fn prop_checkTranslatedStringVariable1() {
@@ -1901,7 +1927,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2188/2189 checkRedirectedNowhere ----
+    // SC2188/2189 checkRedirectedNowhere
 
     #[test]
     fn prop_checkUnquotedParameterExpansionPattern1() {
@@ -1935,7 +1961,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2302/2303 checkArrayValueUsedAsIndex ----
+    // SC2302/2303 checkArrayValueUsedAsIndex
 
     #[test]
     fn prop_checkTildeInPath1() {
@@ -1952,7 +1978,7 @@ mod tests {
         assert!(!emits(check_tilde_in_path, "PATH=~/bin"));
     }
 
-    // ---- checkUnsupported ----
+    // checkUnsupported
 
     #[test]
     fn prop_checkUnquotedN() {

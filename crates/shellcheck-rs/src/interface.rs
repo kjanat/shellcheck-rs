@@ -168,17 +168,17 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
 }
 
 /// `construct`: accumulate `n` continuation bytes onto `x`, or fail.
-fn construct_codepoint(x: u32, n: u32, bytes: &[u8], i: usize) -> Option<(u32, usize)> {
-    if n == 0 {
-        // `guard $ x <= 0x10FFFF`
-        return if x <= 0x0010_FFFF { Some((x, i)) } else { None };
+fn construct_codepoint(mut x: u32, n: u32, bytes: &[u8], mut i: usize) -> Option<(u32, usize)> {
+    for _ in 0..n {
+        let byte = *bytes.get(i)?;
+        if !(0x80..=0xBF).contains(&byte) {
+            return None;
+        }
+        x = (x << 6) | u32::from(byte & 0x3F);
+        i += 1;
     }
-    let byte = *bytes.get(i)?;
-    if (0x80..=0xBF).contains(&byte) {
-        construct_codepoint((x << 6) | u32::from(byte & 0x3F), n - 1, bytes, i + 1)
-    } else {
-        None
-    }
+    // `guard $ x <= 0x10FFFF`
+    (x <= 0x0010_FFFF).then_some((x, i))
 }
 
 /// `mockedSystemInterface`: a fixed list of (name, contents) pairs, with names

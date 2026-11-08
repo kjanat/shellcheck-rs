@@ -816,11 +816,16 @@ fn return_or_exit(args: &[Token], out: &mut Out, multi: (Code, &str), invalid: (
 }
 
 fn set_literal(t: &Token) -> String {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l) => l.iter().map(set_literal).collect(),
-        InnerToken::T_Literal(s) => s.clone(),
-        _ => "*".to_string(),
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            InnerToken::T_NormalWord(l) => pending.extend(l.iter().rev()),
+            InnerToken::T_Literal(s) => out.push_str(s),
+            _ => out.push('*'),
+        }
     }
+    out
 }
 
 /// `getSingleUnmodifiedBracedString`.
@@ -1000,12 +1005,15 @@ fn modifies_variable(params: &Parameters, token: &Token, name: &str) -> bool {
 }
 
 /// `findCase`.
-fn getopts_find_case(t: &Token) -> Option<&Token> {
+fn getopts_find_case(mut t: &Token) -> Option<&Token> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Annotation { token, .. } => token,
+            InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
+            _ => break,
+        };
+    }
     match &*t.inner {
-        InnerToken::T_Annotation { token, .. } => getopts_find_case(token),
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            getopts_find_case(&commands[0])
-        }
         InnerToken::T_Redirecting { cmd, .. } => {
             if matches!(&*cmd.inner, InnerToken::T_CaseExpression { .. }) {
                 Some(cmd)
@@ -1192,7 +1200,7 @@ $ENGINE stop "$CONTAINER_ID""#,
         ));
     }
 
-    // ---- SC2209 / SC2037 checkAssignAteCommand ----
+    // SC2209 / SC2037 checkAssignAteCommand
 
     #[test]
     fn prop_checkNonportableSignals1() {
@@ -1229,7 +1237,7 @@ $ENGINE stop "$CONTAINER_ID""#,
         assert!(!emits(check_nonportable_signals(), "trap 'stop' int"));
     }
 
-    // ---- SC2023 checkTimeParameters ----
+    // SC2023 checkTimeParameters
 
     #[test]
     fn prop_checkReturn1() {

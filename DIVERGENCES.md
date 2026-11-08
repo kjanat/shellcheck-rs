@@ -422,3 +422,7 @@ Kept so a reader can tell a closed entry from a missed one.
 - `if [ ]esac` — `ifNextToken (g_Fi <|> g_Elif <|> g_Else)` is still an attempt
   at each of the three, and `g_Elif` reading the `e` of `esac` leaves its error
   one past it, further than the missing `then` behind it.
+- `[ "$a" = 1 ] || x && [ "$a" = 2 ]`, `[ "$a" != 1 ] && x || [ "$a" != 2 ]` —
+  `checkAndEq`'s `getExpr` looks through `T_AndIf` only and `checkOrNeq`'s
+  through `T_OrIf` only. The port shared one helper that looked through both,
+  so SC2333 and SC2252 fired across the other operator.

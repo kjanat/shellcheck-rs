@@ -29,14 +29,13 @@ use crate::regex_lib::mk_regex;
 use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap};
 
+use reblessive::Stk;
 use regex::Regex;
 
 /// Node id in the graph. Haskell `Node = Int`; all ids here are non-negative.
 pub type Node = usize;
 
-// ===========================================================================
 // Data types (ported 1:1 from CFG.hs)
-// ===========================================================================
 
 /// Node labels in a Control Flow Graph (`data CFNode`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,9 +279,7 @@ pub struct CFGResult {
     pub cf_post_dominators: PostDominators,
 }
 
-// ===========================================================================
 // Graph representation (replaces fgl's Gr / mkGraph / nodes / edges)
-// ===========================================================================
 
 /// An immutable labeled directed multigraph. Mirrors `G.Gr CFNode CFEdge` for
 /// the parts of the fgl interface the port relies on (`mkGraph`, `nodes`,
@@ -421,9 +418,7 @@ impl MutGraph {
     }
 }
 
-// ===========================================================================
 // The graph-building "monad" (RWS) as a Builder
-// ===========================================================================
 
 /// A `(start, end)` node range. `data Range = Range Node Node`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,7 +513,7 @@ impl Builder {
         self.internal_error.get_or_insert(InternalError(what));
     }
 
-    // --- core primitives (newNode, link, registerNode, ...) ---
+    // core primitives (newNode, link, registerNode, ...)
 
     fn new_node(&mut self, label: CFNode) -> Node {
         let n = self.next;
@@ -568,19 +563,25 @@ impl Builder {
         acc
     }
 
-    fn sequentially(&mut self, list: &[Token]) -> Range {
+    async fn sequentially(&mut self, stk: &mut Stk, list: &[Token]) -> Range {
         let first = self.new_structural_node();
         let mut ranges = Vec::new();
         for t in list {
-            let r = self.build(t);
+            let r = self.build(stk, t).await;
             ranges.push(r);
         }
         self.link_ranges(first, &ranges)
     }
 
-    // --- scoping helpers (local / under / subshell / withFunctionScope) ---
+    // scoping helpers (local / under / subshell / withFunctionScope)
 
-    fn subshell(&mut self, id: Id, reason: &str, f: impl FnOnce(&mut Self) -> Range) -> Range {
+    async fn subshell(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        reason: &str,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> Range,
+    ) -> Range {
         let start = self.new_node(CFNode::CFEntryPoint(format!(
             "Subshell Id {}: {}",
             id.0, reason
@@ -590,7 +591,7 @@ impl Builder {
         let saved_ret = self.ctx.return_target;
         self.ctx.exit_target = Some(end);
         self.ctx.return_target = Some(end);
-        let middle = f(self);
+        let middle = f(self, stk).await;
         self.ctx.exit_target = saved_exit;
         self.ctx.return_target = saved_ret;
         let sr = node_to_range(start);
@@ -599,30 +600,38 @@ impl Builder {
         self.new_node_range(CFNode::CFExecuteSubshell(reason.to_string(), start, end))
     }
 
-    fn with_function_scope(&mut self, f: impl FnOnce(&mut Self) -> Range) -> Range {
+    async fn with_function_scope(
+        &mut self,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> Range,
+    ) -> Range {
         let end = self.new_node(CFNode::CFStructuralNode);
         let saved_ret = self.ctx.return_target;
         let saved_fn = self.ctx.is_function;
         self.ctx.return_target = Some(end);
         self.ctx.is_function = true;
-        let body = f(self);
+        let body = f(self, stk).await;
         self.ctx.return_target = saved_ret;
         self.ctx.is_function = saved_fn;
         let er = node_to_range(end);
         self.link_ranges(body, &[er])
     }
 
-    fn as_condition(&mut self, f: impl FnOnce(&mut Self) -> Range) -> Range {
+    async fn as_condition(
+        &mut self,
+        stk: &mut Stk,
+        f: impl AsyncFnOnce(&mut Self, &mut Stk) -> Range,
+    ) -> Range {
         let saved = self.ctx.is_condition;
         self.ctx.is_condition = true;
-        let r = f(self);
+        let r = f(self, stk).await;
         self.ctx.is_condition = saved;
         r
     }
 
-    // --- buildRoot / build / build' ---
+    // buildRoot / build / build'
 
-    fn build_root(&mut self, t: &Token) -> Range {
+    async fn build_root(&mut self, stk: &mut Stk, t: &Token) -> Range {
         let first_node = self.next;
         #[cfg(test)]
         self.ctx.token_stack.push(t.id);
@@ -633,7 +642,7 @@ impl Builder {
         let saved_ret = self.ctx.return_target;
         self.ctx.exit_target = Some(end);
         self.ctx.return_target = Some(implied_exit);
-        let start = self.build(t);
+        let start = self.build(stk, t).await;
         self.ctx.exit_target = saved_exit;
         self.ctx.return_target = saved_ret;
         let range = self.link_ranges(
@@ -647,11 +656,21 @@ impl Builder {
         range
     }
 
-    fn build(&mut self, t: &Token) -> Range {
+    async fn build(&mut self, stk: &mut Stk, t: &Token) -> Range {
         let first_node = self.next;
         #[cfg(test)]
         self.ctx.token_stack.push(t.id);
-        let range = self.build_prime(t);
+        // Every recursion of the builder passes through this call, and
+        // `stk.run` moves it onto the heap stack. The text of a word holds no
+        // tokens, and `build'` makes a structural node for it without one.
+        let range = match &*t.inner {
+            InnerToken::T_Literal(_)
+            | InnerToken::T_SingleQuoted(_)
+            | InnerToken::T_Glob(_)
+            | InnerToken::T_DollarSingleQuoted(_)
+            | InnerToken::T_ParamSubSpecialChar(_) => self.none(),
+            _ => stk.run(|stk| self.build_prime(stk, t)).await,
+        };
         self.assoc.push((t.id, first_node..self.next));
         #[cfg(test)]
         self.ctx.token_stack.pop();
@@ -659,7 +678,7 @@ impl Builder {
         range
     }
 
-    fn build_prime(&mut self, t: &Token) -> Range {
+    async fn build_prime(&mut self, stk: &mut Stk, t: &Token) -> Range {
         use InnerToken::{
             T_AndIf, T_Annotation, T_Arithmetic, T_Array, T_Assignment, T_Backgrounded,
             T_Backticked, T_Banged, T_BatsTest, T_BraceExpansion, T_BraceGroup, T_CaseExpression,
@@ -669,112 +688,104 @@ impl Builder {
             T_HereDoc, T_HereString, T_IfExpression, T_Include, T_IndexedElement, T_IoDuplicate,
             T_IoFile, T_NormalWord, T_OrIf, T_Pipeline, T_ProcSub, T_Redirecting, T_Script,
             T_SelectIn, T_SimpleCommand, T_SourceCommand, T_Subshell, T_UntilExpression,
-            T_WhileExpression, TA_Assignment, TA_Binary, TA_Expansion, TA_Parenthesis, TA_Sequence,
-            TA_Trinary, TA_Unary, TA_Variable, TC_And, TC_Binary, TC_Empty, TC_Group, TC_Nullary,
-            TC_Or, TC_Unary,
+            T_WhileExpression, TC_And, TC_Binary, TC_Empty, TC_Group, TC_Nullary, TC_Or, TC_Unary,
         };
+        if let Some(range) = self.build_arithmetic(stk, t).await {
+            return range;
+        }
         let id = t.id;
         match &*t.inner {
             T_Annotation { token, .. }
             | TC_Group { token, .. }
             | TC_Nullary { token, .. }
-            | TC_Unary { token, .. } => self.build(token),
-            T_Script { commands, .. } => self.sequentially(commands),
+            | TC_Unary { token, .. } => self.build(stk, token).await,
+            T_Script { commands, .. } => self.sequentially(stk, commands).await,
 
-            // (( var[x=1] = ... ))
-            TA_Assignment { op, lhs, rhs } => match &*lhs.inner {
-                TA_Variable { name, indices } => {
-                    self.build_ta_assignment(id, op, name, indices, rhs)
-                }
-                // This is likely an invalid assignment like (( 1 = 2 )), but it
-                // could be e.g. x=y; (( $x = 3 )); echo $y, so expand both sides
-                // without updating anything
-                _ => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            },
-            TA_Binary { lhs, rhs, .. } => self.sequentially(&[lhs.clone(), rhs.clone()]),
-            TA_Expansion(list)
-            | TA_Sequence(list)
-            | T_Array(list)
+            T_Array(list)
             | T_BraceExpansion(list)
             | T_DollarDoubleQuoted(list)
             | T_DoubleQuoted(list)
             | T_NormalWord(list)
             | T_Extglob { list, .. }
-            | T_DollarBraceCommandExpansion { list, .. } => self.sequentially(list),
-            TA_Parenthesis(t2) | T_CoProcBody(t2) | T_DollarBracket(t2) | T_HereString(t2)
-            | T_Include(t2) => self.build(t2),
-            TA_Trinary { cond, then, els } => self.build_ta_trinary(cond, then, els),
-            TA_Variable { name, indices } => self.build_ta_variable(id, name, indices),
-            TA_Unary { op, operand } => match &*operand.inner {
-                TA_Variable { name, indices } if op.contains("--") || op.contains("++") => {
-                    self.build_ta_unary(id, name, indices)
-                }
-                _ => self.build(operand),
-            },
+            | T_DollarBraceCommandExpansion { list, .. } => self.sequentially(stk, list).await,
+            T_CoProcBody(t2) | T_DollarBracket(t2) | T_HereString(t2) | T_Include(t2) => {
+                self.build(stk, t2).await
+            }
 
             TC_And { typ, lhs, rhs, .. } | TC_Or { typ, lhs, rhs, .. } => {
-                self.build_tc_and_or(*typ, lhs, rhs)
+                self.build_tc_and_or(stk, *typ, lhs, rhs).await
             }
-            TC_Binary { lhs, rhs, .. } => self.build_tc_binary(lhs, rhs),
+            TC_Binary { lhs, rhs, .. } => self.build_tc_binary(stk, lhs, rhs).await,
             TC_Empty { .. } => self.new_structural_node(),
 
             T_Arithmetic(token) | T_Banged(token) | T_Condition { token, .. } => {
-                let main = self.build(token);
+                let main = self.build(stk, token).await;
                 let status = self.new_node_range(CFNode::CFSetExitCode(id));
                 self.link_range(main, status)
             }
-            T_AndIf { lhs, rhs } | T_OrIf { lhs, rhs } => self.build_and_or_if(lhs, rhs),
-            T_Assignment { .. } => self.build_assignment(None, t),
-            T_Backgrounded(body) => self.build_backgrounded(id, body),
-            T_Backticked(body) => self.subshell(id, "`..` expansion", |b| b.sequentially(body)),
-            T_BatsTest { body, .. } => self.build_bats_test(id, body),
-            T_BraceGroup(body) | T_HereDoc { body, .. } => self.sequentially(body),
+            T_AndIf { lhs, rhs } | T_OrIf { lhs, rhs } => self.build_and_or_if(stk, lhs, rhs).await,
+            T_Assignment { .. } => self.build_assignment(stk, None, t).await,
+            T_Backgrounded(body) => self.build_backgrounded(stk, id, body).await,
+            T_Backticked(body) => {
+                self.subshell(stk, id, "`..` expansion", async |b, stk| {
+                    b.sequentially(stk, body).await
+                })
+                .await
+            }
+            T_BatsTest { body, .. } => self.build_bats_test(stk, id, body).await,
+            T_BraceGroup(body) | T_HereDoc { body, .. } => self.sequentially(stk, body).await,
 
-            T_CaseExpression { word, cases } if cases.is_empty() => self.build(word),
-            T_CaseExpression { word, cases } => self.build_case(id, word, cases),
+            T_CaseExpression { word, cases } if cases.is_empty() => self.build(stk, word).await,
+            T_CaseExpression { word, cases } => self.build_case(stk, id, word, cases).await,
 
-            T_CoProc { name, body } => self.build_coproc(id, name.as_ref(), body),
+            T_CoProc { name, body } => self.build_coproc(stk, id, name.as_ref(), body).await,
 
-            T_DollarArithmetic(arith) => self.build(arith),
-            T_DollarBraced { op, .. } => self.build_dollar_braced(id, op),
-            T_DollarExpansion(body) => self.build_dollar_expansion(id, body),
+            T_DollarArithmetic(arith) => self.build(stk, arith).await,
+            T_DollarBraced { op, .. } => self.build_dollar_braced(stk, id, op).await,
+            T_DollarExpansion(body) => self.build_dollar_expansion(stk, id, body).await,
 
             T_FdRedirect { fd, target } if fd.starts_with('{') => {
-                self.build_fd_redirect(id, fd, target)
+                self.build_fd_redirect(stk, id, fd, target).await
             }
-            T_FdRedirect { target, .. } => self.build(target),
+            T_FdRedirect { target, .. } => self.build(stk, target).await,
 
             T_ForArithmetic {
                 init,
                 cond,
                 step,
                 body,
-            } => self.build_for_arithmetic(init, cond, step, body),
+            } => self.build_for_arithmetic(stk, init, cond, step, body).await,
             T_ForIn { var, items, body } | T_SelectIn { var, items, body } => {
-                self.for_in_helper(id, var, items, body)
+                self.for_in_helper(stk, id, var, items, body).await
             }
 
-            T_Function { name, body, .. } => self.build_function(id, name, body),
+            T_Function { name, body, .. } => self.build_function(stk, id, name, body).await,
 
-            T_IfExpression { clauses, elses } => self.build_if(id, clauses, elses),
-            T_IndexedElement { indices, value } => self.build_indexed_element(indices, value),
-            T_IoDuplicate { op, .. } => self.build(op),
-            T_IoFile { op, file } => self.build_io_file(op, file),
+            T_IfExpression { clauses, elses } => self.build_if(stk, id, clauses, elses).await,
+            T_IndexedElement { indices, value } => {
+                self.build_indexed_element(stk, indices, value).await
+            }
+            T_IoDuplicate { op, .. } => self.build(stk, op).await,
+            T_IoFile { op, file } => self.build_io_file(stk, op, file).await,
 
-            T_Pipeline { commands, .. } if commands.len() == 1 => self.build(&commands[0]),
-            T_Pipeline { commands, .. } => self.build_pipeline(id, commands),
+            T_Pipeline { commands, .. } if commands.len() == 1 => {
+                self.build(stk, &commands[0]).await
+            }
+            T_Pipeline { commands, .. } => self.build_pipeline(stk, id, commands).await,
 
-            T_ProcSub { op, list } => self.build_proc_sub(id, op, list),
-            T_Redirecting { redirs, cmd } => self.build_redirecting(redirs, cmd),
+            T_ProcSub { op, list } => self.build_proc_sub(stk, id, op, list).await,
+            T_Redirecting { redirs, cmd } => self.build_redirecting(stk, redirs, cmd).await,
 
             T_SimpleCommand { assignments, words } => {
-                self.build_simple_command(id, assignments, words)
+                self.build_simple_command(stk, id, assignments, words).await
             }
 
-            T_SourceCommand { includer, included } => self.build_source_command(includer, included),
-            T_Subshell(body) => self.build_subshell(id, body),
+            T_SourceCommand { includer, included } => {
+                self.build_source_command(stk, includer, included).await
+            }
+            T_Subshell(body) => self.build_subshell(stk, id, body).await,
             T_UntilExpression { condition, body } | T_WhileExpression { condition, body } => {
-                self.while_helper(id, condition, body)
+                self.while_helper(stk, id, condition, body).await
             }
 
             // Everything else: the Haskell `error` line is stripped in release
@@ -783,8 +794,43 @@ impl Builder {
         }
     }
 
-    fn build_ta_assignment(
+    /// `build'` for the arithmetic tokens, or `None` for any other token.
+    async fn build_arithmetic(&mut self, stk: &mut Stk, t: &Token) -> Option<Range> {
+        use InnerToken::{
+            TA_Assignment, TA_Binary, TA_Expansion, TA_Parenthesis, TA_Sequence, TA_Trinary,
+            TA_Unary, TA_Variable,
+        };
+        let id = t.id;
+        Some(match &*t.inner {
+            // (( var[x=1] = ... ))
+            TA_Assignment { op, lhs, rhs } => match &*lhs.inner {
+                TA_Variable { name, indices } => {
+                    self.build_ta_assignment(stk, id, op, name, indices, rhs)
+                        .await
+                }
+                // This is likely an invalid assignment like (( 1 = 2 )), but it
+                // could be e.g. x=y; (( $x = 3 )); echo $y, so expand both sides
+                // without updating anything
+                _ => self.sequentially(stk, &[lhs.clone(), rhs.clone()]).await,
+            },
+            TA_Binary { lhs, rhs, .. } => self.sequentially(stk, &[lhs.clone(), rhs.clone()]).await,
+            TA_Expansion(list) | TA_Sequence(list) => self.sequentially(stk, list).await,
+            TA_Parenthesis(t2) => self.build(stk, t2).await,
+            TA_Trinary { cond, then, els } => self.build_ta_trinary(stk, cond, then, els).await,
+            TA_Variable { name, indices } => self.build_ta_variable(stk, id, name, indices).await,
+            TA_Unary { op, operand } => match &*operand.inner {
+                TA_Variable { name, indices } if op.contains("--") || op.contains("++") => {
+                    self.build_ta_unary(stk, id, name, indices).await
+                }
+                _ => self.build(stk, operand).await,
+            },
+            _ => return None,
+        })
+    }
+
+    async fn build_ta_assignment(
         &mut self,
+        stk: &mut Stk,
         id: Id,
         op: &str,
         name: &str,
@@ -792,8 +838,8 @@ impl Builder {
         rhs: &Token,
     ) -> Range {
         // value first: (( var[x=1] = (x=2) )) runs x=1 last
-        let value = self.build(rhs);
-        let subscript = self.sequentially(indices);
+        let value = self.build(stk, rhs).await;
+        let subscript = self.sequentially(stk, indices).await;
         let read = if op == "=" {
             self.none()
         } else {
@@ -812,17 +858,29 @@ impl Builder {
         self.link_ranges(value, &[subscript, read, write])
     }
 
-    fn build_ta_trinary(&mut self, cond: &Token, then: &Token, els: &Token) -> Range {
-        let condition = self.build(cond);
-        let ifthen = self.build(then);
-        let elsethen = self.build(els);
+    async fn build_ta_trinary(
+        &mut self,
+        stk: &mut Stk,
+        cond: &Token,
+        then: &Token,
+        els: &Token,
+    ) -> Range {
+        let condition = self.build(stk, cond).await;
+        let ifthen = self.build(stk, then).await;
+        let elsethen = self.build(stk, els).await;
         let end = self.new_structural_node();
         self.link_ranges(condition, &[ifthen, end]);
         self.link_ranges(condition, &[elsethen, end])
     }
 
-    fn build_ta_variable(&mut self, id: Id, name: &str, indices: &[Token]) -> Range {
-        let subscript = self.sequentially(indices);
+    async fn build_ta_variable(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        name: &str,
+        indices: &[Token],
+    ) -> Range {
+        let subscript = self.sequentially(stk, indices).await;
         let hint = if indices.is_empty() {
             self.none()
         } else {
@@ -834,8 +892,14 @@ impl Builder {
         self.link_ranges(subscript, &[hint, read])
     }
 
-    fn build_ta_unary(&mut self, id: Id, name: &str, indices: &[Token]) -> Range {
-        let subscript = self.sequentially(indices);
+    async fn build_ta_unary(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        name: &str,
+        indices: &[Token],
+    ) -> Range {
+        let subscript = self.sequentially(stk, indices).await;
         let read =
             self.new_node_range(apply_single(id, CFEffect::CFReadVariable(name.to_string())));
         let val = if indices.is_empty() {
@@ -850,12 +914,20 @@ impl Builder {
         self.link_ranges(subscript, &[read, write])
     }
 
-    fn build_tc_and_or(&mut self, typ: ConditionType, lhs: &Token, rhs: &Token) -> Range {
+    async fn build_tc_and_or(
+        &mut self,
+        stk: &mut Stk,
+        typ: ConditionType,
+        lhs: &Token,
+        rhs: &Token,
+    ) -> Range {
         match typ {
-            ConditionType::SingleBracket => self.sequentially(&[lhs.clone(), rhs.clone()]),
+            ConditionType::SingleBracket => {
+                self.sequentially(stk, &[lhs.clone(), rhs.clone()]).await
+            }
             ConditionType::DoubleBracket => {
-                let left = self.build(lhs);
-                let right = self.build(rhs);
+                let left = self.build(stk, lhs).await;
+                let right = self.build(stk, rhs).await;
                 let end = self.new_structural_node();
                 self.link_ranges(left, &[right, end]);
                 self.link_range(left, end)
@@ -863,62 +935,85 @@ impl Builder {
         }
     }
 
-    fn build_tc_binary(&mut self, lhs: &Token, rhs: &Token) -> Range {
-        let left = self.build(lhs);
-        let right = self.build(rhs);
+    async fn build_tc_binary(&mut self, stk: &mut Stk, lhs: &Token, rhs: &Token) -> Range {
+        let left = self.build(stk, lhs).await;
+        let right = self.build(stk, rhs).await;
         self.link_range(left, right)
     }
 
-    fn build_indexed_element(&mut self, indices: &[Token], value: &Token) -> Range {
-        let indices_r = self.sequentially(indices);
-        let value_r = self.build(value);
+    async fn build_indexed_element(
+        &mut self,
+        stk: &mut Stk,
+        indices: &[Token],
+        value: &Token,
+    ) -> Range {
+        let indices_r = self.sequentially(stk, indices).await;
+        let value_r = self.build(stk, value).await;
         self.link_range(indices_r, value_r)
     }
 
-    fn build_io_file(&mut self, op: &Token, file: &Token) -> Range {
-        let exp = self.build(file);
-        let doesnt_do_much = self.build(op);
+    async fn build_io_file(&mut self, stk: &mut Stk, op: &Token, file: &Token) -> Range {
+        let exp = self.build(stk, file).await;
+        let doesnt_do_much = self.build(stk, op).await;
         self.link_range(exp, doesnt_do_much)
     }
 
-    fn build_redirecting(&mut self, redirs: &[Token], cmd: &Token) -> Range {
-        let redir = self.sequentially(redirs);
-        let body = self.build(cmd);
+    async fn build_redirecting(&mut self, stk: &mut Stk, redirs: &[Token], cmd: &Token) -> Range {
+        let redir = self.sequentially(stk, redirs).await;
+        let body = self.build(stk, cmd).await;
         self.link_range(redir, body)
     }
 
-    fn build_simple_command(&mut self, id: Id, assignments: &[Token], words: &[Token]) -> Range {
+    async fn build_simple_command(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        assignments: &[Token],
+        words: &[Token],
+    ) -> Range {
         let Some(cmd) = words.first() else {
-            let assigns = self.sequentially(assignments);
+            let assigns = self.sequentially(stk, assignments).await;
             let status = self.new_node_range(CFNode::CFSetExitCode(id));
             return self.link_range(assigns, status);
         };
         let literal = get_unquoted_literal(cmd);
-        self.handle_command(id, assignments, words, literal)
+        self.handle_command(stk, id, assignments, words, literal)
+            .await
     }
 
-    fn build_dollar_expansion(&mut self, id: Id, body: &[Token]) -> Range {
-        self.subshell(id, "$(..) expansion", |b| b.sequentially(body))
+    async fn build_dollar_expansion(&mut self, stk: &mut Stk, id: Id, body: &[Token]) -> Range {
+        self.subshell(stk, id, "$(..) expansion", async |b, stk| {
+            b.sequentially(stk, body).await
+        })
+        .await
     }
 
-    fn build_subshell(&mut self, id: Id, body: &[Token]) -> Range {
-        let main = self.subshell(id, "explicit (..) subshell", |b| b.sequentially(body));
+    async fn build_subshell(&mut self, stk: &mut Stk, id: Id, body: &[Token]) -> Range {
+        let main = self
+            .subshell(stk, id, "explicit (..) subshell", async |b, stk| {
+                b.sequentially(stk, body).await
+            })
+            .await;
         let status = self.new_node_range(CFNode::CFSetExitCode(id));
         self.link_range(main, status)
     }
 
-    fn build_and_or_if(&mut self, lhs: &Token, rhs: &Token) -> Range {
-        let left = self.build(lhs);
-        let right = self.build(rhs);
+    async fn build_and_or_if(&mut self, stk: &mut Stk, lhs: &Token, rhs: &Token) -> Range {
+        let left = self.build(stk, lhs).await;
+        let right = self.build(stk, rhs).await;
         let end = self.new_structural_node();
         self.link_range(left, right);
         self.link_range(right, end);
         self.link_range(left, end)
     }
 
-    fn build_backgrounded(&mut self, id: Id, body: &Token) -> Range {
+    async fn build_backgrounded(&mut self, stk: &mut Stk, id: Id, body: &Token) -> Range {
         let start = self.new_structural_node();
-        let fork = self.subshell(id, "backgrounding '&'", |b| b.build(body));
+        let fork = self
+            .subshell(stk, id, "backgrounding '&'", async |b, stk| {
+                b.build(stk, body).await
+            })
+            .await;
         let pid = self.new_node_range(CFNode::CFSetBackgroundPid(id));
         let status = self.new_node_range(CFNode::CFSetExitCode(id));
         self.link_range(start, fork);
@@ -926,7 +1021,7 @@ impl Builder {
         self.link_ranges(start, &[pid, status])
     }
 
-    fn build_bats_test(&mut self, id: Id, body: &Token) -> Range {
+    async fn build_bats_test(&mut self, stk: &mut Stk, id: Id, body: &Token) -> Range {
         let status = self.new_node_range(apply_single(
             id,
             CFEffect::CFWriteVariable("status".to_string(), CFValue::CFValueInteger),
@@ -935,18 +1030,26 @@ impl Builder {
             id,
             CFEffect::CFWriteVariable("output".to_string(), CFValue::CFValueString),
         ));
-        let main = self.build(body);
+        let main = self.build(stk, body).await;
         self.link_ranges(status, &[output, main])
     }
 
-    fn build_coproc(&mut self, id: Id, name: Option<&Token>, body: &Token) -> Range {
+    async fn build_coproc(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        name: Option<&Token>,
+        body: &Token,
+    ) -> Range {
         let maybe_name = name.map_or_else(|| Some("COPROC".to_string()), get_literal_string);
         let parent_node = maybe_name.map_or(CFNode::CFStructuralNode, |s| {
             apply_single(id, CFEffect::CFWriteVariable(s, CFValue::CFValueArray))
         });
         let start = self.new_structural_node();
         let parent = self.new_node_range(parent_node);
-        let child = self.subshell(id, "coproc", |b| b.build(body));
+        let child = self
+            .subshell(stk, id, "coproc", async |b, stk| b.build(stk, body).await)
+            .await;
         let end = self.new_node_range(CFNode::CFSetExitCode(id));
         self.link_range(start, parent);
         self.link_range(start, child);
@@ -955,9 +1058,15 @@ impl Builder {
         Range(start.0, end.1)
     }
 
-    fn build_fd_redirect(&mut self, id: Id, fd: &str, target: &Token) -> Range {
+    async fn build_fd_redirect(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        fd: &str,
+        target: &Token,
+    ) -> Range {
         let name: String = fd[1..].chars().take_while(|c| *c != '}').collect();
-        let expression = self.build(target);
+        let expression = self.build(stk, target).await;
         let effect = if is_closing_file_op(target) {
             apply_single(id, CFEffect::CFReadVariable(name))
         } else {
@@ -967,17 +1076,18 @@ impl Builder {
         self.link_range(expression, rw)
     }
 
-    fn build_for_arithmetic(
+    async fn build_for_arithmetic(
         &mut self,
+        stk: &mut Stk,
         init: &Token,
         cond: &Token,
         step: &Token,
         body: &[Token],
     ) -> Range {
-        let init_r = self.build(init);
-        let cond_r = self.build(cond);
-        let body_r = self.sequentially(body);
-        let inc_r = self.build(step);
+        let init_r = self.build(stk, init).await;
+        let cond_r = self.build(stk, cond).await;
+        let body_r = self.sequentially(stk, body).await;
+        let inc_r = self.build(stk, step).await;
         let end = self.new_structural_node();
         self.link_ranges(init_r, &[cond_r, body_r, inc_r]);
         self.link_range(cond_r, end);
@@ -985,11 +1095,13 @@ impl Builder {
         Range(init_r.0, end.1)
     }
 
-    fn build_function(&mut self, id: Id, name: &str, body: &Token) -> Range {
+    async fn build_function(&mut self, stk: &mut Stk, id: Id, name: &str, body: &Token) -> Range {
         let saved_exit = self.ctx.exit_target;
         self.ctx.exit_target = None;
         let entry = self.new_node_range(CFNode::CFEntryPoint(format!("function {name}")));
-        let f = self.with_function_scope(|b| b.build(body));
+        let f = self
+            .with_function_scope(stk, async |b, stk| b.build(stk, body).await)
+            .await;
         let range = self.link_range(entry, f);
         self.ctx.exit_target = saved_exit;
         let (entry_n, exit_n) = (range.0, range.1);
@@ -1001,34 +1113,43 @@ impl Builder {
         self.link_range(definition, exe)
     }
 
-    fn build_proc_sub(&mut self, id: Id, op: &str, list: &[Token]) -> Range {
+    async fn build_proc_sub(&mut self, stk: &mut Stk, id: Id, op: &str, list: &[Token]) -> Range {
         let start = self.new_structural_node();
         let reason = format!("{op}() process substitution");
-        let body = self.subshell(id, &reason, |b| b.sequentially(list));
+        let body = self
+            .subshell(stk, id, &reason, async |b, stk| {
+                b.sequentially(stk, list).await
+            })
+            .await;
         let end = self.new_structural_node();
         self.link_range(start, body);
         self.link_range_as(CFEdge::CFEFalseFlow, body, end);
         self.link_range(start, end)
     }
 
-    fn build_source_command(&mut self, original_command: &Token, inlined_source: &Token) -> Range {
-        let cmd = self.build(original_command);
+    async fn build_source_command(
+        &mut self,
+        stk: &mut Stk,
+        original_command: &Token,
+        inlined_source: &Token,
+    ) -> Range {
+        let cmd = self.build(stk, original_command).await;
         let end = self.new_structural_node();
         let _ = end; // withReturn end is a no-op in CFG.hs
-        let inline = self.build(inlined_source);
+        let inline = self.build(stk, inlined_source).await;
         self.link_range(cmd, inline);
         self.link_range(inline, end);
         Range(cmd.0, inline.1)
     }
-    // --- compound builders ---
+    // compound builders
 
-    fn build_dollar_braced(&mut self, id: Id, op: &Token) -> Range {
+    async fn build_dollar_braced(&mut self, stk: &mut Stk, id: Id, op: &Token) -> Range {
         let str = oversimplify_concat(op);
         let modifier = get_braced_modifier(&str);
         let reference = get_braced_reference(&str);
         let indices = get_index_references(&str);
         let offsets = get_offset_references(&str);
-        let vals = self.build(op);
+        let vals = self.build(stk, op).await;
         let mut others = Vec::new();
         for x in indices.iter().chain(offsets.iter()) {
             let r =
@@ -1054,14 +1175,22 @@ impl Builder {
         }
     }
 
-    fn build_if(&mut self, id: Id, clauses: &[IfClause], elses: &[Token]) -> Range {
+    async fn build_if(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        clauses: &[IfClause],
+        elses: &[Token],
+    ) -> Range {
         let start = self.new_structural_node();
         // doBranches: fold over clauses, chaining conds; accumulate action ranges.
         let mut result: Vec<Range> = Vec::new();
         let mut cursor = start;
         for (conds, thens) in clauses {
-            let cond = self.as_condition(|b| b.sequentially(conds));
-            let action = self.sequentially(thens);
+            let cond = self
+                .as_condition(stk, async |b, stk| b.sequentially(stk, conds).await)
+                .await;
+            let action = self.sequentially(stk, thens).await;
             self.link_range(cursor, cond);
             self.link_range(cond, action);
             result.push(action);
@@ -1071,7 +1200,7 @@ impl Builder {
         let rest = if elses.is_empty() {
             self.new_node_range(CFNode::CFSetExitCode(id))
         } else {
-            self.sequentially(elses)
+            self.sequentially(stk, elses).await
         };
         self.link_range(cursor, rest);
         result.push(rest);
@@ -1082,10 +1211,10 @@ impl Builder {
         Range(start.0, end.1)
     }
 
-    fn build_pipeline(&mut self, id: Id, cmds: &[Token]) -> Range {
+    async fn build_pipeline(&mut self, stk: &mut Stk, id: Id, cmds: &[Token]) -> Range {
         let start = self.new_structural_node();
         let has_lastpipe = self.params.cf_lastpipe;
-        let (leading, last) = self.build_pipe(id, has_lastpipe, cmds);
+        let (leading, last) = self.build_pipe(stk, id, has_lastpipe, cmds).await;
         let end = self.new_node_range(CFNode::CFSetExitCode(id));
         for c in &leading {
             self.link_range(start, *c);
@@ -1098,29 +1227,49 @@ impl Builder {
         self.link_ranges(start, &chain)
     }
 
-    fn build_pipe(&mut self, id: Id, lp: bool, cmds: &[Token]) -> (Vec<Range>, Vec<Range>) {
-        if lp && cmds.len() == 1 {
-            let last = self.build(&cmds[0]);
-            return (Vec::new(), vec![last]);
+    async fn build_pipe(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        lp: bool,
+        cmds: &[Token],
+    ) -> (Vec<Range>, Vec<Range>) {
+        // Upstream recurses once per command. This loop also builds each
+        // subshell before the rest of the pipeline.
+        let mut leading = Vec::new();
+        let mut cmds = cmds;
+        loop {
+            if lp && cmds.len() == 1 {
+                let last = self.build(stk, &cmds[0]).await;
+                return (leading, vec![last]);
+            }
+            let Some((first, rest)) = cmds.split_first() else {
+                return (leading, Vec::new());
+            };
+            let this = self
+                .subshell(stk, id, "pipeline", async |b, stk| {
+                    b.build(stk, first).await
+                })
+                .await;
+            leading.push(this);
+            cmds = rest;
         }
-        if cmds.is_empty() {
-            return (Vec::new(), Vec::new());
-        }
-        let this = self.subshell(id, "pipeline", |b| b.build(&cmds[0]));
-        let (mut leading, last) = self.build_pipe(id, lp, &cmds[1..]);
-        let mut result = vec![this];
-        result.append(&mut leading);
-        (result, last)
     }
 
-    fn build_case(&mut self, _id: Id, word: &Token, cases: &[CaseClause]) -> Range {
+    async fn build_case(
+        &mut self,
+        stk: &mut Stk,
+        _id: Id,
+        word: &Token,
+        cases: &[CaseClause],
+    ) -> Range {
         let start = self.new_structural_node();
-        let token = self.build(word);
+        let token = self.build(stk, word).await;
         // Build each branch: (typ, cond_range, body_range)
         let mut branches: Vec<(CaseType, Range, Range)> = Vec::new();
         for (typ, conds, body) in cases {
-            let c = self.build_case_cond(conds);
-            let b = self.sequentially(body);
+            let c = self.build_case_cond(stk, conds).await;
+            let b = self.sequentially(stk, body).await;
             self.link_range(c, b);
             branches.push((*typ, c, b));
         }
@@ -1160,11 +1309,11 @@ impl Builder {
     }
 
     // for `a | b | c`, evaluate each in turn and allow short circuiting
-    fn build_case_cond(&mut self, list: &[Token]) -> Range {
+    async fn build_case_cond(&mut self, stk: &mut Stk, list: &[Token]) -> Range {
         let start = self.new_structural_node();
         let mut conds = Vec::new();
         for t in list {
-            let r = self.build(t);
+            let r = self.build(stk, t).await;
             conds.push(r);
         }
         let end = self.new_structural_node();
@@ -1175,9 +1324,16 @@ impl Builder {
         Range(start.0, end.1)
     }
 
-    fn for_in_helper(&mut self, id: Id, name: &str, words: &[Token], body: &[Token]) -> Range {
+    async fn for_in_helper(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        name: &str,
+        words: &[Token],
+        body: &[Token],
+    ) -> Range {
         let entry = self.new_structural_node();
-        let expansion = self.sequentially(words);
+        let expansion = self.sequentially(stk, words).await;
         let assignment_choice = self.new_structural_node();
         let assignments: Vec<Range> = if words.is_empty() || words.iter().any(will_split) {
             vec![self.new_node_range(apply_single(
@@ -1199,7 +1355,7 @@ impl Builder {
                 })
                 .collect()
         };
-        let body_r = self.sequentially(body);
+        let body_r = self.sequentially(stk, body).await;
         let exit = self.new_structural_node();
         self.link_ranges(entry, &[expansion, assignment_choice]);
         for a in &assignments {
@@ -1211,18 +1367,26 @@ impl Builder {
         Range(entry.0, exit.1)
     }
 
-    fn while_helper(&mut self, id: Id, cond: &[Token], body: &[Token]) -> Range {
-        let cond_range = self.as_condition(|b| b.sequentially(cond));
-        let body_range = self.sequentially(body);
+    async fn while_helper(
+        &mut self,
+        stk: &mut Stk,
+        id: Id,
+        cond: &[Token],
+        body: &[Token],
+    ) -> Range {
+        let cond_range = self
+            .as_condition(stk, async |b, stk| b.sequentially(stk, cond).await)
+            .await;
+        let body_range = self.sequentially(stk, body).await;
         let end = self.new_node_range(CFNode::CFSetExitCode(id));
         self.link_range(cond_range, body_range);
         self.link_range(body_range, cond_range);
         self.link_range(cond_range, end)
     }
 
-    // --- assignments ---
+    // assignments
 
-    fn build_assignment(&mut self, scope: Option<Scope>, t: &Token) -> Range {
+    async fn build_assignment(&mut self, stk: &mut Stk, scope: Option<Scope>, t: &Token) -> Range {
         let op = match &*t.inner {
             InnerToken::T_Assignment {
                 mode,
@@ -1230,8 +1394,8 @@ impl Builder {
                 indices,
                 value,
             } => {
-                let expand = self.build(value);
-                let index = self.sequentially(indices);
+                let expand = self.build(stk, value).await;
+                let index = self.sequentially(stk, indices).await;
                 let read = match mode {
                     AssignmentMode::Append => self
                         .new_node_range(apply_single(t.id, CFEffect::CFReadVariable(var.clone()))),
@@ -1257,84 +1421,118 @@ impl Builder {
         op
     }
 
-    // --- command dispatch (handleCommand) ---
+    // command dispatch (handleCommand)
 
-    fn handle_command(
+    async fn handle_command(
         &mut self,
-        cmd_id: Id,
+        stk: &mut Stk,
+        mut cmd_id: Id,
         vars: &[Token],
-        words: &[Token],
-        literal_cmd: Option<String>,
+        mut words: &[Token],
+        mut literal_cmd: Option<String>,
     ) -> Range {
+        // `builtin cmd ..` is handled as `cmd ..`, however many times it is
+        // repeated.
+        while literal_cmd.as_deref() == Some("builtin") && words.len() > 1 {
+            cmd_id = words[1].id;
+            literal_cmd = get_literal_string(&words[1]);
+            words = &words[1..];
+        }
         match literal_cmd.as_deref() {
-            Some("exit") => self.regular_expansion(vars, words, Self::handle_exit),
-            Some("return") => self.regular_expansion(vars, words, Self::handle_return),
-            Some("unset") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_unset(words))
+            Some("exit") => {
+                self.regular_expansion(stk, vars, words, async |b, _stk| b.handle_exit())
+                    .await
             }
-            Some("declare" | "local" | "typeset") => self.handle_declare(words),
+            Some("return") => {
+                self.regular_expansion(stk, vars, words, async |b, _stk| b.handle_return())
+                    .await
+            }
+            Some("unset") => {
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_unset(words)
+                })
+                .await
+            }
+            Some("declare" | "local" | "typeset") => self.handle_declare(stk, words).await,
             Some("printf") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_printf(words))
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_printf(words)
+                })
+                .await
             }
             Some("wait") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_wait(words))
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_wait(words)
+                })
+                .await
             }
             Some("mapfile" | "readarray") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_mapfile(words))
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_mapfile(words)
+                })
+                .await
             }
             Some("read") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_read(words))
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_read(words)
+                })
+                .await
             }
             Some("DEFINE_boolean" | "DEFINE_float" | "DEFINE_integer" | "DEFINE_string") => {
-                self.regular_expansion_with_status(vars, words, |b| b.handle_define(words))
-            }
-            Some("builtin") => {
-                if words.len() <= 1 {
-                    self.handle_others(cmd_id, vars, words, literal_cmd)
-                } else {
-                    let lit = get_literal_string(&words[1]);
-                    self.handle_command(words[1].id, vars, &words[1..], lit)
-                }
+                self.regular_expansion_with_status(stk, vars, words, async |b, _stk| {
+                    b.handle_define(words)
+                })
+                .await
             }
             Some("command") => {
                 if words.len() <= 1 {
-                    self.handle_others(cmd_id, vars, words, literal_cmd)
+                    self.handle_others(stk, cmd_id, vars, words, literal_cmd)
+                        .await
                 } else {
                     let lit = get_literal_string(&words[1]);
-                    self.handle_others(words[1].id, vars, &words[1..], lit)
+                    self.handle_others(stk, words[1].id, vars, &words[1..], lit)
+                        .await
                 }
             }
-            _ => self.handle_others(cmd_id, vars, words, literal_cmd),
+            _ => {
+                self.handle_others(stk, cmd_id, vars, words, literal_cmd)
+                    .await
+            }
         }
     }
 
-    fn handle_others(
+    async fn handle_others(
         &mut self,
+        stk: &mut Stk,
         id: Id,
         vars: &[Token],
         args: &[Token],
         cmd: Option<String>,
     ) -> Range {
-        self.regular_expansion(vars, args, |b| {
+        self.regular_expansion(stk, vars, args, async |b, _stk| {
             let exe = b.new_node_range(CFNode::CFExecuteCommand(cmd));
             let status = b.new_node_range(CFNode::CFSetExitCode(id));
             b.link_range(exe, status)
         })
+        .await
     }
 
-    fn regular_expansion(
+    async fn regular_expansion(
         &mut self,
+        stk: &mut Stk,
         vars: &[Token],
         args: &[Token],
-        p: impl FnOnce(&mut Self) -> Range,
+        p: impl AsyncFnOnce(&mut Self, &mut Stk) -> Range,
     ) -> Range {
-        let args_r = self.sequentially(args);
+        let args_r = self.sequentially(stk, args).await;
         let mut ranges = Vec::new();
         for v in vars {
-            let a = self.build_assignment(Some(Scope::PrefixScope), v);
+            let a = self
+                .build_assignment(stk, Some(Scope::PrefixScope), v)
+                .await;
             ranges.push(a);
         }
-        let exe = p(self);
+        let exe = p(self, stk).await;
         ranges.push(exe);
         if !vars.is_empty() {
             let drop = self.new_node_range(CFNode::CFDropPrefixAssignments);
@@ -1343,14 +1541,15 @@ impl Builder {
         self.link_ranges(args_r, &ranges)
     }
 
-    fn regular_expansion_with_status(
+    async fn regular_expansion_with_status(
         &mut self,
+        stk: &mut Stk,
         vars: &[Token],
         args: &[Token],
-        p: impl FnOnce(&mut Self) -> Range,
+        p: impl AsyncFnOnce(&mut Self, &mut Stk) -> Range,
     ) -> Range {
         let cmd_id = args[0].id;
-        let initial = self.regular_expansion(vars, args, p);
+        let initial = self.regular_expansion(stk, vars, args, p).await;
         let status = self.new_node_range(CFNode::CFSetExitCode(cmd_id));
         self.link_range(initial, status)
     }
@@ -1416,7 +1615,7 @@ impl Builder {
         self.new_node_range(CFNode::CFApplyEffects(effects))
     }
 
-    fn handle_declare(&mut self, words: &[Token]) -> Range {
+    async fn handle_declare(&mut self, stk: &mut Stk, words: &[Token]) -> Range {
         let cmd = &words[0];
         let args = &words[1..];
         let is_func = self.ctx.is_function;
@@ -1490,7 +1689,7 @@ impl Builder {
             removed,
         } = effects;
 
-        let before = self.sequentially(&evaluated);
+        let before = self.sequentially(stk, &evaluated).await;
         let assignments_r = self.new_node_range(CFNode::CFApplyEffects(assignments));
         let added_r = if added.is_empty() {
             self.new_structural_node()
@@ -1761,9 +1960,7 @@ fn to_effects(
     }
 }
 
-// ===========================================================================
 // buildGraph
-// ===========================================================================
 
 /// `buildGraph :: CFGParameters -> Token -> CFGResult`.
 ///
@@ -1772,7 +1969,10 @@ fn to_effects(
 /// When an invariant of the graph does not hold, where upstream dies.
 pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, InternalError> {
     let mut builder = Builder::new(params);
-    let root_range = builder.build_root(root);
+    // The builder recurses as deep as the script nests. It runs on a heap
+    // stack, where that depth costs memory.
+    let mut stack = reblessive::Stack::new();
+    let root_range = stack.enter(|stk| builder.build_root(stk, root)).finish();
     if let Some(e) = builder.internal_error {
         return Err(e);
     }
@@ -1826,9 +2026,7 @@ pub fn build_graph(params: CFGParameters, root: &Token) -> Result<CFGResult, Int
     })
 }
 
-// ===========================================================================
 // Graph transforms on CFW (renumber / removeUnnecessaryStructuralNodes)
-// ===========================================================================
 
 fn remap_helper(m: &IdMap<Node, Node>, n: Node) -> Node {
     *m.get(&n).unwrap_or(&n)
@@ -1911,16 +2109,6 @@ pub fn remove_unnecessary_structural_nodes(g: CFW) -> CFW {
 
 /// `removeUnnecessaryStructuralNodes`, also returning its `recursiveRemapping`.
 fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
-    fn recursive_lookup(map: &IdMap<Node, Node>, mut node: Node) -> Node {
-        while let Some(&x) = map.get(&node) {
-            if x == node {
-                break;
-            }
-            node = x;
-        }
-        node
-    }
-
     let (nodes, edges, mapping, association) = g;
 
     let is_regular_edge = |e: &(Node, Node, CFEdge)| matches!(e.2, CFEdge::CFEFlow);
@@ -1968,10 +2156,24 @@ fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
         remapping.insert(k, v); // last wins, matching sorted fromList
     }
 
-    let recursive_remapping: IdMap<Node, Node> = remapping
-        .keys()
-        .map(|c| (*c, recursive_lookup(&remapping, *c)))
-        .collect();
+    // `recursiveLookup` follows the remapping to a node that it does not
+    // move. The remapping only moves a node to a smaller node. In ascending
+    // order, every node's target is therefore resolved already, and each
+    // chain is walked once.
+    let mut sorted: Vec<Node> = remapping.keys().copied().collect();
+    sorted.sort_unstable();
+    let mut resolved: IdMap<Node, Node> = IdMap::default();
+    for c in sorted {
+        let next = remapping[&c];
+        let end = if next == c {
+            c
+        } else {
+            resolved.get(&next).copied().unwrap_or(next)
+        };
+        resolved.insert(c, end);
+    }
+    let recursive_remapping: IdMap<Node, Node> =
+        remapping.keys().map(|c| (*c, resolved[c])).collect();
 
     let filtered_nodes: Vec<(Node, CFNode)> = nodes
         .into_iter()
@@ -1989,9 +2191,7 @@ fn collapse_structural_nodes(g: CFW) -> (CFW, IdMap<Node, Node>) {
     (graph, recursive_remapping)
 }
 
-// ===========================================================================
 // topsort (replaces fgl's topsort)
-// ===========================================================================
 
 /// Topological sort matching fgl's `topsort = reverse . postflatten . dff`:
 /// DFS forest over nodes in ascending id order, successors in edge order,
@@ -2036,9 +2236,7 @@ pub fn topsort(nodes: &[(Node, CFNode)], edges: &[(Node, Node, CFEdge)]) -> Vec<
     postorder
 }
 
-// ===========================================================================
 // Post-dominators (replaces fgl's dom + inlineSubshells)
-// ===========================================================================
 
 fn find_terminal_nodes(g: &MutGraph) -> Vec<Node> {
     let mut out = Vec::new();
@@ -2312,9 +2510,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
     (idom, has_chain)
 }
 
-// ===========================================================================
 // ASTLib helpers ported locally (CFG.hs relies on these)
-// ===========================================================================
 
 pub(crate) const fn is_variable_start_char(c: char) -> bool {
     c == '_' || c.is_ascii_lowercase() || c.is_ascii_uppercase()
@@ -2352,67 +2548,45 @@ pub(crate) fn get_unquoted_literal(t: &Token) -> Option<String> {
 
 /// `getBracedReference`.
 pub(crate) fn get_braced_reference(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    let drop_prefix = |cs: &[char]| -> Vec<char> {
-        if let Some(&c) = cs.first()
-            && (c == '!' || c == '#')
-        {
-            return cs[1..].to_vec();
-        }
-        cs.to_vec()
+    let no_prefix = s.strip_prefix(['!', '#']).unwrap_or(s);
+    let take_name = |cs: &str| -> Option<String> {
+        let end = cs.find(|c| !is_variable_char(c)).unwrap_or(cs.len());
+        (end > 0).then(|| cs[..end].to_string())
     };
-    let no_prefix = drop_prefix(&chars);
-
-    let take_name = |cs: &[char]| -> Option<String> {
-        let name: String = cs.iter().take_while(|c| is_variable_char(**c)).collect();
-        if name.is_empty() { None } else { Some(name) }
-    };
-    let get_special = |cs: &[char]| -> Option<String> {
-        match cs.first() {
-            Some(&c) if is_special_variable_char(c) => Some(c.to_string()),
-            _ => None,
-        }
+    let get_special = |cs: &str| -> Option<String> {
+        cs.chars()
+            .next()
+            .filter(|&c| is_special_variable_char(c))
+            .map(String::from)
     };
     // nameExpansion ('!':next:rest): e.g. ${!foo*}
-    let name_expansion = |cs: &[char]| -> Option<String> {
-        if cs.len() >= 2 && cs[0] == '!' {
-            let next = cs[1];
-            if !is_variable_char(next) {
-                return None;
-            }
-            let rest = &cs[2..];
-            let first = rest.iter().copied().find(|c| !is_variable_char(*c))?;
-            if "*?@".contains(first) {
-                return Some(String::new());
-            }
+    let name_expansion = || -> Option<String> {
+        let mut rest = s.strip_prefix('!')?.chars();
+        let next = rest.next()?;
+        if !is_variable_char(next) {
+            return None;
         }
-        None
+        let first = rest.find(|c| !is_variable_char(*c))?;
+        "*?@".contains(first).then(String::new)
     };
 
-    name_expansion(&chars)
-        .or_else(|| take_name(&no_prefix))
-        .or_else(|| get_special(&no_prefix))
-        .or_else(|| get_special(&chars))
+    name_expansion()
+        .or_else(|| take_name(no_prefix))
+        .or_else(|| get_special(no_prefix))
+        .or_else(|| get_special(s))
         .unwrap_or_else(|| s.to_string())
 }
 
 /// `getBracedModifier`.
 pub(crate) fn get_braced_modifier(s: &str) -> String {
     let var = get_braced_reference(s);
-    let chars: Vec<char> = s.chars().collect();
     // dropModifier: candidates in list-monad order.
-    let candidates: Vec<String> = match chars.first() {
-        Some(&c) if c == '#' || c == '!' => {
-            vec![chars[1..].iter().collect(), s.to_string()]
-        }
-        _ => vec![s.to_string()],
-    };
-    for a in candidates {
-        if let Some(rest) = a.strip_prefix(&var) {
-            return rest.to_string();
-        }
-    }
-    String::new()
+    s.strip_prefix(['#', '!'])
+        .into_iter()
+        .chain(std::iter::once(s))
+        .find_map(|a| a.strip_prefix(var.as_str()))
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn variable_name_regex() -> &'static Regex {
@@ -2479,19 +2653,24 @@ fn token_to_parts(t: &Token) -> Vec<CFStringPart> {
         T_DollarArithmetic, T_DollarBraced, T_DollarBracket, T_DoubleQuoted, T_Literal,
         T_NormalWord, T_SingleQuoted,
     };
-    match &*t.inner {
-        T_NormalWord(list) | T_DoubleQuoted(list) => list.iter().flat_map(token_to_parts).collect(),
-        T_SingleQuoted(str) | T_Literal(str) => vec![CFStringPart::CFStringLiteral(str.clone())],
-        T_DollarArithmetic(_) | T_DollarBracket(_) => vec![CFStringPart::CFStringInteger],
-        T_DollarBraced { op, .. } if is_unmodified_parameter_expansion(t) => {
-            let reference = get_braced_reference(&oversimplify_concat(op));
-            vec![CFStringPart::CFStringVariable(reference)]
-        }
-        _ => get_literal_string(t).map_or_else(
-            || vec![CFStringPart::CFStringUnknown],
-            |s| vec![CFStringPart::CFStringLiteral(s)],
-        ),
+    let mut out = Vec::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        out.push(match &*t.inner {
+            T_NormalWord(list) | T_DoubleQuoted(list) => {
+                pending.extend(list.iter().rev());
+                continue;
+            }
+            T_SingleQuoted(str) | T_Literal(str) => CFStringPart::CFStringLiteral(str.clone()),
+            T_DollarArithmetic(_) | T_DollarBracket(_) => CFStringPart::CFStringInteger,
+            T_DollarBraced { op, .. } if is_unmodified_parameter_expansion(t) => {
+                CFStringPart::CFStringVariable(get_braced_reference(&oversimplify_concat(op)))
+            }
+            _ => get_literal_string(t)
+                .map_or(CFStringPart::CFStringUnknown, CFStringPart::CFStringLiteral),
+        });
     }
+    out
 }
 
 /// `f` from buildAssignment: value type of an unindexed assignment RHS.
@@ -2524,23 +2703,32 @@ fn is_closing_file_op(op: &Token) -> bool {
 }
 
 pub(crate) fn will_become_multiple_args(t: &Token) -> bool {
-    will_concat_in_assignment(t) || {
-        use InnerToken::{T_BraceExpansion, T_Extglob, T_Glob, T_NormalWord};
+    use InnerToken::{T_BraceExpansion, T_Extglob, T_Glob, T_NormalWord};
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        if will_concat_in_assignment(t) {
+            return true;
+        }
         match &*t.inner {
-            T_Extglob { .. } | T_Glob(_) | T_BraceExpansion(_) => true,
-            T_NormalWord(l) => l.iter().any(will_become_multiple_args),
-            _ => false,
+            T_Extglob { .. } | T_Glob(_) | T_BraceExpansion(_) => return true,
+            T_NormalWord(l) => pending.extend(l),
+            _ => {}
         }
     }
+    false
 }
 
 pub(crate) fn will_concat_in_assignment(t: &Token) -> bool {
     use InnerToken::{T_DollarBraced, T_DoubleQuoted, T_NormalWord};
-    match &*t.inner {
-        T_DollarBraced { .. } => is_array_expansion(t),
-        T_DoubleQuoted(parts) | T_NormalWord(parts) => parts.iter().any(will_concat_in_assignment),
-        _ => false,
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_DollarBraced { .. } if is_array_expansion(t) => return true,
+            T_DoubleQuoted(parts) | T_NormalWord(parts) => pending.extend(parts),
+            _ => {}
+        }
     }
+    false
 }
 
 fn is_array_expansion(t: &Token) -> bool {
@@ -2553,7 +2741,7 @@ fn is_array_expansion(t: &Token) -> bool {
     }
 }
 
-// --- pseudoglob (for case catch-all detection) ---
+// pseudoglob (for case catch-all detection)
 
 // Variant names mirror the Haskell constructors PGAny / PGMany / PGChar.
 #[allow(clippy::enum_variant_names)]
@@ -2616,22 +2804,38 @@ fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
 }
 
 /// `pseudoGlobIsSuperSetof`.
+///
+/// The search tracks `(i, j)`, the positions it has reached in `x` and `y`.
+/// Each case of the Haskell equations fails, succeeds, or moves on to one
+/// next position, or to two for a `*` in `x`. `x` is a superset when any
+/// path succeeds.
 pub(crate) fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
-    match (x.first(), y.first()) {
-        (Some(&xf), Some(&yf)) => match (xf, yf) {
-            (PseudoGlob::PGMany, PseudoGlob::PGMany) => pseudo_glob_is_superset_of(x, &y[1..]),
-            (PseudoGlob::PGMany, _) => {
-                pseudo_glob_is_superset_of(x, &y[1..]) || pseudo_glob_is_superset_of(&x[1..], y)
-            }
-            (_, PseudoGlob::PGMany) => false,
-            (PseudoGlob::PGAny, _) => pseudo_glob_is_superset_of(&x[1..], &y[1..]),
-            (_, PseudoGlob::PGAny) => false,
-            (a, b) => a == b && pseudo_glob_is_superset_of(&x[1..], &y[1..]),
-        },
-        (None, None) => true,
-        (Some(&PseudoGlob::PGMany), None) => pseudo_glob_is_superset_of(&x[1..], &[]),
-        _ => false,
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![(0, 0)];
+    while let Some((i, j)) = pending.pop() {
+        if !seen.insert((i, j)) {
+            continue;
+        }
+        match (x.get(i), y.get(j)) {
+            (Some(&xf), Some(&yf)) => match (xf, yf) {
+                (PseudoGlob::PGMany, PseudoGlob::PGMany) => pending.push((i, j + 1)),
+                (PseudoGlob::PGMany, _) => {
+                    pending.push((i + 1, j));
+                    pending.push((i, j + 1));
+                }
+                // Upstream tests `(_, PGMany) -> False` before `(PGAny, _)` and
+                // `(_, PGAny) -> False` after it. A `?` against a `?` advances both.
+                (_, PseudoGlob::PGMany) => {}
+                (PseudoGlob::PGAny, _) => pending.push((i + 1, j + 1)),
+                (a, b) if a == b => pending.push((i + 1, j + 1)),
+                _ => {}
+            },
+            (None, None) => return true,
+            (Some(&PseudoGlob::PGMany), None) => pending.push((i + 1, j)),
+            _ => {}
+        }
     }
+    false
 }
 
 fn has_catch_all(conds: &[Token]) -> bool {
@@ -2641,7 +2845,7 @@ fn has_catch_all(conds: &[Token]) -> bool {
     })
 }
 
-// --- getOpts family ---
+// getOpts family
 
 fn lookup(key: &str, flags: &[(String, (Token, Token))]) -> Option<(Token, Token)> {
     flags.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
@@ -2688,163 +2892,120 @@ pub(crate) fn get_opts(
             .collect()
     }
 
-    fn short_to_opts(
-        opts: &[char],
-        token: &Token,
-        args: &[Token],
-        flag_map: &HashMap<String, bool>,
-        gnu: bool,
-        arbitrary: bool,
-    ) -> Option<Vec<(String, (Token, Token))>> {
-        if opts.is_empty() {
-            return process(args, flag_map, gnu, arbitrary);
-        }
-        let c = opts[0];
-        let rest = &opts[1..];
-        let needs_arg = *flag_map.get(&c.to_string())?;
-        if needs_arg && rest.is_empty() {
-            let next = args.first()?;
-            let rest_args = &args[1..];
-            let mut more = process(rest_args, flag_map, gnu, arbitrary)?;
-            let mut out = vec![(c.to_string(), (token.clone(), next.clone()))];
-            out.append(&mut more);
-            Some(out)
-        } else if needs_arg {
-            let mut more = process(args, flag_map, gnu, arbitrary)?;
-            let mut out = vec![(c.to_string(), (token.clone(), token.clone()))];
-            out.append(&mut more);
-            Some(out)
-        } else {
-            let mut more = short_to_opts(rest, token, args, flag_map, gnu, arbitrary)?;
-            let mut out = vec![(c.to_string(), (token.clone(), token.clone()))];
-            out.append(&mut more);
-            Some(out)
-        }
-    }
-
-    fn process(
-        args: &[Token],
-        flag_map: &HashMap<String, bool>,
-        gnu: bool,
-        arbitrary: bool,
-    ) -> Option<Vec<(String, (Token, Token))>> {
-        if args.is_empty() {
-            return Some(Vec::new());
-        }
-        let token = &args[0];
-        let rest = &args[1..];
+    // `process` and `shortToOpts` call each other once per argument and per
+    // clustered flag, and each call prepends what it read. This loop reads the
+    // arguments in order and appends instead. It returns `Nothing` wherever
+    // either function would.
+    let flag_map = build_flag_map(spec, longopts);
+    let mut out = Vec::new();
+    let mut args = args;
+    loop {
+        // process
+        let Some((token, rest)) = args.split_first() else {
+            return Some(out);
+        };
         let s = get_literal_string_def("\0", token);
         if s == "--" {
-            return Some(list_to_args(rest));
+            out.extend(list_to_args(rest));
+            return Some(out);
         }
         if let Some(word) = s.strip_prefix("--") {
             // span (/= '=')
             let (name, arg) = word
                 .find('=')
                 .map_or((word, ""), |idx| (&word[..idx], &word[idx..]));
-            let needs_arg = if arbitrary {
+            let needs_arg = if arbitrary_long_opts {
                 *flag_map.get(name).unwrap_or(&false)
             } else {
                 *flag_map.get(name)?
             };
             if needs_arg && arg.is_empty() {
-                if let Some(argtok) = rest.first() {
-                    let rest2 = &rest[1..];
-                    let mut more = process(rest2, flag_map, gnu, arbitrary)?;
-                    let mut out = vec![(name.to_string(), (token.clone(), argtok.clone()))];
-                    out.append(&mut more);
-                    Some(out)
-                } else {
-                    None
-                }
+                let (argtok, rest2) = rest.split_first()?;
+                out.push((name.to_string(), (token.clone(), argtok.clone())));
+                args = rest2;
             } else {
-                let mut more = process(rest, flag_map, gnu, arbitrary)?;
-                let mut out = vec![(name.to_string(), (token.clone(), token.clone()))];
-                out.append(&mut more);
-                Some(out)
+                out.push((name.to_string(), (token.clone(), token.clone())));
+                args = rest;
             }
         } else if let Some(opts) = s.strip_prefix('-') {
             // `'-':opts -> shortToOpts opts token rest` (also covers bare "-").
-            let opt_chars: Vec<char> = opts.chars().collect();
-            short_to_opts(&opt_chars, token, rest, flag_map, gnu, arbitrary)
+            let opts: Vec<char> = opts.chars().collect();
+            args = rest;
+            for (k, c) in opts.iter().enumerate() {
+                let needs_arg = *flag_map.get(&c.to_string())?;
+                if needs_arg && k + 1 == opts.len() {
+                    let (next, rest2) = args.split_first()?;
+                    out.push((c.to_string(), (token.clone(), next.clone())));
+                    args = rest2;
+                    break;
+                }
+                out.push((c.to_string(), (token.clone(), token.clone())));
+                if needs_arg {
+                    break;
+                }
+            }
         } else if gnu {
-            let mut more = process(rest, flag_map, gnu, arbitrary)?;
-            let mut out = vec![(String::new(), (token.clone(), token.clone()))];
-            out.append(&mut more);
-            Some(out)
+            out.push((String::new(), (token.clone(), token.clone())));
+            args = rest;
         } else {
-            Some(list_to_args(args))
+            out.extend(list_to_args(args));
+            return Some(out);
         }
     }
-
-    let flag_map = build_flag_map(spec, longopts);
-    process(args, &flag_map, gnu, arbitrary_long_opts)
 }
 
 /// `getGenericOpts`.
+///
+/// Upstream recurses once per argument, prepending what each one read; this
+/// loop appends the same pairs in the same order.
 pub(crate) fn get_generic_opts(args: &[Token]) -> Vec<(String, (Token, Token))> {
-    if args.is_empty() {
-        return Vec::new();
-    }
-    let token = &args[0];
-    let rest = &args[1..];
-    let s = get_literal_string_def("\0", token);
-    if s == "--" {
-        return rest
-            .iter()
-            .map(|c| (String::new(), (c.clone(), c.clone())))
-            .collect();
-    }
-    if let Some(word) = s.strip_prefix("--") {
-        let name: String = word
-            .chars()
-            .take_while(|c| *c != '\0' && *c != '=')
-            .collect();
-        let mut out = vec![(name, (token.clone(), token.clone()))];
-        out.extend(get_generic_opts(rest));
-        return out;
-    }
-    let Some(optstring) = s.strip_prefix('-') else {
-        let mut out = vec![(String::new(), (token.clone(), token.clone()))];
-        out.extend(get_generic_opts(rest));
-        return out;
-    };
-    // Only if not "--" (handled) — a bare "-" gives empty opts.
-    let opts: String = optstring.chars().take_while(|c| *c != '\0').collect();
-    let opt_chars: Vec<char> = opts.chars().collect();
-    match rest.first() {
-        Some(next) if get_literal_string_def("\0", next).starts_with('-') => {
-            let mut out: Vec<(String, (Token, Token))> = opt_chars
-                .iter()
-                .map(|c| (c.to_string(), (token.clone(), token.clone())))
-                .collect();
-            out.extend(get_generic_opts(rest));
-            out
+    let flag = |c: &char, token: &Token| (c.to_string(), (token.clone(), token.clone()));
+    let mut out = Vec::new();
+    let mut args = args;
+    while let Some((token, rest)) = args.split_first() {
+        let s = get_literal_string_def("\0", token);
+        if s == "--" {
+            out.extend(rest.iter().map(|c| (String::new(), (c.clone(), c.clone()))));
+            break;
         }
-        Some(next) => {
-            let remainder = &rest[1..];
-            if let Some((last, initial)) = opt_chars.split_last() {
-                let mut out: Vec<(String, (Token, Token))> = initial
-                    .iter()
-                    .map(|c| (c.to_string(), (token.clone(), token.clone())))
-                    .collect();
-                out.push((last.to_string(), (token.clone(), next.clone())));
-                out.extend(get_generic_opts(remainder));
-                out
-            } else {
-                get_generic_opts(remainder)
+        if let Some(word) = s.strip_prefix("--") {
+            let name: String = word
+                .chars()
+                .take_while(|c| *c != '\0' && *c != '=')
+                .collect();
+            out.push((name, (token.clone(), token.clone())));
+            args = rest;
+            continue;
+        }
+        let Some(optstring) = s.strip_prefix('-') else {
+            out.push((String::new(), (token.clone(), token.clone())));
+            args = rest;
+            continue;
+        };
+        // Only if not "--" (handled) — a bare "-" gives empty opts.
+        let opt_chars: Vec<char> = optstring.chars().take_while(|c| *c != '\0').collect();
+        match rest.first() {
+            Some(next) if get_literal_string_def("\0", next).starts_with('-') => {
+                out.extend(opt_chars.iter().map(|c| flag(c, token)));
+                args = rest;
+            }
+            Some(next) => {
+                if let Some((last, initial)) = opt_chars.split_last() {
+                    out.extend(initial.iter().map(|c| flag(c, token)));
+                    out.push((last.to_string(), (token.clone(), next.clone())));
+                }
+                args = &rest[1..];
+            }
+            None => {
+                out.extend(opt_chars.iter().map(|c| flag(c, token)));
+                break;
             }
         }
-        None => opt_chars
-            .iter()
-            .map(|c| (c.to_string(), (token.clone(), token.clone())))
-            .collect(),
     }
+    out
 }
 
-// ===========================================================================
 // Tests (ported from CFG.hs prop_*)
-// ===========================================================================
 
 pub(crate) fn may_become_multiple_args(t: &Token) -> bool {
     will_become_multiple_args(t) || mbma_f(false, t)
@@ -2852,21 +3013,69 @@ pub(crate) fn may_become_multiple_args(t: &Token) -> bool {
 
 pub(crate) fn mbma_f(quoted: bool, t: &Token) -> bool {
     use InnerToken::{T_DollarBraced, T_DoubleQuoted, T_NormalWord};
-    match &*t.inner {
-        T_DollarBraced { op, .. } => {
-            let string = oversimplify_concat(op);
-            !quoted || string.starts_with('!')
+    let mut pending = vec![(quoted, t)];
+    while let Some((quoted, t)) = pending.pop() {
+        match &*t.inner {
+            T_DollarBraced { op, .. } if !quoted || oversimplify_concat(op).starts_with('!') => {
+                return true;
+            }
+            T_DoubleQuoted(parts) => pending.extend(parts.iter().map(|x| (true, x))),
+            T_NormalWord(parts) => pending.extend(parts.iter().map(|x| (quoted, x))),
+            _ => {}
         }
-        T_DoubleQuoted(parts) => parts.iter().any(|x| mbma_f(true, x)),
-        T_NormalWord(parts) => parts.iter().any(|x| mbma_f(quoted, x)),
-        _ => false,
     }
+    false
 }
 
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pseudo_glob_superset_equals_the_haskell_equations() {
+        use PseudoGlob::{PGAny, PGChar, PGMany};
+        fn superset(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
+            match (x.first(), y.first()) {
+                (Some(&xf), Some(&yf)) => match (xf, yf) {
+                    (PGMany, PGMany) => superset(x, &y[1..]),
+                    (PGMany, _) => superset(x, &y[1..]) || superset(&x[1..], y),
+                    (_, PGMany) => false,
+                    (PGAny, _) => superset(&x[1..], &y[1..]),
+                    (_, PGAny) => false,
+                    (a, b) => a == b && superset(&x[1..], &y[1..]),
+                },
+                (None, None) => true,
+                (Some(&PGMany), None) => superset(&x[1..], &[]),
+                _ => false,
+            }
+        }
+        let atoms = [PGChar('a'), PGChar('b'), PGAny, PGMany];
+        let mut globs = vec![Vec::new()];
+        let mut last: Vec<Vec<PseudoGlob>> = vec![Vec::new()];
+        for _ in 0..3 {
+            last = last
+                .iter()
+                .flat_map(|g| {
+                    atoms.iter().map(move |&a| {
+                        let mut g = g.clone();
+                        g.push(a);
+                        g
+                    })
+                })
+                .collect();
+            globs.extend(last.iter().cloned());
+        }
+        for x in &globs {
+            for y in &globs {
+                assert_eq!(
+                    pseudo_glob_is_superset_of(x, y),
+                    superset(x, y),
+                    "{x:?} {y:?}"
+                );
+            }
+        }
+    }
 
     fn s() -> CFNode {
         CFNode::CFStructuralNode

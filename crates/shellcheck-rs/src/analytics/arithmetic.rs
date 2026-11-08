@@ -325,31 +325,22 @@ fn match_wrong_arith(s: &str) -> Option<(String, char)> {
 /// the `TA_Expansion` / `T_ParamSubSpecialChar` cases the shared `ast_lib` helper
 /// omits. (decodeEscapes on `T_DollarSingleQuoted` is not needed for our uses.)
 fn full_literal_string(t: &Token) -> Option<String> {
-    fn go(t: &Token, out: &mut String) -> bool {
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
         match &*t.inner {
             InnerToken::T_DoubleQuoted(l)
             | InnerToken::T_DollarDoubleQuoted(l)
             | InnerToken::T_NormalWord(l)
-            | InnerToken::TA_Expansion(l) => {
-                for p in l {
-                    if !go(p, out) {
-                        return false;
-                    }
-                }
-                true
-            }
+            | InnerToken::TA_Expansion(l) => pending.extend(l.iter().rev()),
             InnerToken::T_SingleQuoted(s)
             | InnerToken::T_Literal(s)
             | InnerToken::T_ParamSubSpecialChar(s)
-            | InnerToken::T_DollarSingleQuoted(s) => {
-                out.push_str(s);
-                true
-            }
-            _ => false,
+            | InnerToken::T_DollarSingleQuoted(s) => out.push_str(s),
+            _ => return None,
         }
     }
-    let mut s = String::new();
-    if go(t, &mut s) { Some(s) } else { None }
+    Some(out)
 }
 
 /// `getUnmodifiedParameterExpansion`.
@@ -404,28 +395,21 @@ fn check_arithmetic(t: &Token, out: &mut Out) {
 }
 
 fn check_modifying(t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::TA_Sequence(list) => {
-            for x in list {
-                check_modifying(x, out);
+    // The walk visits sequences, operands and branches from left to right.
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            InnerToken::TA_Sequence(list) => pending.extend(list.iter().rev()),
+            InnerToken::TA_Unary { op, .. }
+                if op == "|++" || op == "++|" || op == "|--" || op == "--|" =>
+            {
+                warn_2257(t.id(), out);
             }
+            InnerToken::TA_Assignment { .. } => warn_2257(t.id(), out),
+            InnerToken::TA_Binary { lhs, rhs, .. } => pending.extend([rhs, lhs]),
+            InnerToken::TA_Trinary { cond, then, els } => pending.extend([els, then, cond]),
+            _ => {}
         }
-        InnerToken::TA_Unary { op, .. }
-            if op == "|++" || op == "++|" || op == "|--" || op == "--|" =>
-        {
-            warn_2257(t.id(), out);
-        }
-        InnerToken::TA_Assignment { .. } => warn_2257(t.id(), out),
-        InnerToken::TA_Binary { lhs, rhs, .. } => {
-            check_modifying(lhs, out);
-            check_modifying(rhs, out);
-        }
-        InnerToken::TA_Trinary { cond, then, els } => {
-            check_modifying(cond, out);
-            check_modifying(then, out);
-            check_modifying(els, out);
-        }
-        _ => {}
     }
 }
 
@@ -580,7 +564,7 @@ mod tests {
         assert!(!emits(check_arithmetic_deref, "(( ${x+1} + ${x=42} ))"));
     }
 
-    // ---- SC2219 checkLetUsage ----
+    // SC2219 checkLetUsage
 
     #[test]
     fn prop_checkArithmeticOpCommand1() {
@@ -597,7 +581,7 @@ mod tests {
         assert!(!emits(check_arithmetic_op_command, "foo + opts"));
     }
 
-    // ---- checkWrongArithmeticAssignment ----
+    // checkWrongArithmeticAssignment
 
     #[test]
     fn prop_checkWrongArit() {
@@ -609,7 +593,7 @@ mod tests {
         assert!(emits(check_wrong_arithmetic_assignment, "n=2; i=n*2"));
     }
 
-    // ---- checkPipePitfalls ----
+    // checkPipePitfalls
 
     #[test]
     fn prop_checkDivBeforeMult() {
@@ -626,7 +610,7 @@ mod tests {
         assert!(!(node_emits(check_div_before_mult, "echo $((c/10*10))")));
     }
 
-    // --- SC2080 checkArithmeticBadOctal ---
+    // SC2080 checkArithmeticBadOctal
 
     #[test]
     fn prop_checkArithmeticBadOctal1() {
@@ -643,7 +627,7 @@ mod tests {
         assert!(!(node_emits(check_arithmetic_bad_octal, "(( 1 ^ 0777 ))")));
     }
 
-    // --- SC2257 checkModifiedArithmeticInRedirection ---
+    // SC2257 checkModifiedArithmeticInRedirection
 
     #[test]
     fn prop_checkModifiedArithmeticInRedirection1() {
@@ -707,7 +691,7 @@ mod tests {
         );
     }
 
-    // --- SC2321 checkUnnecessaryArithmeticExpansionIndex ---
+    // SC2321 checkUnnecessaryArithmeticExpansionIndex
 
     #[test]
     fn prop_checkUnnecessaryArithmeticExpansionIndex1() {
@@ -742,7 +726,7 @@ mod tests {
         );
     }
 
-    // --- SC2322/2323 checkUnnecessaryParens ---
+    // SC2322/2323 checkUnnecessaryParens
 
     #[test]
     fn prop_checkUnnecessaryParens1() {
@@ -784,7 +768,7 @@ mod tests {
         assert!(!(node_emits(check_unnecessary_parens, "(( (1)+1 ))")));
     }
 
-    // --- SC2218 checkUseBeforeDefinition ---
+    // SC2218 checkUseBeforeDefinition
 
     #[test]
     fn prop_checkPlusEqualsNumber1() {

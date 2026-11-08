@@ -327,7 +327,7 @@ pub(super) fn check_case_against_glob(_params: &Parameters, t: &Token, out: &mut
 }
 
 /// SC2055 / SC2056 / SC2252 — `checkOrNeq`.
-pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
+pub(super) fn check_or_neq(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::{T_OrIf, TA_Binary, TC_Binary, TC_Or};
     match &*t.inner {
         // Test-level "or": [ x != y -o x != z ]
@@ -390,8 +390,11 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
         }
         // Command-level "or": [ x != y ] || [ x != z ]
         T_OrIf { lhs, rhs } => {
-            if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
-                (or_get_expr(lhs), or_get_expr(rhs))
+            // Both lookups are pure, and their order does not change the result.
+            // The right side is a single command. It goes first, and a chain whose
+            // right side is no test skips the walk down its left side.
+            if let Some((lhs2, op2, rhs2)) = or_get_expr(params, rhs)
+                && let Some((lhs1, op1, rhs1)) = or_get_expr(params, lhs)
                 && op1 == op2
                 && (op1 == "-ne" || op1 == "!=")
                 && lhs1 == lhs2
@@ -412,7 +415,7 @@ pub(super) fn check_or_neq(_params: &Parameters, t: &Token, out: &mut Out) {
 }
 
 /// SC2333 / SC2334 — `checkAndEq`.
-pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
+pub(super) fn check_and_eq(params: &Parameters, t: &Token, out: &mut Out) {
     use InnerToken::{T_AndIf, TA_Binary, TC_And, TC_Binary};
     match &*t.inner {
         // Test-level "and": [ x = y -a x = z ]
@@ -479,8 +482,11 @@ pub(super) fn check_and_eq(_params: &Parameters, t: &Token, out: &mut Out) {
         }
         // Command-level "and": [ x = y ] && [ x = z ]
         T_AndIf { lhs, rhs } => {
-            if let (Some((lhs1, op1, rhs1)), Some((lhs2, op2, rhs2))) =
-                (cmd_level_get_expr(lhs), cmd_level_get_expr(rhs))
+            // Both lookups are pure, and their order does not change the result.
+            // The right side is a single command. It goes first, and a chain whose
+            // right side is no test skips the walk down its left side.
+            if let Some((lhs2, op2, rhs2)) = and_get_expr(params, rhs)
+                && let Some((lhs1, op1, rhs1)) = and_get_expr(params, lhs)
                 && op1 == op2
                 && lhs1 == lhs2
                 && rhs1 != rhs2
@@ -913,34 +919,106 @@ pub(super) fn check_empty_condition(_params: &Parameters, t: &Token, out: &mut O
     }
 }
 
-pub(super) fn check_subshelled_tests(params: &Parameters, t: &Token, out: &mut Out) {
-    if let InnerToken::T_Subshell(list) = &*t.inner
-        && list.iter().all(sst_is_test_structure)
-        && !sst_has_assignment(t)
-    {
-        let path = get_path(params, t);
-        if sst_is_compound_condition(&path) {
-            style(
-                out,
-                t.id(),
-                2233,
-                "Remove superfluous (..) around condition to avoid subshell overhead.",
-            );
-        } else if sst_is_single_test(list) && !sst_is_function_body(&path) {
-            style(
-                out,
-                t.id(),
-                2234,
-                "Remove superfluous (..) around test command to avoid subshell overhead.",
-            );
-        } else {
-            style(
-                out,
-                t.id(),
-                2235,
-                "Use { ..; } instead of (..) to avoid subshell overhead.",
-            );
-        }
+/// `checkSubshelledTests`, as one walk over the whole tree. For each
+/// subshell, upstream asks whether its list holds only tests, whether
+/// anything in it assigns, and what its path to the root holds. Asked per
+/// subshell, each answer costs the nesting depth. The walk computes the
+/// first two answers from the bottom up and holds the ancestors on a stack.
+pub(super) fn check_subshelled_tests(_params: &Parameters, root: &Token, out: &mut Out) {
+    /// An open token.
+    struct Frame<'a> {
+        token: &'a Token,
+        /// Whether anything in the subtree read so far assigns.
+        assigns: bool,
+        /// The position in the stack of the nearest strict ancestor that
+        /// `isCompoundCondition` does not skip.
+        decider: Option<usize>,
+        /// How many tokens the walk entered before this one.
+        order: usize,
+    }
+    // Id of a brace group or subshell -> whether its list holds only tests.
+    let mut groups: crate::idhash::IdMap<Id, bool> = crate::idhash::IdMap::default();
+    let frames: std::cell::RefCell<Vec<Frame>> = std::cell::RefCell::default();
+    let mut found: Vec<(usize, Id, i64, &str)> = Vec::new();
+    let mut entered = 0;
+    root.visit_stack(
+        &mut |t| {
+            let mut frames = frames.borrow_mut();
+            let decider = frames.len().checked_sub(1).and_then(|p| {
+                if sst_skippable(frames[p].token) {
+                    frames[p].decider
+                } else {
+                    Some(p)
+                }
+            });
+            frames.push(Frame {
+                token: t,
+                assigns: sst_is_assignment_node(t),
+                decider,
+                order: entered,
+            });
+            entered += 1;
+        },
+        &mut |t| {
+            let mut frames = frames.borrow_mut();
+            let Some(frame) = frames.pop() else {
+                return;
+            };
+            if let Some(parent) = frames.last_mut() {
+                parent.assigns |= frame.assigns;
+            }
+            let (InnerToken::T_BraceGroup(list) | InnerToken::T_Subshell(list)) = &*t.inner else {
+                return;
+            };
+            let all_tests = list.iter().all(|c| sst_is_test_structure(c, &groups));
+            groups.insert(t.id(), all_tests);
+            if !matches!(&*t.inner, InnerToken::T_Subshell(_)) || !all_tests || frame.assigns {
+                return;
+            }
+            // Check if a T_Subshell is used as a condition, e.g. if ( test )
+            // This technically also triggers for `if true; then ( test ); fi`
+            // but it's still a valid suggestion.
+            let compound_condition = frame.decider.is_some_and(|d| {
+                matches!(
+                    &*frames[d].token.inner,
+                    InnerToken::T_IfExpression { .. }
+                        | InnerToken::T_WhileExpression { .. }
+                        | InnerToken::T_UntilExpression { .. }
+                )
+            });
+            let function_body = frames.last().is_some_and(|p| is_function_tok(p.token));
+            let at = frame.order;
+            if compound_condition {
+                // Special case for if (test) and while (test)
+                found.push((
+                    at,
+                    t.id(),
+                    2233,
+                    "Remove superfluous (..) around condition to avoid subshell overhead.",
+                ));
+            } else if sst_is_single_test(list) && !function_body {
+                // Special case for ([ x ]), except for func() ( [ x ] )
+                found.push((
+                    at,
+                    t.id(),
+                    2234,
+                    "Remove superfluous (..) around test command to avoid subshell overhead.",
+                ));
+            } else {
+                // General case for ([ x ] || [ y ] && etc)
+                found.push((
+                    at,
+                    t.id(),
+                    2235,
+                    "Use { ..; } instead of (..) to avoid subshell overhead.",
+                ));
+            }
+        },
+    );
+    // Upstream reports in preorder, one subshell at a time.
+    found.sort_by_key(|f| f.0);
+    for (_, id, code, message) in found {
+        style(out, id, code, message);
     }
 }
 
@@ -1097,31 +1175,30 @@ fn is_only_test_in_command(params: &Parameters, t: &Token) -> bool {
     }
 }
 
-fn get_first_command_in_function(t: &Token) -> &Token {
+fn get_first_command_in_function(mut t: &Token) -> &Token {
     use InnerToken::{
         T_AndIf, T_Annotation, T_BraceGroup, T_Function, T_IfExpression, T_OrIf, T_Pipeline,
         T_Redirecting, T_Subshell,
     };
-    match &*t.inner {
-        T_Function { body, .. } => get_first_command_in_function(body),
-        T_BraceGroup(cmds) | T_Subshell(cmds) if !cmds.is_empty() => {
-            get_first_command_in_function(&cmds[0])
-        }
-        T_Annotation { token, .. } => get_first_command_in_function(token),
-        T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => get_first_command_in_function(lhs),
-        T_Pipeline { commands, .. } if !commands.is_empty() => {
-            get_first_command_in_function(&commands[0])
-        }
-        T_Redirecting { cmd, .. } => {
-            if let T_IfExpression { clauses, .. } = &*cmd.inner
-                && let Some((conds, _)) = clauses.first()
-                && let Some(first) = conds.first()
-            {
-                return get_first_command_in_function(first);
+    loop {
+        t = match &*t.inner {
+            T_Function { body, .. } => body,
+            T_BraceGroup(cmds) | T_Subshell(cmds) if !cmds.is_empty() => &cmds[0],
+            T_Annotation { token, .. } => token,
+            T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => lhs,
+            T_Pipeline { commands, .. } if !commands.is_empty() => &commands[0],
+            T_Redirecting { cmd, .. } => {
+                if let T_IfExpression { clauses, .. } = &*cmd.inner
+                    && let Some((conds, _)) = clauses.first()
+                    && let Some(first) = conds.first()
+                {
+                    first
+                } else {
+                    return t;
+                }
             }
-            t
-        }
-        _ => t,
+            _ => return t,
+        };
     }
 }
 
@@ -1185,7 +1262,10 @@ fn drop_last<T>(v: &[T]) -> &[T] {
 }
 
 /// `getNonReturningCommands`.
-fn non_returning_commands<'a>(params: &Parameters, t: &'a Token) -> Vec<&'a Token> {
+fn non_returning_commands<'a>(params: &Parameters, mut t: &'a Token) -> Vec<&'a Token> {
+    while let InnerToken::T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
     match &*t.inner {
         InnerToken::T_Script { commands, .. } => drop_last(commands).iter().collect(),
         InnerToken::T_BraceGroup(list) => {
@@ -1205,7 +1285,6 @@ fn non_returning_commands<'a>(params: &Parameters, t: &'a Token) -> Vec<&'a Toke
         InnerToken::T_ForIn { body, .. } | InnerToken::T_ForArithmetic { body, .. } => {
             body.iter().collect()
         }
-        InnerToken::T_Annotation { token, .. } => non_returning_commands(params, token),
         InnerToken::T_IfExpression { clauses, elses } => {
             let mut v: Vec<&Token> = Vec::new();
             for (cond, then) in clauses {
@@ -1219,24 +1298,23 @@ fn non_returning_commands<'a>(params: &Parameters, t: &'a Token) -> Vec<&'a Toke
     }
 }
 
-fn check_bang(params: &Parameters, t: &Token, out: &mut Out) {
-    match &*t.inner {
-        InnerToken::T_Banged(cmd) => {
-            if !in_condition(params, t) {
-                info_with_fix(
-                    out,
-                    t.id(),
-                    2251,
-                    "This ! is not on a condition and skips errexit. Use `&& exit 1` instead, or make sure $? is checked.",
-                    fix_with(vec![
-                        replace_start(params, t.id(), 1, ""),
-                        replace_end(params, cmd.id(), 0, " && exit 1"),
-                    ]),
-                );
-            }
-        }
-        InnerToken::T_Annotation { token, .. } => check_bang(params, token, out),
-        _ => {}
+fn check_bang(params: &Parameters, mut t: &Token, out: &mut Out) {
+    while let InnerToken::T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
+    if let InnerToken::T_Banged(cmd) = &*t.inner
+        && !in_condition(params, t)
+    {
+        info_with_fix(
+            out,
+            t.id(),
+            2251,
+            "This ! is not on a condition and skips errexit. Use `&& exit 1` instead, or make sure $? is checked.",
+            fix_with(vec![
+                replace_start(params, t.id(), 1, ""),
+                replace_end(params, cmd.id(), 0, " && exit 1"),
+            ]),
+        );
     }
 }
 
@@ -1600,29 +1678,45 @@ fn sst_is_test_command(t: &Token) -> bool {
     false
 }
 
-fn sst_is_test_structure(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Banged(w) => sst_is_test_structure(w),
-        InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
-            sst_is_test_structure(lhs) && sst_is_test_structure(rhs)
-        }
-        InnerToken::T_Pipeline {
-            separators,
-            commands,
-        } if separators.is_empty() && commands.len() == 1 => {
-            if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
-                match &*cmd.inner {
-                    InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
-                        ts.iter().all(sst_is_test_structure)
-                    }
-                    _ => sst_is_test_command(t),
-                }
-            } else {
-                sst_is_test_command(t)
+/// `isTestStructure`. `groups` holds the answer for every brace group and
+/// subshell below `t`, and the walk stops at them.
+fn sst_is_test_structure(t: &Token, groups: &crate::idhash::IdMap<Id, bool>) -> bool {
+    // Every structure the walk reaches must be a test. The order of the checks
+    // does not change the result.
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        let is_test = match &*t.inner {
+            InnerToken::T_Banged(w) => {
+                pending.push(w);
+                continue;
             }
+            InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
+                pending.push(rhs);
+                pending.push(lhs);
+                continue;
+            }
+            InnerToken::T_Pipeline {
+                separators,
+                commands,
+            } if separators.is_empty() && commands.len() == 1 => {
+                if let InnerToken::T_Redirecting { cmd, .. } = &*commands[0].inner {
+                    match &*cmd.inner {
+                        InnerToken::T_BraceGroup(_) | InnerToken::T_Subshell(_) => {
+                            groups.get(&cmd.id()).copied().unwrap_or(false)
+                        }
+                        _ => sst_is_test_command(t),
+                    }
+                } else {
+                    sst_is_test_command(t)
+                }
+            }
+            _ => sst_is_test_command(t),
+        };
+        if !is_test {
+            return false;
         }
-        _ => sst_is_test_command(t),
     }
+    true
 }
 
 fn sst_is_single_test(cmds: &[Token]) -> bool {
@@ -1633,11 +1727,6 @@ fn is_function_tok(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_Function { .. })
 }
 
-fn sst_is_function_body(path: &[Token]) -> bool {
-    // path[0] is the subshell itself; path[1] is its immediate parent.
-    path.get(1).is_some_and(is_function_tok)
-}
-
 fn sst_skippable(t: &Token) -> bool {
     match &*t.inner {
         InnerToken::T_Redirecting { redirs, .. } => redirs.is_empty(),
@@ -1645,20 +1734,6 @@ fn sst_skippable(t: &Token) -> bool {
         InnerToken::T_Annotation { .. } => true,
         _ => false,
     }
-}
-
-fn sst_is_compound_condition(path: &[Token]) -> bool {
-    // dropWhile skippable over the tail (parents) of the path.
-    let tail = if path.len() > 1 { &path[1..] } else { &[][..] };
-    let mut iter = tail.iter().skip_while(|t| sst_skippable(t));
-    iter.next().is_some_and(|t| {
-        matches!(
-            &*t.inner,
-            InnerToken::T_IfExpression { .. }
-                | InnerToken::T_WhileExpression { .. }
-                | InnerToken::T_UntilExpression { .. }
-        )
-    })
 }
 
 fn sst_is_assignment_node(t: &Token) -> bool {
@@ -1672,16 +1747,6 @@ fn sst_is_assignment_node(t: &Token) -> bool {
         }
         _ => false,
     }
-}
-
-fn sst_has_assignment(t: &Token) -> bool {
-    let mut found = false;
-    t.visit_preorder(&mut |n| {
-        if sst_is_assignment_node(n) {
-            found = true;
-        }
-    });
-    found
 }
 
 const BINARY_TEST_OPS: &[&str] = &[
@@ -1702,23 +1767,21 @@ fn get_literal_string_local(t: &Token) -> Option<String> {
         T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
         T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
     };
-    fn go(t: &Token, out: &mut String) -> bool {
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
         match &*t.inner {
             T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | T_NormalWord(l) | TA_Expansion(l) => {
-                l.iter().all(|p| go(p, out))
+                pending.extend(l.iter().rev());
             }
             T_SingleQuoted(s)
             | T_Literal(s)
             | T_ParamSubSpecialChar(s)
-            | T_DollarSingleQuoted(s) => {
-                out.push_str(s);
-                true
-            }
-            _ => false,
+            | T_DollarSingleQuoted(s) => out.push_str(s),
+            _ => return None,
         }
     }
-    let mut s = String::new();
-    if go(t, &mut s) { Some(s) } else { None }
+    Some(out)
 }
 
 /// `isLiteralNumber`.
@@ -1833,41 +1896,73 @@ fn simplify_pseudo_glob(list: &[PseudoGlob]) -> Vec<PseudoGlob> {
 }
 
 /// `pseudoGlobsCanOverlap`.
+///
+/// The search tracks `(i, j)`, the positions it has reached in `x` and `y`,
+/// and follows the Haskell equations. The globs overlap when any path
+/// succeeds.
 fn pseudo_globs_can_overlap(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
-    match (x.first(), y.first()) {
-        (Some(xf), Some(yf)) => match (xf, yf) {
-            (PseudoGlob::Many, _) | (_, PseudoGlob::Many) => {
-                pseudo_globs_can_overlap(x, &y[1..]) || pseudo_globs_can_overlap(&x[1..], y)
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![(0, 0)];
+    while let Some((i, j)) = pending.pop() {
+        if !seen.insert((i, j)) {
+            continue;
+        }
+        match (x.get(i), y.get(j)) {
+            (Some(xf), Some(yf)) => match (xf, yf) {
+                (PseudoGlob::Many, _) | (_, PseudoGlob::Many) => {
+                    pending.push((i + 1, j));
+                    pending.push((i, j + 1));
+                }
+                (PseudoGlob::Any, _) | (_, PseudoGlob::Any) => pending.push((i + 1, j + 1)),
+                (a, b) if a == b => pending.push((i + 1, j + 1)),
+                _ => {}
+            },
+            (None, None) => return true,
+            (Some(PseudoGlob::Many), None) => pending.push((i + 1, j)),
+            (Some(_), None) => {}
+            // `pseudoGlobsCanOverlap y []`. The rest of `y` must consist of `*` only.
+            (None, Some(_)) => {
+                if y[j..].iter().all(|g| *g == PseudoGlob::Many) {
+                    return true;
+                }
             }
-            (PseudoGlob::Any, _) | (_, PseudoGlob::Any) => {
-                pseudo_globs_can_overlap(&x[1..], &y[1..])
-            }
-            (a, b) => a == b && pseudo_globs_can_overlap(&x[1..], &y[1..]),
-        },
-        (None, None) => true,
-        (Some(PseudoGlob::Many), None) => pseudo_globs_can_overlap(&x[1..], &[]),
-        (Some(_), None) => false,
-        (None, Some(_)) => pseudo_globs_can_overlap(y, &[]),
+        }
     }
+    false
 }
 
 /// `pseudoGlobIsSuperSetof`.
+///
+/// The search tracks `(i, j)`, the positions it has reached in `x` and `y`,
+/// and follows the Haskell equations. `x` is a superset when any path
+/// succeeds.
 fn pseudo_glob_is_superset_of(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
-    match (x.first(), y.first()) {
-        (Some(xf), Some(yf)) => match (xf, yf) {
-            (PseudoGlob::Many, PseudoGlob::Many) => pseudo_glob_is_superset_of(x, &y[1..]),
-            (PseudoGlob::Many, _) => {
-                pseudo_glob_is_superset_of(x, &y[1..]) || pseudo_glob_is_superset_of(&x[1..], y)
-            }
-            (_, PseudoGlob::Many) => false,
-            (PseudoGlob::Any, _) => pseudo_glob_is_superset_of(&x[1..], &y[1..]),
-            (_, PseudoGlob::Any) => false,
-            (a, b) => a == b && pseudo_glob_is_superset_of(&x[1..], &y[1..]),
-        },
-        (None, None) => true,
-        (Some(PseudoGlob::Many), None) => pseudo_glob_is_superset_of(&x[1..], &[]),
-        _ => false,
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![(0, 0)];
+    while let Some((i, j)) = pending.pop() {
+        if !seen.insert((i, j)) {
+            continue;
+        }
+        match (x.get(i), y.get(j)) {
+            (Some(xf), Some(yf)) => match (xf, yf) {
+                (PseudoGlob::Many, PseudoGlob::Many) => pending.push((i, j + 1)),
+                (PseudoGlob::Many, _) => {
+                    pending.push((i + 1, j));
+                    pending.push((i, j + 1));
+                }
+                // Upstream tests `(_, PGMany) -> False` before `(PGAny, _)` and
+                // `(_, PGAny) -> False` after it. A `?` against a `?` advances both.
+                (_, PseudoGlob::Many) => {}
+                (PseudoGlob::Any, _) => pending.push((i + 1, j + 1)),
+                (a, b) if a == b => pending.push((i + 1, j + 1)),
+                _ => {}
+            },
+            (None, None) => return true,
+            (Some(PseudoGlob::Many), None) => pending.push((i + 1, j)),
+            _ => {}
+        }
     }
+    false
 }
 
 /// `wordsCanBeEqual`.
@@ -1875,20 +1970,51 @@ fn words_can_be_equal(x: &Token, y: &Token) -> bool {
     pseudo_globs_can_overlap(&word_to_pseudo_glob(x), &word_to_pseudo_glob(y))
 }
 
-/// getExpr + orient for command-level and/or checks.
-fn or_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    cmd_level_get_expr(x)
+/// `getExpr` of `checkOrNeq`. It fetches x and y in `T_OrIf x (T_OrIf y z)`.
+fn or_get_expr(params: &Parameters, x: &Token) -> Option<(Token, String, Token)> {
+    let x = match &*x.inner {
+        InnerToken::T_OrIf { .. } => params.list_head(x),
+        _ => x.clone(),
+    };
+    cmd_level_get_expr(&x, |t| match t {
+        InnerToken::T_OrIf { lhs, .. } => Some(lhs),
+        _ => None,
+    })
 }
 
-fn cmd_level_get_expr(x: &Token) -> Option<(Token, String, Token)> {
-    use InnerToken::{T_AndIf, T_Condition, T_OrIf, T_Pipeline, T_Redirecting, TC_Binary};
-    match &*x.inner {
-        T_OrIf { lhs, .. } | T_AndIf { lhs, .. } => cmd_level_get_expr(lhs),
-        T_Pipeline { commands, .. } if commands.len() == 1 => cmd_level_get_expr(&commands[0]),
-        T_Redirecting { cmd, .. } => cmd_level_get_expr(cmd),
-        T_Condition { token, .. } => cmd_level_get_expr(token),
-        TC_Binary { op, lhs, rhs, .. } => orient(lhs, op, rhs),
+/// `getExpr` of `checkAndEq`. It fetches x and y in
+/// `T_AndIf x (T_AndIf y z)`.
+fn and_get_expr(params: &Parameters, x: &Token) -> Option<(Token, String, Token)> {
+    let x = match &*x.inner {
+        InnerToken::T_AndIf { .. } => params.list_head(x),
+        _ => x.clone(),
+    };
+    cmd_level_get_expr(&x, |t| match t {
+        InnerToken::T_AndIf { lhs, .. } => Some(lhs),
         _ => None,
+    })
+}
+
+/// The shared part of the `getExpr` of `checkOrNeq` and `checkAndEq`. The
+/// two differ only in the list operator they look through, and `list_lhs`
+/// returns the left side of that operator.
+fn cmd_level_get_expr(
+    mut x: &Token,
+    list_lhs: fn(&InnerToken) -> Option<&Token>,
+) -> Option<(Token, String, Token)> {
+    use InnerToken::{T_Condition, T_Pipeline, T_Redirecting, TC_Binary};
+    loop {
+        if let Some(lhs) = list_lhs(&x.inner) {
+            x = lhs;
+            continue;
+        }
+        x = match &*x.inner {
+            T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
+            T_Redirecting { cmd, .. } => cmd,
+            T_Condition { token, .. } => token,
+            TC_Binary { op, lhs, rhs, .. } => return orient(lhs, op, rhs),
+            _ => return None,
+        };
     }
 }
 
@@ -1910,11 +2036,16 @@ fn check_and_eq_operands(op: &str, rhs1: &Token, rhs2: &Token) -> bool {
     }
 }
 
-fn subshell_check(id: Id, t: &Token, out: &mut Out) {
+fn subshell_check(id: Id, mut t: &Token, out: &mut Out) {
     use InnerToken::{T_AndIf, T_Banged, T_OrIf, T_Pipeline, T_Redirecting, T_SimpleCommand};
+    loop {
+        t = match &*t.inner {
+            T_Banged(w) => w,
+            T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => lhs,
+            _ => break,
+        };
+    }
     match &*t.inner {
-        T_Banged(w) => subshell_check(id, w, out),
-        T_AndIf { lhs, .. } | T_OrIf { lhs, .. } => subshell_check(id, lhs, out),
         T_Pipeline { commands, .. } if commands.len() == 1 => {
             if let T_Redirecting { cmd, .. } = &*commands[0].inner
                 && let T_SimpleCommand { assignments, words } = &*cmd.inner
@@ -1961,16 +2092,17 @@ fn check_pipe(params: &Parameters, sep: &Token, out: &mut Out) {
     }
 }
 
-fn check_ands(params: &Parameters, id: Id, t: &Token, out: &mut Out) {
+fn check_ands(params: &Parameters, id: Id, mut t: &Token, out: &mut Out) {
     use InnerToken::{T_AndIf, T_OrIf, T_Pipeline};
-    let next = match &*t.inner {
+    // Follow the right-hand sides and last pipeline elements down to a command.
+    while let Some(next) = match &*t.inner {
         T_AndIf { rhs, .. } | T_OrIf { rhs, .. } => Some(rhs),
         T_Pipeline { commands, .. } => commands.last(),
         _ => None,
-    };
-    if let Some(next) = next {
-        check_ands(params, id, next, out);
-    } else if is_test_command(t) {
+    } {
+        t = next;
+    }
+    if is_test_command(t) {
         err_with_fix(
             out,
             id,
@@ -2075,9 +2207,11 @@ fn check_unary_test_a_impl(params: &Parameters, t: &Token, out: &mut Out) {
 pub(super) fn check_require_double_bracket(params: &Parameters, root: &Token, out: &mut Out) {
     // `isSimple`: operators like `<` and `-o` are not tagged well enough to
     // rewrite, so only the straightforward conditions get a fix.
-    fn is_simple(t: &Token) -> bool {
+    fn is_simple(mut t: &Token) -> bool {
+        while let InnerToken::T_Condition { token, .. } = &*t.inner {
+            t = token;
+        }
         match &*t.inner {
-            InnerToken::T_Condition { token, .. } => is_simple(token),
             InnerToken::TC_Binary { op, .. } => !op.contains(['<', '>']),
             InnerToken::TC_Unary { .. } | InnerToken::TC_Nullary { .. } => true,
             _ => false,
@@ -3026,7 +3160,7 @@ mod tests {
         assert!(emits(check_comparison_with_leading_x, "[ X$foo != Xbar ]"));
     }
 
-    // ---- SC2001 checkEchoSed ----
+    // SC2001 checkEchoSed
 
     #[test]
     fn prop_checkTestArgumentSplitting1() {
@@ -3151,23 +3285,110 @@ mod tests {
         assert!(emits(check_test_argument_splitting, "[ 6 -eq 2*3 ]"));
     }
 
-    // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere ----
+    // SC2216/2217/2259/2260/2261 checkPipeToNowhere
 
-    // ---- SC2233/2234/2235 checkSubshelledTests ----
+    // SC2233/2234/2235 checkSubshelledTests
+
+    /// The per-subshell form of `checkSubshelledTests`, as upstream asks it.
+    fn subshelled_tests_per_node(params: &Parameters) -> Vec<(Id, i64)> {
+        fn is_test_structure(t: &Token) -> bool {
+            match &*t.inner {
+                InnerToken::T_Banged(w) => is_test_structure(w),
+                InnerToken::T_AndIf { lhs, rhs } | InnerToken::T_OrIf { lhs, rhs } => {
+                    is_test_structure(lhs) && is_test_structure(rhs)
+                }
+                InnerToken::T_Pipeline {
+                    separators,
+                    commands,
+                } if separators.is_empty() && commands.len() == 1 => match &*commands[0].inner {
+                    InnerToken::T_Redirecting { cmd, .. } => match &*cmd.inner {
+                        InnerToken::T_BraceGroup(ts) | InnerToken::T_Subshell(ts) => {
+                            ts.iter().all(is_test_structure)
+                        }
+                        _ => sst_is_test_command(t),
+                    },
+                    _ => sst_is_test_command(t),
+                },
+                _ => sst_is_test_command(t),
+            }
+        }
+        let mut found = Vec::new();
+        params.root.visit_preorder(&mut |t| {
+            let InnerToken::T_Subshell(list) = &*t.inner else {
+                return;
+            };
+            let mut assigns = false;
+            t.visit_preorder(&mut |n| assigns |= sst_is_assignment_node(n));
+            if !list.iter().all(is_test_structure) || assigns {
+                return;
+            }
+            let path = get_path(params, t);
+            let decider = path[1..].iter().find(|a| !sst_skippable(a));
+            let compound = decider.is_some_and(|a| {
+                matches!(
+                    &*a.inner,
+                    InnerToken::T_IfExpression { .. }
+                        | InnerToken::T_WhileExpression { .. }
+                        | InnerToken::T_UntilExpression { .. }
+                )
+            });
+            let code = if compound {
+                2233
+            } else if sst_is_single_test(list) && !path.get(1).is_some_and(is_function_tok) {
+                2234
+            } else {
+                2235
+            };
+            found.push((t.id(), code));
+        });
+        found
+    }
+
+    #[test]
+    fn subshelled_tests_walk_equals_the_per_subshell_check() {
+        let scripts = [
+            "( [ a ] )",
+            "a && ( [ b ] || ! [ c ] )",
+            "( [ a ] && { [ b ] && ( [ c ] ); } )",
+            "( ( ( [ a ] ) ) )",
+            "( ( ( true ) ) )",
+            "if ( [ a ] ); then ( ( [ b ] ) ); fi",
+            "while ( ( [ a ] ) ); do :; done",
+            "until ( [ a ] ) > /dev/null; do :; done",
+            "f() ( [[ x ]] )\ng() ( ( [ y ] ) )",
+            "( [[ ${v:=x} = y ]] && ( [ a ] ) )",
+            "( ( [ a ] ) && [[ $((i++)) = 1 ]] )",
+            "( [ a ] ) | ( [ b ] )",
+            "# shellcheck disable=SC2234\n( ( [ a ] ) )",
+        ];
+        let mut codes = std::collections::HashSet::new();
+        for script in scripts {
+            let params = params_for(script);
+            let mut out = Out::new();
+            check_subshelled_tests(&params, &params.root, &mut out);
+            let walked: Vec<(Id, i64)> = out.iter().map(|c| (c.id, c.comment.code)).collect();
+            assert_eq!(walked, subshelled_tests_per_node(&params), "{script}");
+            codes.extend(walked.iter().map(|w| w.1));
+        }
+        assert_eq!(codes.len(), 3);
+    }
 
     #[test]
     fn prop_checkSubshelledTests1() {
-        assert!(emits(check_subshelled_tests, "a && ( [ b ] || ! [ c ] )"));
+        assert!(tree_emits(
+            check_subshelled_tests,
+            "a && ( [ b ] || ! [ c ] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests2() {
-        assert!(emits(check_subshelled_tests, "( [ a ] )"));
+        assert!(tree_emits(check_subshelled_tests, "( [ a ] )"));
     }
 
     #[test]
     fn prop_checkSubshelledTests3() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "( [ a ] && [ b ] || test c )"
         ));
@@ -3175,7 +3396,7 @@ mod tests {
 
     #[test]
     fn prop_checkSubshelledTests4() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "( [ a ] && { [ b ] && [ c ]; } )"
         ));
@@ -3183,22 +3404,31 @@ mod tests {
 
     #[test]
     fn prop_checkSubshelledTests5() {
-        assert!(!emits(check_subshelled_tests, "( [[ ${var:=x} = y ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ ${var:=x} = y ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests6() {
-        assert!(!emits(check_subshelled_tests, "( [[ $((i++)) = 10 ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ $((i++)) = 10 ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests7() {
-        assert!(!emits(check_subshelled_tests, "( [[ $((i+=1)) = 10 ]] )"));
+        assert!(!tree_emits(
+            check_subshelled_tests,
+            "( [[ $((i+=1)) = 10 ]] )"
+        ));
     }
 
     #[test]
     fn prop_checkSubshelledTests8() {
-        assert!(emits(
+        assert!(tree_emits(
             check_subshelled_tests,
             "# shellcheck disable=SC2234\nf() ( [[ x ]] )"
         ));
@@ -3209,7 +3439,7 @@ mod tests {
         assert!(emits(check_single_bracket_operators, "[ test =~ foo ]"));
     }
 
-    // ---- SC2075 checkDoubleBracketOperators ----
+    // SC2075 checkDoubleBracketOperators
 
     #[test]
     fn prop_checkDoubleBracketOperators1() {
@@ -3221,7 +3451,7 @@ mod tests {
         assert!(!emits(check_double_bracket_operators, "[[ foo < bar ]]"));
     }
 
-    // ---- SC2107/2108/2109/2110/2166 checkConditionalAndOrs ----
+    // SC2107/2108/2109/2110/2166 checkConditionalAndOrs
 
     #[test]
     fn prop_checkConditionalAndOrs1() {
@@ -3248,7 +3478,7 @@ mod tests {
         assert!(emits(check_conditional_and_ors, "[ -z 3 -o a = b ]"));
     }
 
-    // ---- SC2049 checkGlobbedRegex ----
+    // SC2049 checkGlobbedRegex
 
     #[test]
     fn prop_checkGlobbedRegex1() {
@@ -3290,7 +3520,7 @@ mod tests {
         assert!(!emits(check_globbed_regex, "[[ $foo =~ x\\* ]]"));
     }
 
-    // ---- SC2050/2193 checkConstantIfs ----
+    // SC2050/2193 checkConstantIfs
 
     #[test]
     fn prop_checkConstantIfs1() {
@@ -3357,7 +3587,7 @@ mod tests {
         assert!(emits(check_constant_ifs, "[[ '~' == x ]]"));
     }
 
-    // ---- SC2158/2159/2160/2161/2078 checkConstantNullary ----
+    // SC2158/2159/2160/2161/2078 checkConstantNullary
 
     #[test]
     fn prop_checkConstantNullary() {
@@ -3394,7 +3624,7 @@ mod tests {
         assert!(emits_code(check_constant_nullary, "[ false ]", 2158));
     }
 
-    // ---- SC2057/2058 checkValidCondOps ----
+    // SC2057/2058 checkValidCondOps
 
     #[test]
     fn prop_checkValidCondOps1() {
@@ -3421,7 +3651,7 @@ mod tests {
         assert!(!emits(check_valid_cond_ops, "[[ ! -v foo ]]"));
     }
 
-    // ---- SC2053/2081/2330 checkComparisonAgainstGlob ----
+    // SC2053/2081/2330 checkComparisonAgainstGlob
 
     #[test]
     fn prop_checkComparisonAgainstGlob() {
@@ -3465,7 +3695,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2254 checkCaseAgainstGlob ----
+    // SC2254 checkCaseAgainstGlob
 
     #[test]
     fn prop_checkCaseAgainstGlob1() {
@@ -3491,7 +3721,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2055/2056/2252 checkOrNeq ----
+    // SC2055/2056/2252 checkOrNeq
 
     #[test]
     fn prop_checkOrNeq1() {
@@ -3544,7 +3774,19 @@ mod tests {
         assert!(!emits(check_or_neq, "[ 0 -ne $FOO ] || [ 0 -ne $BAR ]"));
     }
 
-    // ---- SC2333/2334 checkAndEq ----
+    #[test]
+    fn or_neq_does_not_look_through_and() {
+        assert!(!emits(
+            check_or_neq,
+            "[ \"$a\" != 1 ] && x || [ \"$a\" != 2 ]"
+        ));
+        assert!(emits(
+            check_or_neq,
+            "[ \"$a\" != 1 ] || x || [ \"$a\" != 2 ]"
+        ));
+    }
+
+    // SC2333/2334 checkAndEq
 
     #[test]
     fn prop_checkAndEq1() {
@@ -3622,7 +3864,16 @@ mod tests {
         assert!(!emits(check_and_eq, "[ $a = $b ] && [ $a = $c ]"));
     }
 
-    // ---- SC2204/2205 checkSubshellAsTest ----
+    #[test]
+    fn and_eq_does_not_look_through_or() {
+        assert!(!emits(
+            check_and_eq,
+            "[ \"$a\" = 1 ] || x && [ \"$a\" = 2 ]"
+        ));
+        assert!(emits(check_and_eq, "[ \"$a\" = 1 ] && x && [ \"$a\" = 2 ]"));
+    }
+
+    // SC2204/2205 checkSubshellAsTest
 
     #[test]
     fn prop_checkSubshellAsTest1() {
@@ -3662,7 +3913,7 @@ mod tests {
         assert!(emits(check_subshell_as_test, "( ! -d file )"));
     }
 
-    // ---- SC2212 checkEmptyCondition ----
+    // SC2212 checkEmptyCondition
 
     #[test]
     fn prop_checkEmptyCondition1() {
@@ -3674,7 +3925,7 @@ mod tests {
         assert!(!emits(check_empty_condition, "[ foo -o bar ]"));
     }
 
-    // ---- SC2265/2266 checkBadTestAndOr ----
+    // SC2265/2266 checkBadTestAndOr
 
     #[test]
     fn prop_checkBadTestAndOr1() {
@@ -3691,7 +3942,7 @@ mod tests {
         assert!(emits(check_bad_test_and_or, "[ x ] | [ y ]"));
     }
 
-    // ---- SC2283/2284/2285 checkSecondArgIsComparison ----
+    // SC2283/2284/2285 checkSecondArgIsComparison
 
     #[test]
     fn prop_checkSecondArgIsComparison1() {
@@ -3743,7 +3994,7 @@ mod tests {
         assert!(emits(check_second_arg_is_comparison, "var +=$(foo)"));
     }
 
-    // ---- SC2171 checkTrailingBracket ----
+    // SC2171 checkTrailingBracket
 
     #[test]
     fn prop_checkTrailingBracket1() {
@@ -3773,7 +4024,7 @@ mod tests {
         assert!(!emits(check_trailing_bracket, "run bar ']'"));
     }
 
-    // ---- SC2331 checkUnaryTestA ----
+    // SC2331 checkUnaryTestA
 
     #[test]
     fn prop_checkUnaryTestA1() {
@@ -3790,7 +4041,7 @@ mod tests {
         assert!(!emits(check_unary_test_a, "[ foo -a bar ]"));
     }
 
-    // ---- SC2194/2195/2221/2222 checkUnmatchableCases ----
+    // SC2194/2195/2221/2222 checkUnmatchableCases
 
     #[test]
     fn prop_checkUnmatchableCases1() {
@@ -3864,7 +4115,86 @@ mod tests {
         ));
     }
 
-    // ---- SC2101/2102 checkCharRangeGlob ----
+    #[test]
+    fn a_question_mark_is_a_superset_of_a_question_mark() {
+        assert!(emits_code(
+            check_unmatchable_cases,
+            "case \"$x\" in a?) : ;; a?) : ;; esac",
+            2221
+        ));
+    }
+
+    /// Every pattern of up to three of `a`, `b`, `?` and `*`.
+    fn small_pseudo_globs() -> Vec<Vec<PseudoGlob>> {
+        let atoms = [
+            PseudoGlob::Char('a'),
+            PseudoGlob::Char('b'),
+            PseudoGlob::Any,
+            PseudoGlob::Many,
+        ];
+        let mut all = vec![Vec::new()];
+        let mut last = vec![Vec::new()];
+        for _ in 0..3 {
+            last = last
+                .iter()
+                .flat_map(|g: &Vec<PseudoGlob>| {
+                    atoms.iter().map(move |a| {
+                        let mut g = g.clone();
+                        g.push(*a);
+                        g
+                    })
+                })
+                .collect();
+            all.extend(last.iter().cloned());
+        }
+        all
+    }
+
+    #[test]
+    fn pseudo_glob_searches_equal_the_haskell_equations() {
+        use PseudoGlob::{Any, Many};
+        fn overlap(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
+            match (x.first(), y.first()) {
+                (Some(xf), Some(yf)) => match (xf, yf) {
+                    (Many, _) | (_, Many) => overlap(x, &y[1..]) || overlap(&x[1..], y),
+                    (Any, _) | (_, Any) => overlap(&x[1..], &y[1..]),
+                    (a, b) => a == b && overlap(&x[1..], &y[1..]),
+                },
+                (None, None) => true,
+                (Some(Many), None) => overlap(&x[1..], &[]),
+                (Some(_), None) => false,
+                (None, Some(_)) => overlap(y, &[]),
+            }
+        }
+        fn superset(x: &[PseudoGlob], y: &[PseudoGlob]) -> bool {
+            match (x.first(), y.first()) {
+                (Some(xf), Some(yf)) => match (xf, yf) {
+                    (Many, Many) => superset(x, &y[1..]),
+                    (Many, _) => superset(x, &y[1..]) || superset(&x[1..], y),
+                    (_, Many) => false,
+                    (Any, _) => superset(&x[1..], &y[1..]),
+                    (_, Any) => false,
+                    (a, b) => a == b && superset(&x[1..], &y[1..]),
+                },
+                (None, None) => true,
+                (Some(Many), None) => superset(&x[1..], &[]),
+                _ => false,
+            }
+        }
+        let globs = small_pseudo_globs();
+        for x in &globs {
+            for y in &globs {
+                assert_eq!(pseudo_globs_can_overlap(x, y), overlap(x, y), "{x:?} {y:?}");
+                assert_eq!(
+                    pseudo_glob_is_superset_of(x, y),
+                    superset(x, y),
+                    "{x:?} {y:?}"
+                );
+            }
+        }
+    }
+
+    // SC2101/2102 checkCharRangeGlob
 
     #[test]
     fn prop_checkCharRangeGlob1() {

@@ -161,32 +161,25 @@ fn warn_msg(out: &mut Out, p: &Parameters, id: Id, code: i64, s: &str) {
 /// `ast_lib::get_literal_string`, this one also flattens `TA_Expansion`
 /// (needed by `checkForDecimals`).
 fn lit_string(t: &Token) -> Option<String> {
-    fn go(t: &Token, out: &mut String) -> bool {
-        use InnerToken::{
-            T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
-            T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
-        };
+    use InnerToken::{
+        T_DollarDoubleQuoted, T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_SingleQuoted, TA_Expansion,
+    };
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
         match &*t.inner {
             T_Literal(s)
             | T_SingleQuoted(s)
             | T_DollarSingleQuoted(s)
-            | T_ParamSubSpecialChar(s) => {
-                out.push_str(s);
-                true
-            }
+            | T_ParamSubSpecialChar(s) => out.push_str(s),
             T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | TA_Expansion(l) => {
-                for p in l {
-                    if !go(p, out) {
-                        return false;
-                    }
-                }
-                true
+                pending.extend(l.iter().rev());
             }
-            _ => false,
+            _ => return None,
         }
     }
-    let mut s = String::new();
-    if go(t, &mut s) { Some(s) } else { None }
+    Some(out)
 }
 
 fn for_decimals(_p: &Parameters, t: &Token, out: &mut Out) {
@@ -237,29 +230,27 @@ fn brace_expansion_vars(p: &Parameters, t: &Token, out: &mut Out) {
 /// `toString`: `getLiteralStringExt literalExt` where `literalExt` yields "$"
 /// for `$`-expansions and "-" for anything else non-literal.
 fn brace_element_to_string(t: &Token) -> String {
-    fn go(t: &Token, out: &mut String) {
-        use InnerToken::{
-            T_DollarArithmetic, T_DollarBraced, T_DollarDoubleQuoted, T_DollarExpansion,
-            T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord, T_ParamSubSpecialChar,
-            T_SingleQuoted, TA_Expansion,
-        };
+    use InnerToken::{
+        T_DollarArithmetic, T_DollarBraced, T_DollarDoubleQuoted, T_DollarExpansion,
+        T_DollarSingleQuoted, T_DoubleQuoted, T_Literal, T_NormalWord, T_ParamSubSpecialChar,
+        T_SingleQuoted, TA_Expansion,
+    };
+    let mut out = String::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
         match &*t.inner {
             T_Literal(s)
             | T_SingleQuoted(s)
             | T_DollarSingleQuoted(s)
             | T_ParamSubSpecialChar(s) => out.push_str(s),
             T_NormalWord(l) | T_DoubleQuoted(l) | T_DollarDoubleQuoted(l) | TA_Expansion(l) => {
-                for p in l {
-                    go(p, out);
-                }
+                pending.extend(l.iter().rev());
             }
             T_DollarBraced { .. } | T_DollarExpansion(_) | T_DollarArithmetic(_) => out.push('$'),
             _ => out.push('-'),
         }
     }
-    let mut s = String::new();
-    go(t, &mut s);
-    s
+    out
 }
 
 /// `isEvaled`: the closest enclosing command is an unqualified `eval`.
@@ -1054,45 +1045,54 @@ fn check_set_options(p: &Parameters, t: &Token, out: &mut Out) {
     check_set_options_rec(p, &args, out);
 }
 
+/// `checkOptions` and `checkFlags`, which call each other once per argument.
+/// `checkOptions` drops the option name after an `-o` flag and passes the
+/// flag on. `checkFlags` reads one flag and passes the rest back.
 fn check_set_options_rec(p: &Parameters, args: &[(Id, String)], out: &mut Out) {
-    if args.len() >= 2 {
-        let (_fid, flag) = &args[0];
-        let (oid, opt) = &args[1];
-        if set_o_flag(flag) {
-            if !SET_LONG_OPTIONS.contains(&opt.as_str()) {
-                warn_msg(out, p, *oid, 3040, &format!("set option {opt} is"));
-            }
-            let mut next = vec![args[0].clone()];
-            next.extend_from_slice(&args[2..]);
-            check_set_flags_rec(p, &next, out);
-            return;
-        }
-        check_set_flags_rec(p, args, out);
-        return;
+    enum Next {
+        Options,
+        Flags,
     }
-    if args.len() == 1 {
-        check_set_flags_rec(p, args, out);
-    }
-}
-
-fn check_set_flags_rec(p: &Parameters, args: &[(Id, String)], out: &mut Out) {
-    if args.is_empty() {
-        return;
-    }
-    let (fid, flag) = &args[0];
-    let rest = &args[1..];
-    if set_starts_option(flag) {
-        if !set_valid_flags(flag) {
-            for letter in flag.chars().skip(1) {
-                if !SET_OPTIONS.contains(letter) {
-                    warn_msg(out, p, *fid, 3041, &format!("set flag -{letter} is"));
+    // The remaining arguments, last one first. The head pops off the end.
+    let mut args: Vec<(Id, String)> = args.iter().rev().cloned().collect();
+    let mut next = Next::Options;
+    loop {
+        match next {
+            Next::Options => {
+                if let [.., (oid, opt), (_fid, flag)] = &args[..] {
+                    if set_o_flag(flag) {
+                        if !SET_LONG_OPTIONS.contains(&opt.as_str()) {
+                            warn_msg(out, p, *oid, 3040, &format!("set option {opt} is"));
+                        }
+                        let flag = args.pop();
+                        args.pop();
+                        args.extend(flag);
+                    }
+                } else if args.is_empty() {
+                    return;
                 }
+                next = Next::Flags;
+            }
+            Next::Flags => {
+                let Some((fid, flag)) = args.pop() else {
+                    return;
+                };
+                if set_starts_option(&flag) {
+                    if !set_valid_flags(&flag) {
+                        for letter in flag.chars().skip(1) {
+                            if !SET_OPTIONS.contains(letter) {
+                                warn_msg(out, p, fid, 3041, &format!("set flag -{letter} is"));
+                            }
+                        }
+                    }
+                } else if set_begins_double_dash(&flag) {
+                    warn_msg(out, p, fid, 3042, &format!("set flag {flag} is"));
+                } else {
+                    return;
+                }
+                next = Next::Options;
             }
         }
-        check_set_options_rec(p, rest, out);
-    } else if set_begins_double_dash(flag) {
-        warn_msg(out, p, *fid, 3042, &format!("set flag {flag} is"));
-        check_set_options_rec(p, rest, out);
     }
 }
 
@@ -1138,7 +1138,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2093 checkSpuriousExec ----
+    // SC2093 checkSpuriousExec
 
     #[test]
     fn prop_checkForDecimals1() {
@@ -1155,7 +1155,7 @@ mod tests {
         assert!(!emits(for_decimals, "declare -A foo; foo[1.2]=bar"));
     }
 
-    // ---- checkBashisms (full SC30xx family) ----
+    // checkBashisms (full SC30xx family)
 
     #[test]
     fn prop_checkBashisms() {
@@ -1978,7 +1978,7 @@ mod tests {
         ));
     }
 
-    // ---- checkBraceExpansionVars (SC2051 / SC2175) ----
+    // checkBraceExpansionVars (SC2051 / SC2175)
 
     #[test]
     fn prop_checkBraceExpansionVars1() {
@@ -2000,7 +2000,7 @@ mod tests {
         assert!(emits(brace_expansion_vars, "echo {$i..100}"));
     }
 
-    // ---- checkMultiDimensionalArrays (SC2180) ----
+    // checkMultiDimensionalArrays (SC2180)
 
     #[test]
     fn prop_checkMultiDimensionalArrays1() {
@@ -2064,7 +2064,7 @@ mod tests {
         ));
     }
 
-    // ---- checkMultipleBangs (SC2325) ----
+    // checkMultipleBangs (SC2325)
 
     #[test]
     fn prop_checkMultipleBangs1() {
@@ -2076,7 +2076,7 @@ mod tests {
         assert!(!emits(multiple_bangs, "! true"));
     }
 
-    // ---- checkBangAfterPipe (SC2326) ----
+    // checkBangAfterPipe (SC2326)
 
     #[test]
     fn prop_checkBangAfterPipe1() {
@@ -2093,7 +2093,7 @@ mod tests {
         assert!(!emits(bang_after_pipe, "! ! true | true"));
     }
 
-    // ---- checkNegatedUnaryOps (SC2332) ----
+    // checkNegatedUnaryOps (SC2332)
 
     #[test]
     fn prop_checkNegatedUnaryOps1() {

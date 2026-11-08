@@ -433,8 +433,14 @@ pub(super) fn check_expansion_with_redirection(params: &Parameters, t: &Token, o
 
 /// Pre-order traversal of every node in `t`'s subtree (`doAnalysis` order).
 fn all_nodes<'a>(t: &'a Token, out: &mut Vec<&'a Token>) {
-    out.push(t);
-    t.inner.for_each_child(|c| all_nodes(c, out));
+    let mut pending = vec![t];
+    let mut children = Vec::new();
+    while let Some(t) = pending.pop() {
+        out.push(t);
+        t.inner.for_each_child(|c| children.push(c));
+        pending.extend(children.iter().rev());
+        children.clear();
+    }
 }
 
 /// `isParentOf parentMap ancestor child`: is `ancestor` on the path from `child`
@@ -550,10 +556,15 @@ fn contains_assignment(params: &Parameters, arg: &Token) -> bool {
 }
 
 /// `getTarget`: (append-file, redirecting-id) for a command that appends (`>>`).
-fn get_target(t: &Token) -> Option<(&Token, Id)> {
+fn get_target(mut t: &Token) -> Option<(&Token, Id)> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Annotation { token, .. } => token,
+            InnerToken::T_Pipeline { commands, .. } => commands.last()?,
+            _ => break,
+        };
+    }
     match &*t.inner {
-        InnerToken::T_Annotation { token, .. } => get_target(token),
-        InnerToken::T_Pipeline { commands, .. } => get_target(commands.last()?),
         InnerToken::T_Redirecting { redirs, .. } => {
             // file <- mapMaybe getAppend list !!! 0
             for r in redirs {
@@ -605,15 +616,20 @@ fn rn_get_dangling_redirect(token: &Token) -> Option<&Token> {
 }
 
 fn rn_is_in_expansion(params: &Parameters, t: &Token) -> bool {
-    let path = get_path(params, t);
-    // NE.tail: ancestors only.
-    if path.len() < 2 {
-        return false;
-    }
-    match &*path[1].inner {
-        InnerToken::T_DollarExpansion(l) | InnerToken::T_Backticked(l) if l.len() == 1 => true,
-        InnerToken::T_Annotation { .. } => rn_is_in_expansion(params, &path[1]),
-        _ => false,
+    let mut t = t.clone();
+    loop {
+        let path = get_path(params, &t);
+        // NE.tail: ancestors only.
+        let Some(parent) = path.get(1) else {
+            return false;
+        };
+        match &*parent.inner {
+            InnerToken::T_DollarExpansion(l) | InnerToken::T_Backticked(l) if l.len() == 1 => {
+                return true;
+            }
+            InnerToken::T_Annotation { .. } => t = parent.clone(),
+            _ => return false,
+        }
     }
 }
 
@@ -672,27 +688,31 @@ fn ptn_may_produce(t: &Token) -> bool {
     matches!(&*t.inner, InnerToken::T_ProcSub { op, .. } if op == ">")
 }
 
-fn ptn_get_op_id(t: &Token) -> Id {
+fn ptn_get_op_id(mut t: &Token) -> Id {
+    while let InnerToken::T_FdRedirect { target, .. } = &*t.inner {
+        t = target;
+    }
     match &*t.inner {
-        InnerToken::T_FdRedirect { target, .. } => ptn_get_op_id(target),
         InnerToken::T_IoFile { op, .. } => op.id(),
         _ => t.id(),
     }
 }
 
-fn ptn_get_default_fds(redir: &Token) -> Option<Vec<i64>> {
-    match &*redir.inner {
-        InnerToken::T_HereDoc { .. } | InnerToken::T_HereString(_) => Some(vec![0]),
-        InnerToken::T_IoFile { op, .. } => match &*op.inner {
-            InnerToken::T_Less => Some(vec![0]),
-            InnerToken::T_Greater | InnerToken::T_DGREAT | InnerToken::T_CLOBBER => Some(vec![1]),
-            InnerToken::T_GREATAND => Some(vec![1, 2]),
-            InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => {
-                ptn_get_default_fds(inner)
-            }
-            _ => None,
-        },
-        _ => None,
+fn ptn_get_default_fds(mut redir: &Token) -> Option<Vec<i64>> {
+    loop {
+        redir = match &*redir.inner {
+            InnerToken::T_HereDoc { .. } | InnerToken::T_HereString(_) => return Some(vec![0]),
+            InnerToken::T_IoFile { op, .. } => match &*op.inner {
+                InnerToken::T_Less => return Some(vec![0]),
+                InnerToken::T_Greater | InnerToken::T_DGREAT | InnerToken::T_CLOBBER => {
+                    return Some(vec![1]);
+                }
+                InnerToken::T_GREATAND => return Some(vec![1, 2]),
+                InnerToken::T_IoDuplicate { op: inner, num } if num == "-" => inner,
+                _ => return None,
+            },
+            _ => return None,
+        };
     }
 }
 
@@ -961,13 +981,7 @@ fn command_flag_strings(cmd: Option<&Token>) -> Vec<String> {
 /// `indexOfSublists sub list` with "?" wildcard matching any element.
 fn index_of_sublists(sub: &[&str], list: &[String]) -> Vec<usize> {
     fn matches_at(sub: &[&str], list: &[String]) -> bool {
-        match (sub.first(), list.first()) {
-            (Some(x), Some(y)) if *x == "?" || *x == y.as_str() => {
-                matches_at(&sub[1..], &list[1..])
-            }
-            (Some(_), _) => false,
-            (None, _) => true,
-        }
+        sub.len() <= list.len() && sub.iter().zip(list).all(|(x, y)| *x == "?" || *x == y)
     }
     let mut out = vec![];
     for n in 0..list.len() {
@@ -982,17 +996,19 @@ const GREP_NAMES: &[&str] = &[
     "grep", "egrep", "fgrep", "bz3grep", "bzgrep", "xzgrep", "zgrep", "zipgrep", "zstdgrep",
 ];
 
-fn get_pipeline(t: &Token) -> Option<Vec<Token>> {
-    match &*t.inner {
-        InnerToken::T_NormalWord(l)
-        | InnerToken::T_DoubleQuoted(l)
-        | InnerToken::T_DollarExpansion(l)
-            if l.len() == 1 =>
-        {
-            get_pipeline(&l[0])
-        }
-        InnerToken::T_Pipeline { commands, .. } => Some(commands.clone()),
-        _ => None,
+fn get_pipeline(mut t: &Token) -> Option<Vec<Token>> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_NormalWord(l)
+            | InnerToken::T_DoubleQuoted(l)
+            | InnerToken::T_DollarExpansion(l)
+                if l.len() == 1 =>
+            {
+                &l[0]
+            }
+            InnerToken::T_Pipeline { commands, .. } => return Some(commands.clone()),
+            _ => return None,
+        };
     }
 }
 
@@ -1239,7 +1255,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2097/2098 checkPrefixAssignmentReference ----
+    // SC2097/2098 checkPrefixAssignmentReference
 
     #[test]
     fn prop_checkRedirectedNowhere1() {
@@ -1287,7 +1303,7 @@ mod tests {
         assert!(!node_emits(check_redirected_nowhere, "var=`< file`"));
     }
 
-    // ---- SC2210 checkRedirectionToNumber ----
+    // SC2210 checkRedirectionToNumber
 
     #[test]
     fn prop_checkRedirectionToNumber1() {
@@ -1309,7 +1325,7 @@ mod tests {
         assert!(!node_emits(check_redirection_to_number, "foo 1>&2"));
     }
 
-    // ---- SC2238 checkRedirectionToCommand ----
+    // SC2238 checkRedirectionToCommand
 
     #[test]
     fn prop_checkRedirectionToCommand1() {
@@ -1326,7 +1342,7 @@ mod tests {
         assert!(!node_emits(check_redirection_to_command, "ls > myfile"));
     }
 
-    // ---- SC2216/2217/2259/2260/2261 checkPipeToNowhere (full) ----
+    // SC2216/2217/2259/2260/2261 checkPipeToNowhere (full)
 
     #[test]
     fn prop_checkPipeToNowhere1() {
@@ -1460,7 +1476,7 @@ mod tests {
         ));
     }
 
-    // ---- SC2327/2328 checkExpansionWithRedirection ----
+    // SC2327/2328 checkExpansionWithRedirection
 
     #[test]
     fn prop_checkExpansionWithRedirection1() {
@@ -1526,14 +1542,14 @@ mod tests {
         ));
     }
 
-    // ---- SC2190/2191/2192 checkArrayAssignmentIndices ----
+    // SC2190/2191/2192 checkArrayAssignmentIndices
 
     #[test]
     fn prop_checkEchoWc3() {
         assert!(emits(check_echo_wc, "n=$(echo $foo | wc -c)"));
     }
 
-    // ---- checkPipedAssignment ----
+    // checkPipedAssignment
 
     #[test]
     fn prop_checkPipedAssignment1() {
@@ -1550,7 +1566,7 @@ mod tests {
         assert!(!emits(check_piped_assignment, "A=foo"));
     }
 
-    // ---- checkArithmeticOpCommand ----
+    // checkArithmeticOpCommand
 
     #[test]
     fn prop_checkPipePitfalls3() {
@@ -1669,7 +1685,7 @@ mod tests {
         ));
     }
 
-    // ---- checkShebangParameters ----
+    // checkShebangParameters
 
     #[test]
     fn prop_checkStderrPipe1() {
@@ -1681,7 +1697,7 @@ mod tests {
         assert!(!emits(check_stderr_pipe, "#!/bin/bash\nfoo |& bar"));
     }
 
-    // ---- checkOverridingPath ----
+    // checkOverridingPath
 
     #[test]
     fn prop_checkGrepQ1() {
@@ -1716,5 +1732,5 @@ mod tests {
         assert!(!emits(check_should_use_grep_q, "[[ -n $(pgrep foo) ]]"));
     }
 
-    // ---- checkCpLegacyR ----
+    // checkCpLegacyR
 }

@@ -7353,7 +7353,7 @@
       "x-tombi-table-keys-order": "ascending"
     },
     "plugin:typescript": {
-      "$id": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json",
+      "$id": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json",
       "$defs": {
         "dprint-override": {
           "type": "object",
@@ -7363,166 +7363,166 @@
           ],
           "properties": {
             "arguments.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arguments.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arguments.preferHanging"
             },
             "arguments.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arguments.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arguments.preferSingleLine"
             },
             "arguments.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arguments.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arguments.spaceAround"
             },
             "arguments.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arguments.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arguments.trailingCommas"
             },
             "arrayExpression.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayExpression.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayExpression.preferHanging"
             },
             "arrayExpression.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayExpression.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayExpression.preferSingleLine"
             },
             "arrayExpression.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayExpression.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayExpression.spaceAround"
             },
             "arrayExpression.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayExpression.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayExpression.trailingCommas"
             },
             "arrayPattern.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayPattern.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayPattern.preferHanging"
             },
             "arrayPattern.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayPattern.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayPattern.preferSingleLine"
             },
             "arrayPattern.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayPattern.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayPattern.spaceAround"
             },
             "arrayPattern.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrayPattern.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrayPattern.trailingCommas"
             },
             "arrowFunction.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrowFunction.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrowFunction.blockPadding"
             },
             "arrowFunction.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrowFunction.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrowFunction.bracePosition"
             },
             "arrowFunction.useParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/arrowFunction.useParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/arrowFunction.useParentheses"
             },
             "binaryExpression.linePerExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/binaryExpression.linePerExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/binaryExpression.linePerExpression"
             },
             "binaryExpression.operatorPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/binaryExpression.operatorPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/binaryExpression.operatorPosition"
             },
             "binaryExpression.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/binaryExpression.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/binaryExpression.preferSingleLine"
             },
             "binaryExpression.spaceSurroundingBitwiseAndArithmeticOperator": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/binaryExpression.spaceSurroundingBitwiseAndArithmeticOperator"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/binaryExpression.spaceSurroundingBitwiseAndArithmeticOperator"
             },
             "blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/blockPadding"
             },
             "bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/bracePosition"
             },
             "catchClause.spaceAfterCatchKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/catchClause.spaceAfterCatchKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/catchClause.spaceAfterCatchKeyword"
             },
             "catchClause.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/catchClause.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/catchClause.spaceAround"
             },
             "classDeclaration.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classDeclaration.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classDeclaration.blockPadding"
             },
             "classDeclaration.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classDeclaration.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classDeclaration.bracePosition"
             },
             "classDeclaration.memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classDeclaration.memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classDeclaration.memberSpacing"
             },
             "classExpression.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classExpression.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classExpression.blockPadding"
             },
             "classExpression.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classExpression.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classExpression.bracePosition"
             },
             "classExpression.memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/classExpression.memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/classExpression.memberSpacing"
             },
             "commentLine.forceSpaceAfterSlashes": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/commentLine.forceSpaceAfterSlashes"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/commentLine.forceSpaceAfterSlashes"
             },
             "computed.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/computed.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/computed.preferSingleLine"
             },
             "conditionalExpression.indentBranchContent": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalExpression.indentBranchContent"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalExpression.indentBranchContent"
             },
             "conditionalExpression.linePerExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalExpression.linePerExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalExpression.linePerExpression"
             },
             "conditionalExpression.operatorPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalExpression.operatorPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalExpression.operatorPosition"
             },
             "conditionalExpression.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalExpression.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalExpression.preferSingleLine"
             },
             "conditionalExpression.useNestedIndentation": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalExpression.useNestedIndentation"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalExpression.useNestedIndentation"
             },
             "conditionalType.linePerExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalType.linePerExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalType.linePerExpression"
             },
             "conditionalType.operatorPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalType.operatorPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalType.operatorPosition"
             },
             "conditionalType.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalType.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalType.preferSingleLine"
             },
             "conditionalType.useNestedIndentation": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/conditionalType.useNestedIndentation"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/conditionalType.useNestedIndentation"
             },
             "constructSignature.spaceAfterNewKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/constructSignature.spaceAfterNewKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/constructSignature.spaceAfterNewKeyword"
             },
             "constructor.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/constructor.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/constructor.blockPadding"
             },
             "constructor.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/constructor.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/constructor.bracePosition"
             },
             "constructor.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/constructor.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/constructor.spaceBeforeParentheses"
             },
             "constructorType.spaceAfterNewKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/constructorType.spaceAfterNewKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/constructorType.spaceAfterNewKeyword"
             },
             "decorators.position": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/decorators.position"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/decorators.position"
             },
             "decorators.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/decorators.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/decorators.preferSingleLine"
             },
             "deno": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/deno"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/deno"
             },
             "doWhileStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.blockPadding"
             },
             "doWhileStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.bracePosition"
             },
             "doWhileStatement.nextControlFlowPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.nextControlFlowPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.nextControlFlowPosition"
             },
             "doWhileStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.preferHanging"
             },
             "doWhileStatement.spaceAfterWhileKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.spaceAfterWhileKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.spaceAfterWhileKeyword"
             },
             "doWhileStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/doWhileStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/doWhileStatement.spaceAround"
             },
             "embedded": {
               "description": "The plugins that format the code the plugin hands back to dprint for the files, by the code's file extension, in order. An empty array leaves that code as it is.",
@@ -7538,43 +7538,43 @@
               }
             },
             "enumDeclaration.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/enumDeclaration.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/enumDeclaration.blockPadding"
             },
             "enumDeclaration.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/enumDeclaration.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/enumDeclaration.bracePosition"
             },
             "enumDeclaration.memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/enumDeclaration.memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/enumDeclaration.memberSpacing"
             },
             "enumDeclaration.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/enumDeclaration.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/enumDeclaration.trailingCommas"
             },
             "exportDeclaration.forceMultiLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.forceMultiLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.forceMultiLine"
             },
             "exportDeclaration.forceSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.forceSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.forceSingleLine"
             },
             "exportDeclaration.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.preferHanging"
             },
             "exportDeclaration.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.preferSingleLine"
             },
             "exportDeclaration.sortNamedExports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.sortNamedExports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.sortNamedExports"
             },
             "exportDeclaration.sortTypeOnlyExports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.sortTypeOnlyExports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.sortTypeOnlyExports"
             },
             "exportDeclaration.spaceSurroundingNamedExports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.spaceSurroundingNamedExports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.spaceSurroundingNamedExports"
             },
             "exportDeclaration.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/exportDeclaration.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/exportDeclaration.trailingCommas"
             },
             "extendsClause.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/extendsClause.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/extendsClause.preferHanging"
             },
             "files": {
               "description": "File patterns this override applies to.",
@@ -7592,526 +7592,529 @@
               ]
             },
             "forInStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.blockPadding"
             },
             "forInStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.bracePosition"
             },
             "forInStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.preferHanging"
             },
             "forInStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.singleBodyPosition"
             },
             "forInStatement.spaceAfterForKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.spaceAfterForKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.spaceAfterForKeyword"
             },
             "forInStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.spaceAround"
             },
             "forInStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forInStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forInStatement.useBraces"
             },
             "forOfStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.blockPadding"
             },
             "forOfStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.bracePosition"
             },
             "forOfStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.preferHanging"
             },
             "forOfStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.singleBodyPosition"
             },
             "forOfStatement.spaceAfterForKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.spaceAfterForKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.spaceAfterForKeyword"
             },
             "forOfStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.spaceAround"
             },
             "forOfStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forOfStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forOfStatement.useBraces"
             },
             "forStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.blockPadding"
             },
             "forStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.bracePosition"
             },
             "forStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.preferHanging"
             },
             "forStatement.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.preferSingleLine"
             },
             "forStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.singleBodyPosition"
             },
             "forStatement.spaceAfterForKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.spaceAfterForKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.spaceAfterForKeyword"
             },
             "forStatement.spaceAfterSemicolons": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.spaceAfterSemicolons"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.spaceAfterSemicolons"
             },
             "forStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.spaceAround"
             },
             "forStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/forStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/forStatement.useBraces"
             },
             "functionDeclaration.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionDeclaration.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionDeclaration.blockPadding"
             },
             "functionDeclaration.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionDeclaration.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionDeclaration.bracePosition"
             },
             "functionDeclaration.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionDeclaration.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionDeclaration.spaceBeforeParentheses"
             },
             "functionExpression.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionExpression.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionExpression.blockPadding"
             },
             "functionExpression.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionExpression.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionExpression.bracePosition"
             },
             "functionExpression.flatIife": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionExpression.flatIife"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionExpression.flatIife"
             },
             "functionExpression.spaceAfterFunctionKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionExpression.spaceAfterFunctionKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionExpression.spaceAfterFunctionKeyword"
             },
             "functionExpression.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/functionExpression.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/functionExpression.spaceBeforeParentheses"
             },
             "getAccessor.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/getAccessor.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/getAccessor.blockPadding"
             },
             "getAccessor.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/getAccessor.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/getAccessor.bracePosition"
             },
             "getAccessor.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/getAccessor.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/getAccessor.spaceBeforeParentheses"
             },
             "ifStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.blockPadding"
             },
             "ifStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.bracePosition"
             },
             "ifStatement.nextControlFlowPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.nextControlFlowPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.nextControlFlowPosition"
             },
             "ifStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.preferHanging"
             },
             "ifStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.singleBodyPosition"
             },
             "ifStatement.spaceAfterIfKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.spaceAfterIfKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.spaceAfterIfKeyword"
             },
             "ifStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.spaceAround"
             },
             "ifStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ifStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ifStatement.useBraces"
             },
             "ignoreFileCommentText": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ignoreFileCommentText"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ignoreFileCommentText"
             },
             "ignoreNodeCommentText": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/ignoreNodeCommentText"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/ignoreNodeCommentText"
             },
             "implementsClause.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/implementsClause.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/implementsClause.preferHanging"
             },
             "importDeclaration.forceMultiLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.forceMultiLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.forceMultiLine"
             },
             "importDeclaration.forceSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.forceSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.forceSingleLine"
             },
             "importDeclaration.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.preferHanging"
             },
             "importDeclaration.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.preferSingleLine"
             },
             "importDeclaration.sortNamedImports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.sortNamedImports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.sortNamedImports"
             },
             "importDeclaration.sortTypeOnlyImports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.sortTypeOnlyImports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.sortTypeOnlyImports"
             },
             "importDeclaration.spaceSurroundingNamedImports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.spaceSurroundingNamedImports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.spaceSurroundingNamedImports"
             },
             "importDeclaration.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/importDeclaration.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/importDeclaration.trailingCommas"
             },
             "indentWidth": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/indentWidth"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/indentWidth"
             },
             "interfaceDeclaration.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/interfaceDeclaration.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/interfaceDeclaration.blockPadding"
             },
             "interfaceDeclaration.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/interfaceDeclaration.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/interfaceDeclaration.bracePosition"
             },
             "interfaceDeclaration.memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/interfaceDeclaration.memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/interfaceDeclaration.memberSpacing"
             },
             "jsx.bracketPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsx.bracketPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsx.bracketPosition"
             },
             "jsx.forceNewLinesSurroundingContent": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsx.forceNewLinesSurroundingContent"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsx.forceNewLinesSurroundingContent"
             },
             "jsx.multiLineParens": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsx.multiLineParens"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsx.multiLineParens"
             },
             "jsx.quoteStyle": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsx.quoteStyle"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsx.quoteStyle"
             },
             "jsx.sortClassNames": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsx.sortClassNames"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsx.sortClassNames"
             },
             "jsxAttributes.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxAttributes.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxAttributes.preferHanging"
             },
             "jsxAttributes.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxAttributes.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxAttributes.preferSingleLine"
             },
             "jsxElement.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxElement.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxElement.preferSingleLine"
             },
             "jsxExpressionContainer.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxExpressionContainer.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxExpressionContainer.preferSingleLine"
             },
             "jsxExpressionContainer.spaceSurroundingArrayLiteral": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxExpressionContainer.spaceSurroundingArrayLiteral"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxExpressionContainer.spaceSurroundingArrayLiteral"
             },
             "jsxExpressionContainer.spaceSurroundingExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxExpressionContainer.spaceSurroundingExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxExpressionContainer.spaceSurroundingExpression"
             },
             "jsxExpressionContainer.spaceSurroundingObjectLiteral": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxExpressionContainer.spaceSurroundingObjectLiteral"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxExpressionContainer.spaceSurroundingObjectLiteral"
             },
             "jsxOpeningElement.bracketPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxOpeningElement.bracketPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxOpeningElement.bracketPosition"
             },
             "jsxSelfClosingElement.bracketPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxSelfClosingElement.bracketPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxSelfClosingElement.bracketPosition"
             },
             "jsxSelfClosingElement.spaceBeforeSlash": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/jsxSelfClosingElement.spaceBeforeSlash"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/jsxSelfClosingElement.spaceBeforeSlash"
             },
             "lineWidth": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/lineWidth"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/lineWidth"
             },
             "mappedType.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/mappedType.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/mappedType.preferSingleLine"
             },
             "mappedType.spaceSurroundingProperties": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/mappedType.spaceSurroundingProperties"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/mappedType.spaceSurroundingProperties"
             },
             "maxBlankLines": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/maxBlankLines"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/maxBlankLines"
             },
             "memberExpression.linePerExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/memberExpression.linePerExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/memberExpression.linePerExpression"
             },
             "memberExpression.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/memberExpression.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/memberExpression.preferSingleLine"
             },
             "memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/memberSpacing"
             },
             "method.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/method.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/method.blockPadding"
             },
             "method.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/method.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/method.bracePosition"
             },
             "method.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/method.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/method.spaceBeforeParentheses"
             },
             "module.blankLinesAfterImports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.blankLinesAfterImports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.blankLinesAfterImports"
             },
             "module.importGroups": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.importGroups"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.importGroups"
             },
             "module.importGroupsNewlinesBetween": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.importGroupsNewlinesBetween"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.importGroupsNewlinesBetween"
             },
             "module.sortExportDeclarations": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.sortExportDeclarations"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.sortExportDeclarations"
             },
             "module.sortImportDeclarations": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.sortImportDeclarations"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.sortImportDeclarations"
             },
             "module.typeImports": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/module.typeImports"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/module.typeImports"
             },
             "moduleDeclaration.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/moduleDeclaration.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/moduleDeclaration.blockPadding"
             },
             "moduleDeclaration.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/moduleDeclaration.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/moduleDeclaration.bracePosition"
             },
             "newLineKind": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/newLineKind"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/newLineKind"
             },
             "nextControlFlowPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/nextControlFlowPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/nextControlFlowPosition"
             },
             "objectExpression.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectExpression.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectExpression.preferHanging"
             },
             "objectExpression.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectExpression.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectExpression.preferSingleLine"
             },
             "objectExpression.spaceSurroundingProperties": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectExpression.spaceSurroundingProperties"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectExpression.spaceSurroundingProperties"
             },
             "objectExpression.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectExpression.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectExpression.trailingCommas"
             },
             "objectPattern.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectPattern.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectPattern.preferHanging"
             },
             "objectPattern.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectPattern.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectPattern.preferSingleLine"
             },
             "objectPattern.spaceSurroundingProperties": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectPattern.spaceSurroundingProperties"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectPattern.spaceSurroundingProperties"
             },
             "objectPattern.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/objectPattern.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/objectPattern.trailingCommas"
             },
             "operatorPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/operatorPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/operatorPosition"
             },
             "parameters.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parameters.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parameters.preferHanging"
             },
             "parameters.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parameters.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parameters.preferSingleLine"
             },
             "parameters.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parameters.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parameters.spaceAround"
             },
             "parameters.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parameters.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parameters.trailingCommas"
             },
             "parenExpression.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parenExpression.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parenExpression.spaceAround"
             },
             "parentheses.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/parentheses.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/parentheses.preferSingleLine"
             },
             "preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/preferHanging"
             },
             "preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/preferSingleLine"
             },
             "quoteProps": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/quoteProps"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/quoteProps"
             },
             "quoteStyle": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/quoteStyle"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/quoteStyle"
             },
             "semicolons": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/semicolons"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/semicolons"
             },
             "sequenceExpression.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/sequenceExpression.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/sequenceExpression.preferHanging"
             },
             "setAccessor.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/setAccessor.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/setAccessor.blockPadding"
             },
             "setAccessor.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/setAccessor.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/setAccessor.bracePosition"
             },
             "setAccessor.spaceBeforeParentheses": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/setAccessor.spaceBeforeParentheses"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/setAccessor.spaceBeforeParentheses"
             },
             "singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/singleBodyPosition"
             },
             "spaceAfterControlFlowKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/spaceAfterControlFlowKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/spaceAfterControlFlowKeyword"
             },
             "spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/spaceAround"
+            },
+            "spaceBetweenObjectClosingBraces": {
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/spaceBetweenObjectClosingBraces"
             },
             "spaceSurroundingProperties": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/spaceSurroundingProperties"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/spaceSurroundingProperties"
             },
             "staticBlock.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/staticBlock.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/staticBlock.blockPadding"
             },
             "staticBlock.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/staticBlock.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/staticBlock.bracePosition"
             },
             "switchCase.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchCase.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchCase.blockPadding"
             },
             "switchCase.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchCase.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchCase.bracePosition"
             },
             "switchStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchStatement.blockPadding"
             },
             "switchStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchStatement.bracePosition"
             },
             "switchStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchStatement.preferHanging"
             },
             "switchStatement.spaceAfterSwitchKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchStatement.spaceAfterSwitchKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchStatement.spaceAfterSwitchKeyword"
             },
             "switchStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/switchStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/switchStatement.spaceAround"
             },
             "taggedTemplate.embeddedLanguages": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/taggedTemplate.embeddedLanguages"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/taggedTemplate.embeddedLanguages"
             },
             "taggedTemplate.formatEmbedded": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/taggedTemplate.formatEmbedded"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/taggedTemplate.formatEmbedded"
             },
             "taggedTemplate.spaceBeforeLiteral": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/taggedTemplate.spaceBeforeLiteral"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/taggedTemplate.spaceBeforeLiteral"
             },
             "trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/trailingCommas"
             },
             "tryStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tryStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tryStatement.blockPadding"
             },
             "tryStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tryStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tryStatement.bracePosition"
             },
             "tryStatement.nextControlFlowPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tryStatement.nextControlFlowPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tryStatement.nextControlFlowPosition"
             },
             "tupleType.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tupleType.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tupleType.preferHanging"
             },
             "tupleType.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tupleType.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tupleType.preferSingleLine"
             },
             "tupleType.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tupleType.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tupleType.spaceAround"
             },
             "tupleType.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/tupleType.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/tupleType.trailingCommas"
             },
             "typeAnnotation.spaceBeforeColon": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeAnnotation.spaceBeforeColon"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeAnnotation.spaceBeforeColon"
             },
             "typeAssertion.spaceBeforeExpression": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeAssertion.spaceBeforeExpression"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeAssertion.spaceBeforeExpression"
             },
             "typeLiteral.memberSpacing": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.memberSpacing"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.memberSpacing"
             },
             "typeLiteral.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.preferHanging"
             },
             "typeLiteral.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.preferSingleLine"
             },
             "typeLiteral.separatorKind": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.separatorKind"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.separatorKind"
             },
             "typeLiteral.separatorKind.multiLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.separatorKind.multiLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.separatorKind.multiLine"
             },
             "typeLiteral.separatorKind.singleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.separatorKind.singleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.separatorKind.singleLine"
             },
             "typeLiteral.spaceSurroundingProperties": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.spaceSurroundingProperties"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.spaceSurroundingProperties"
             },
             "typeLiteral.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeLiteral.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeLiteral.trailingCommas"
             },
             "typeParameters.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeParameters.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeParameters.preferHanging"
             },
             "typeParameters.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeParameters.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeParameters.preferSingleLine"
             },
             "typeParameters.trailingCommas": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/typeParameters.trailingCommas"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/typeParameters.trailingCommas"
             },
             "unionAndIntersectionType.operatorPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/unionAndIntersectionType.operatorPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/unionAndIntersectionType.operatorPosition"
             },
             "unionAndIntersectionType.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/unionAndIntersectionType.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/unionAndIntersectionType.preferHanging"
             },
             "unionAndIntersectionType.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/unionAndIntersectionType.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/unionAndIntersectionType.preferSingleLine"
             },
             "useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/useBraces"
             },
             "useTabs": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/useTabs"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/useTabs"
             },
             "variableStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/variableStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/variableStatement.preferHanging"
             },
             "variableStatement.preferSingleLine": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/variableStatement.preferSingleLine"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/variableStatement.preferSingleLine"
             },
             "whileStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.blockPadding"
             },
             "whileStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.bracePosition"
             },
             "whileStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.preferHanging"
             },
             "whileStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.singleBodyPosition"
             },
             "whileStatement.spaceAfterWhileKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.spaceAfterWhileKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.spaceAfterWhileKeyword"
             },
             "whileStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.spaceAround"
             },
             "whileStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/whileStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/whileStatement.useBraces"
             },
             "withStatement.blockPadding": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.blockPadding"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.blockPadding"
             },
             "withStatement.bracePosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.bracePosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.bracePosition"
             },
             "withStatement.preferHanging": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.preferHanging"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.preferHanging"
             },
             "withStatement.singleBodyPosition": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.singleBodyPosition"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.singleBodyPosition"
             },
             "withStatement.spaceAfterWithKeyword": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.spaceAfterWithKeyword"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.spaceAfterWithKeyword"
             },
             "withStatement.spaceAround": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.spaceAround"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.spaceAround"
             },
             "withStatement.useBraces": {
-              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/properties/withStatement.useBraces"
+              "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/properties/withStatement.useBraces"
             }
           }
         }
@@ -9232,6 +9235,21 @@
             },
             {
               "description": "Ex. `myFunction(true)`",
+              "const": false
+            }
+          ]
+        },
+        "spaceBetweenObjectClosingBraces": {
+          "description": "Whether to keep a space between the closing braces of a nested object and its parent in single-line objects, destructuring patterns, and type literals.",
+          "default": true,
+          "type": "boolean",
+          "oneOf": [
+            {
+              "description": "Ex. `const { key: { value } } = obj;`",
+              "const": true
+            },
+            {
+              "description": "Ex. `const { key: { value }} = obj;`",
               "const": false
             }
           ]
@@ -10665,12 +10683,12 @@
               "description": "Overrides of a plugin's configuration, one or more.",
               "anyOf": [
                 {
-                  "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/$defs/dprint-override"
+                  "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/$defs/dprint-override"
                 },
                 {
                   "type": "array",
                   "items": {
-                    "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/$defs/dprint-override"
+                    "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/$defs/dprint-override"
                   }
                 }
               ]
@@ -10825,6 +10843,9 @@
         },
         "spaceAround": {
           "$ref": "#/definitions/spaceAround"
+        },
+        "spaceBetweenObjectClosingBraces": {
+          "$ref": "#/definitions/spaceBetweenObjectClosingBraces"
         },
         "spaceSurroundingProperties": {
           "$ref": "#/definitions/spaceSurroundingProperties"
@@ -11172,6 +11193,7 @@
           "properties": [
             "spaceAround",
             "spaceSurroundingProperties",
+            "spaceBetweenObjectClosingBraces",
             "spaceAfterControlFlowKeyword",
             "binaryExpression.spaceSurroundingBitwiseAndArithmeticOperator",
             "catchClause.spaceAfterCatchKeyword",
@@ -13616,12 +13638,12 @@
               "description": "Overrides of a plugin's configuration, one or more.",
               "anyOf": [
                 {
-                  "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/$defs/dprint-override"
+                  "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/$defs/dprint-override"
                 },
                 {
                   "type": "array",
                   "items": {
-                    "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json#/$defs/dprint-override"
+                    "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json#/$defs/dprint-override"
                   }
                 }
               ]
@@ -13634,7 +13656,7 @@
       },
       "allOf": [
         {
-          "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.98.0/schema.json"
+          "$ref": "https://plugins.dprint.dev/dprint/dprint-plugin-typescript/0.99.1/schema.json"
         }
       ]
     },

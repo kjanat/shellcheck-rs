@@ -46,6 +46,16 @@ pub struct Parameters {
     /// The internal error that stopped the dataflow analysis, which then
     /// runs as if extended analysis were off.
     pub dataflow_error: Option<InternalError>,
+    /// Maps an id to the length of its path to the root, the token included.
+    /// [`fix_depth`] fills it.
+    fix_depths: std::cell::RefCell<IdMap<Id, i32>>,
+    /// Maps an id to the first answer `isQuoteFreeContext` gives on the path
+    /// from that token to the root. [`is_quote_free`] fills it.
+    pub(crate) quote_free_contexts: std::cell::RefCell<IdMap<Id, bool>>,
+    /// The same map for `strict = True`.
+    pub(crate) strict_quote_free_contexts: std::cell::RefCell<IdMap<Id, bool>>,
+    /// Maps the id of a `&&` or `||` list to its [`Parameters::list_head`].
+    list_heads: std::cell::RefCell<IdMap<Id, Token>>,
 }
 
 impl Parameters {
@@ -139,9 +149,7 @@ impl ShellOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Linear variable-flow model (`ShellCheck.AnalyzerLib`)
-// ---------------------------------------------------------------------------
 
 /// `data Scope = SubshellScope String | NoneScope`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +206,92 @@ impl Parameters {
         let pid = self.parent_map.get(&t.id())?;
         self.id_map.get(pid)
     }
+
+    /// Returns the first token down the left side of `t` that is not a list of
+    /// the same operator as `t`. For `a && b && c` that is `a`. For a token
+    /// that is no `&&` or `||` list, it is `t` itself. A walk past more than
+    /// [`MEMO_AFTER_STEPS`] lists stores the answer for each of them, and the
+    /// other lists of the chain reuse it.
+    pub(crate) fn list_head(&self, t: &Token) -> Token {
+        let lhs_of = |x: &Token| match &*x.inner {
+            InnerToken::T_AndIf { lhs, .. } | InnerToken::T_OrIf { lhs, .. } => Some(lhs.clone()),
+            _ => None,
+        };
+        let kind = std::mem::discriminant(&*t.inner);
+        let mut steps = 0;
+        let mut cur = t.clone();
+        let head = loop {
+            if let Some(known) = self.list_heads.borrow().get(&cur.id()) {
+                break known.clone();
+            }
+            let Some(lhs) = lhs_of(&cur) else {
+                break cur;
+            };
+            steps += 1;
+            if std::mem::discriminant(&*lhs.inner) != kind {
+                break lhs;
+            }
+            cur = lhs;
+        };
+        if steps > MEMO_AFTER_STEPS {
+            let mut memo = self.list_heads.borrow_mut();
+            let mut cur = Some(t.clone());
+            for _ in 0..steps {
+                let Some(list) = cur else {
+                    break;
+                };
+                memo.insert(list.id(), head.clone());
+                cur = lhs_of(&list);
+            }
+        }
+        head
+    }
+
+    /// Returns the first answer `decide` gives on the path from `start` to the
+    /// root, or false when it gives none. A climb past more than
+    /// [`MEMO_AFTER_STEPS`] tokens stores the answer in `memo` for each of
+    /// them. Tokens under one long chain of undecided ancestors then climb
+    /// only to the first token with a stored answer.
+    pub(crate) fn first_decision(
+        &self,
+        memo: &std::cell::RefCell<IdMap<Id, bool>>,
+        start: Option<&Token>,
+        decide: impl Fn(&Token) -> Option<bool>,
+    ) -> bool {
+        let mut steps = 0;
+        let mut node = start;
+        let answer = loop {
+            let Some(a) = node else {
+                break false;
+            };
+            if let Some(&known) = memo.borrow().get(&a.id()) {
+                break known;
+            }
+            steps += 1;
+            if let Some(decided) = decide(a) {
+                break decided;
+            }
+            node = self.parent(a);
+        };
+        if steps > MEMO_AFTER_STEPS {
+            let mut memo = memo.borrow_mut();
+            let mut node = start;
+            for _ in 0..steps {
+                let Some(a) = node else {
+                    break;
+                };
+                memo.insert(a.id(), answer);
+                node = self.parent(a);
+            }
+        }
+        answer
+    }
 }
+
+/// How many tokens a climb passes before [`Parameters::first_decision`] and
+/// [`Parameters::list_head`] store its answer. Shorter climbs cost less than
+/// the stores, and the bound keeps every climb over a long chain linear.
+const MEMO_AFTER_STEPS: usize = 16;
 
 /// A check pushes `TokenComment`s into this sink via the emit helpers.
 pub type Out = Vec<TokenComment>;
@@ -283,18 +376,33 @@ pub fn style_with_fix(out: &mut Out, id: Id, code: Code, note: &str, fix: Fix) {
     out.push(make_comment_with_fix(Severity::StyleC, id, code, note, fix));
 }
 
-// ---- fix construction (from ShellCheck.Analytics) --------------------------
+// fix construction (from ShellCheck.Analytics)
 
 use crate::interface::{InsertionPoint, Position, Replacement};
 
 /// Precedence = length of the parent path (getPath) from the token to the root,
 /// counting the token itself. Higher precedence is applied first.
+///
+/// Each call climbs to the first ancestor with a known depth and records the
+/// depth of every token it passed.
 fn fix_depth(params: &Parameters, id: Id) -> i32 {
-    let mut depth = 1;
+    let mut depths = params.fix_depths.borrow_mut();
+    let mut chain = Vec::new();
     let mut cur = id;
-    while let Some(&p) = params.parent_map.get(&cur) {
+    // A token without a parent entry has a path of length one, like the root.
+    let mut depth = loop {
+        if let Some(&known) = depths.get(&cur) {
+            break known;
+        }
+        chain.push(cur);
+        match params.parent_map.get(&cur) {
+            Some(&up) => cur = up,
+            None => break 0,
+        }
+    };
+    while let Some(id) = chain.pop() {
         depth += 1;
-        cur = p;
+        depths.insert(id, depth);
     }
     depth
 }
@@ -457,7 +565,7 @@ pub fn run_checker(params: &Parameters, checker: &Checker) -> Out {
     out
 }
 
-// ---- context construction --------------------------------------------------
+// context construction
 
 /// `determineShell`: derive the shell from the shebang / shell override, else
 /// the fallback, else Bash.
@@ -481,18 +589,20 @@ pub fn named_dialect(root: &Token) -> Option<Dialect> {
     Dialect::from_name(&get_candidate(root))
 }
 
-fn get_candidate(t: &Token) -> String {
-    match &*t.inner {
-        InnerToken::T_Script { shebang, .. } => from_shebang(shebang),
-        InnerToken::T_Annotation { annotations, token } => {
-            for a in annotations {
-                if let Annotation::ShellOverride(s) = a {
-                    return s.clone();
+fn get_candidate(mut t: &Token) -> String {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Script { shebang, .. } => return from_shebang(shebang),
+            InnerToken::T_Annotation { annotations, token } => {
+                for a in annotations {
+                    if let Annotation::ShellOverride(s) = a {
+                        return s.clone();
+                    }
                 }
+                token
             }
-            get_candidate(token)
-        }
-        _ => String::new(),
+            _ => return String::new(),
+        };
     }
 }
 
@@ -507,16 +617,21 @@ fn from_shebang(shebang: &Token) -> String {
 /// Build Id -> parent-Id and Id -> token maps.
 #[must_use]
 pub fn build_maps(root: &Token) -> (IdMap<Id, Id>, IdMap<Id, Token>) {
-    fn go(t: &Token, parent: &mut IdMap<Id, Id>, id_map: &mut IdMap<Id, Token>) {
-        id_map.insert(t.id(), t.clone());
-        t.inner.for_each_child(|c| {
-            parent.insert(c.id(), t.id());
-            go(c, parent, id_map);
-        });
-    }
     let mut parent = IdMap::default();
     let mut id_map = IdMap::default();
-    go(root, &mut parent, &mut id_map);
+    // Pre-order, so both maps are filled in the order a recursive walk would
+    // fill them: a node's parent entry, then the node, then its subtree.
+    let mut pending: Vec<(&Token, Option<Id>)> = vec![(root, None)];
+    let mut children = Vec::new();
+    while let Some((t, up)) = pending.pop() {
+        if let Some(up) = up {
+            parent.insert(t.id(), up);
+        }
+        id_map.insert(t.id(), t.clone());
+        t.inner.for_each_child(|c| children.push((c, Some(t.id()))));
+        pending.extend(children.iter().rev());
+        children.clear();
+    }
     (parent, id_map)
 }
 
@@ -774,6 +889,10 @@ pub fn make_parameters_as(
         variable_flow,
         cfg_analysis,
         dataflow_error,
+        fix_depths: std::cell::RefCell::default(),
+        quote_free_contexts: std::cell::RefCell::default(),
+        strict_quote_free_contexts: std::cell::RefCell::default(),
+        list_heads: std::cell::RefCell::default(),
     }
 }
 
@@ -822,10 +941,8 @@ fn get_extended_analysis_directive(root: &Token) -> Option<bool> {
     }
 }
 
-// ===========================================================================
 // Shared AST helpers for the dataflow checks (SC2154/SC2034/SC2086)
 // Ported from ShellCheck.ASTLib / ShellCheck.AnalyzerLib / ShellCheck.Data.
-// ===========================================================================
 
 use crate::cfg::{
     get_braced_modifier, get_braced_reference, get_bsd_opts as cfg_get_bsd_opts,
@@ -841,37 +958,36 @@ pub(crate) fn get_printf_formats(s: &str) -> String {
     get_formats(&cs)
 }
 
-fn get_formats(cs: &[char]) -> String {
-    if cs.is_empty() {
-        return String::new();
-    }
-    if cs[0] == '%' {
+/// `getFormats`, with `regexBasedGetFormats` folded in.
+///
+/// Both Haskell functions read a piece, recurse on the rest of the string
+/// and prepend the piece. This loop appends each piece as it reads it,
+/// which gives the same order.
+fn get_formats(mut cs: &[char]) -> String {
+    let mut out = String::new();
+    while let Some(&c) = cs.first() {
+        if c != '%' {
+            cs = &cs[1..];
+            continue;
+        }
         if cs.get(1) == Some(&'%') {
-            return get_formats(&cs[2..]);
+            cs = &cs[2..];
+            continue;
         }
         if cs.get(1) == Some(&'(') {
             let rest = &cs[2..];
             if let Some(pos) = rest.iter().position(|&c| c == ')')
                 && pos + 1 < rest.len()
             {
-                let c = rest[pos + 1];
-                let trailing = &rest[pos + 2..];
-                let mut out = String::new();
-                out.push(c);
-                out.push_str(&get_formats(trailing));
-                return out;
+                out.push(rest[pos + 1]);
+                cs = &rest[pos + 2..];
+                continue;
             }
-            return String::new();
+            break;
         }
-        return regex_based_get_formats(&cs[1..]);
-    }
-    get_formats(&cs[1..])
-}
-
-fn regex_based_get_formats(rest: &[char]) -> String {
-    let (mut out, remaining) = match match_format_re(rest) {
-        Some((width_star, prec_star, typ, remaining)) => {
-            let mut out = String::new();
+        // regexBasedGetFormats
+        let rest = &cs[1..];
+        if let Some((width_star, prec_star, typ, remaining)) = match_format_re(rest) {
             if width_star {
                 out.push('*');
             }
@@ -879,11 +995,12 @@ fn regex_based_get_formats(rest: &[char]) -> String {
                 out.push('*');
             }
             out.push(typ);
-            (out, remaining)
+            cs = remaining;
+        } else {
+            out.extend(rest.iter().take(1));
+            cs = rest;
         }
-        None => (rest.iter().take(1).collect::<String>(), rest),
-    };
-    out.push_str(&get_formats(remaining));
+    }
     out
 }
 
@@ -979,7 +1096,7 @@ pub(crate) fn get_path(params: &Parameters, t: &Token) -> Vec<Token> {
     path_iter(params, t).cloned().collect()
 }
 
-// ---- command-name resolution ----------------------------------------------
+// command-name resolution
 
 fn is_flag_word(t: &Token) -> bool {
     word_parts(t)
@@ -988,12 +1105,14 @@ fn is_flag_word(t: &Token) -> bool {
 }
 
 /// `getCommand`.
-pub(crate) fn get_command(t: &Token) -> Option<&Token> {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => get_command(cmd),
-        InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => Some(t),
-        InnerToken::T_Annotation { token, .. } => get_command(token),
-        _ => None,
+pub(crate) fn get_command(mut t: &Token) -> Option<&Token> {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Redirecting { cmd, .. } => cmd,
+            InnerToken::T_SimpleCommand { words, .. } if !words.is_empty() => return Some(t),
+            InnerToken::T_Annotation { token, .. } => token,
+            _ => return None,
+        };
     }
 }
 
@@ -1015,17 +1134,38 @@ pub(crate) fn get_effective_command_token<'a>(s: &str, args: &'a [Token]) -> Opt
 }
 
 pub(crate) fn get_command_name_and_token(direct: bool, t: &Token) -> (Option<String>, &Token) {
+    let (name, token) = command_name_and_token(direct, t);
+    (name.map(std::borrow::Cow::into_owned), token)
+}
+
+/// [`get_command_name_and_token`], with the name borrowed from the tree when
+/// the command word is a single literal.
+fn command_name_and_token(direct: bool, t: &Token) -> (Option<std::borrow::Cow<'_, str>>, &Token) {
     if let Some(cmd) = get_command(t)
         && let InnerToken::T_SimpleCommand { words, .. } = &*cmd.inner
         && let Some((w, rest)) = words.split_first()
-        && let Some(s) = ast_lib::get_literal_string(w)
+        && let Some(s) = literal_text(w)
     {
         if !direct && let Some(actual) = get_effective_command_token(&s, rest) {
-            return (ast_lib::get_literal_string(actual), actual);
+            return (literal_text(actual), actual);
         }
         return (Some(s), w);
     }
     (None, t)
+}
+
+/// `getLiteralString w`, borrowed from the tree when `w` is a word of one
+/// plain literal.
+fn literal_text(w: &Token) -> Option<std::borrow::Cow<'_, str>> {
+    if let InnerToken::T_NormalWord(parts) = &*w.inner
+        && let [part] = parts.as_slice()
+        && let InnerToken::T_Literal(s)
+        | InnerToken::T_SingleQuoted(s)
+        | InnerToken::T_ParamSubSpecialChar(s) = &*part.inner
+    {
+        return Some(std::borrow::Cow::Borrowed(s));
+    }
+    ast_lib::get_literal_string(w).map(std::borrow::Cow::Owned)
 }
 
 /// `getCommandName`.
@@ -1035,22 +1175,29 @@ pub(crate) fn get_command_name(t: &Token) -> Option<String> {
 
 /// `getCommandTokenOrThis`.
 pub(crate) fn get_command_token_or_this(t: &Token) -> &Token {
-    get_command_name_and_token(false, t).1
+    command_name_and_token(false, t).1
 }
 
 /// `getCommandBasename`.
 pub(crate) fn get_command_basename(t: &Token) -> Option<String> {
-    get_command_name(t).map(|s| s.rsplit('/').next().unwrap_or(&s).to_string())
+    command_name_and_token(false, t)
+        .0
+        .map(|s| s.rsplit('/').next().unwrap_or(&s).to_string())
 }
 
 /// `isCommandMatch`.
 fn is_command_match(t: &Token, matcher: impl Fn(&str) -> bool) -> bool {
-    get_command_name(t).is_some_and(|s| matcher(&s))
+    command_name_and_token(false, t)
+        .0
+        .is_some_and(|s| matcher(&s))
 }
 
 /// `isCommand token str` (also matches `/usr/bin/str`).
 pub(crate) fn is_command(t: &Token, str: &str) -> bool {
-    is_command_match(t, |cmd| cmd == str || cmd.ends_with(&format!("/{str}")))
+    is_command_match(t, |cmd| {
+        cmd.strip_suffix(str)
+            .is_some_and(|dir| dir.is_empty() || dir.ends_with('/'))
+    })
 }
 
 /// `getAllFlags` restricted to the flag strings (`map snd $ getAllFlags`).
@@ -1096,7 +1243,7 @@ fn get_all_flags_words(words: &[Token]) -> Vec<(Token, String)> {
     out
 }
 
-// ---- predicates for SC2086 -------------------------------------------------
+// predicates for SC2086
 
 /// `isArrayExpansion`.
 pub(crate) fn is_array_expansion(t: &Token) -> bool {
@@ -1190,20 +1337,13 @@ pub(crate) fn is_param_to(params: &Parameters, cmd: &str, t: &Token) -> bool {
     }
 }
 
-// ---- isQuoteFree (parent-context walk, non-strict) -------------------------
+// isQuoteFree (parent-context walk, non-strict)
 
 pub(crate) fn is_quote_free(params: &Parameters, t: &Token) -> bool {
-    if is_quote_free_element(params, t) {
-        return true;
-    }
-    let mut node = params.parent(t);
-    while let Some(a) = node {
-        if let Some(b) = is_quote_free_context(params, a) {
-            return b;
-        }
-        node = params.parent(a);
-    }
-    false
+    is_quote_free_element(params, t)
+        || params.first_decision(&params.quote_free_contexts, params.parent(t), |a| {
+            is_quote_free_context(params, a)
+        })
 }
 
 pub(crate) fn is_quote_free_element(params: &Parameters, t: &Token) -> bool {
@@ -1266,7 +1406,7 @@ pub(crate) fn is_assignment_param_to_command(params: &Parameters, assign: &Token
     false
 }
 
-// ---- Levenshtein distance (`dist`) -----------------------------------------
+// Levenshtein distance (`dist`)
 
 pub(crate) fn dist(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -1292,7 +1432,7 @@ pub(crate) fn dist(a: &str, b: &str) -> usize {
     prev[m]
 }
 
-// ---- getVariablesFromLiteral(Token) ----------------------------------------
+// getVariablesFromLiteral(Token)
 
 fn get_variables_from_literal(s: &str) -> Vec<String> {
     use std::sync::OnceLock;
@@ -1307,11 +1447,9 @@ fn get_variables_from_literal_token(t: &Token) -> Vec<String> {
     get_variables_from_literal(&get_literal_string_def(" ", t))
 }
 
-// ---- special variable data (ShellCheck.Data) -------------------------------
+// special variable data (ShellCheck.Data)
 
-// ===========================================================================
 // getVariableFlow (`ShellCheck.AnalyzerLib.getVariableFlow`)
-// ===========================================================================
 
 struct FlowCtx<'a> {
     parent_map: &'a IdMap<Id, Id>,
@@ -1369,6 +1507,28 @@ pub(crate) fn get_variable_flow(
     out
 }
 
+/// Returns the references and assignments that `t` itself contributes to
+/// [`get_variable_flow`], without the scopes around them. The flow of a
+/// subtree consists of exactly these entries for each of its tokens.
+pub(crate) fn token_variable_flow(
+    parent_map: &IdMap<Id, Id>,
+    id_map: &IdMap<Id, Token>,
+    has_lastpipe: bool,
+    t: &Token,
+) -> Vec<StackData> {
+    let ctx = FlowCtx {
+        parent_map,
+        id_map,
+        has_lastpipe,
+    };
+    let mut out: Vec<StackData> = get_referenced_variables(&ctx, t)
+        .into_iter()
+        .map(|(b, tok, name)| StackData::Reference(b, tok, name))
+        .collect();
+    push_modified(t, &mut out);
+    out
+}
+
 fn assign_first(t: &Token) -> bool {
     matches!(
         &*t.inner,
@@ -1376,28 +1536,59 @@ fn assign_first(t: &Token) -> bool {
     )
 }
 
-fn stack_analysis(ctx: &FlowCtx, t: &Token, out: &mut Vec<StackData>) {
-    // startScope
-    let scope = lead_type(ctx, t);
-    let has_scope = !matches!(scope, Scope::NoneScope);
-    if has_scope {
-        out.push(StackData::StackScope(scope));
+fn stack_analysis(ctx: &FlowCtx, root: &Token, out: &mut Vec<StackData>) {
+    /// One step of `doStackAnalysis startScope endScope`. `Leave` carries the
+    /// decision of its `Enter` to the matching `endScope`.
+    enum Step<'a> {
+        Enter(&'a Token),
+        Leave {
+            t: &'a Token,
+            has_scope: bool,
+            assign_first: bool,
+        },
     }
-    let af = assign_first(t);
-    if af {
-        push_modified(t, out);
-    }
-    // recurse (doStackAnalysis)
-    t.inner.for_each_child(|c| stack_analysis(ctx, c, out));
-    // endScope
-    for (b, tok, name) in get_referenced_variables(ctx, t) {
-        out.push(StackData::Reference(b, tok, name));
-    }
-    if !af {
-        push_modified(t, out);
-    }
-    if has_scope {
-        out.push(StackData::StackScopeEnd);
+    let mut pending = vec![Step::Enter(root)];
+    let mut children = Vec::new();
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Enter(t) => {
+                // startScope
+                let scope = lead_type(ctx, t);
+                let has_scope = !matches!(scope, Scope::NoneScope);
+                if has_scope {
+                    out.push(StackData::StackScope(scope));
+                }
+                let af = assign_first(t);
+                if af {
+                    push_modified(t, out);
+                }
+                pending.push(Step::Leave {
+                    t,
+                    has_scope,
+                    assign_first: af,
+                });
+                // recurse (doStackAnalysis)
+                t.inner.for_each_child(|c| children.push(c));
+                pending.extend(children.iter().rev().map(|c| Step::Enter(c)));
+                children.clear();
+            }
+            Step::Leave {
+                t,
+                has_scope,
+                assign_first,
+            } => {
+                // endScope
+                for (b, tok, name) in get_referenced_variables(ctx, t) {
+                    out.push(StackData::Reference(b, tok, name));
+                }
+                if !assign_first {
+                    push_modified(t, out);
+                }
+                if has_scope {
+                    out.push(StackData::StackScopeEnd);
+                }
+            }
+        }
     }
 }
 
@@ -1444,7 +1635,7 @@ fn causes_subshell(ctx: &FlowCtx, t: &Token) -> Option<bool> {
     })
 }
 
-// ---- getModifiedVariables --------------------------------------------------
+// getModifiedVariables
 
 fn is_closing_file_op(op: &Token) -> bool {
     match &*op.inner {
@@ -1682,20 +1873,32 @@ fn let_param_to_literal(base: &Token, token: &Token) -> Vec<(Token, Token, Strin
     }
 }
 
-fn get_set_params(tokens: &[Token]) -> Option<Vec<Token>> {
-    if tokens.len() >= 2 && ast_lib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
-        return get_set_params(&tokens[2..]);
-    }
-    let first = tokens.first()?;
-    let rest = &tokens[1..];
-    match ast_lib::get_literal_string(first) {
-        Some(s) if s == "--" => Some(rest.to_vec()),
-        Some(s) if s.starts_with('-') => get_set_params(rest),
-        _ => {
-            let mut out = vec![first.clone()];
-            out.extend(get_set_params(rest).unwrap_or_default());
-            Some(out)
+/// `getSetParams`.
+///
+/// Upstream recurses once per argument. It prepends a positional parameter
+/// to the result for the rest, where `Nothing` counts as no parameters, and
+/// it skips flags and `-o name` pairs. `params` holds what upstream would
+/// have prepended so far.
+fn get_set_params(mut tokens: &[Token]) -> Option<Vec<Token>> {
+    let mut params: Option<Vec<Token>> = None;
+    loop {
+        if tokens.len() >= 2 && ast_lib::get_literal_string(&tokens[0]).as_deref() == Some("-o") {
+            tokens = &tokens[2..];
+            continue;
         }
+        let Some((first, rest)) = tokens.split_first() else {
+            return params;
+        };
+        match ast_lib::get_literal_string(first) {
+            Some(s) if s == "--" => {
+                let mut out = params.unwrap_or_default();
+                out.extend_from_slice(rest);
+                return Some(out);
+            }
+            Some(s) if s.starts_with('-') => {}
+            _ => params.get_or_insert_default().push(first.clone()),
+        }
+        tokens = rest;
     }
 }
 
@@ -1882,18 +2085,24 @@ fn get_bats_run_variables(args: &[Token]) -> Vec<(&'static str, DataType)> {
 /// `getModifiedVariableCommand` — `base` is the `T_SimpleCommand`, `words[0]` its name.
 fn get_modified_variable_command(
     base: &Token,
-    words: &[Token],
+    mut words: &[Token],
 ) -> Vec<(Token, Token, String, DataType)> {
-    // first word's leading literal is the command name x
-    let Some(x) = words.first().and_then(leading_literal) else {
-        return vec![];
+    // first word's leading literal is the command name x; `builtin cmd ..`
+    // is `cmd ..`, however many times it is repeated.
+    let x = loop {
+        let Some(x) = words.first().and_then(leading_literal) else {
+            return vec![];
+        };
+        if x != "builtin" {
+            break x;
+        }
+        words = &words[1..];
     };
     let rest = &words[1..];
     let flags = command_flag_strings(words);
     let has = |f: &str| flags.iter().any(|s| s == f);
 
     let result: Vec<(Token, Token, String, DataType)> = match x {
-        "builtin" => return get_modified_variable_command(base, rest),
         "read" => get_read_variables(base, rest),
         "run" => get_bats_run_variables(rest)
             .into_iter()
@@ -1958,7 +2167,7 @@ fn get_modified_variable_command(
         .collect()
 }
 
-// ---- getReferencedVariables ------------------------------------------------
+// getReferencedVariables
 
 fn is_dereferencing_binary_op(op: &str) -> bool {
     matches!(op, "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge")
@@ -2120,7 +2329,7 @@ fn get_referenced_variable_command(base: &Token) -> Vec<(Token, Token, String)> 
     }
 }
 
-// ---- helpers consolidated from the check batches (ports of AnalyzerLib) ----
+// helpers consolidated from the check batches (ports of AnalyzerLib)
 
 /// The words after the command name of a `T_SimpleCommand`.
 pub(crate) fn arguments(t: &Token) -> &[Token] {
@@ -2219,15 +2428,17 @@ pub(crate) fn in_condition(params: &Parameters, t: &Token) -> bool {
 }
 
 /// `isTestCommand`.
-pub(crate) fn is_test_command(t: &Token) -> bool {
+pub(crate) fn is_test_command(mut t: &Token) -> bool {
     use InnerToken::{T_Annotation, T_Condition, T_Pipeline, T_Redirecting, T_SimpleCommand};
-    match &*t.inner {
-        T_Condition { .. } => true,
-        T_SimpleCommand { .. } => is_command(t, "test"),
-        T_Redirecting { cmd, .. } => is_test_command(cmd),
-        T_Annotation { token, .. } => is_test_command(token),
-        T_Pipeline { commands, .. } if commands.len() == 1 => is_test_command(&commands[0]),
-        _ => false,
+    loop {
+        t = match &*t.inner {
+            T_Condition { .. } => return true,
+            T_SimpleCommand { .. } => return is_command(t, "test"),
+            T_Redirecting { cmd, .. } => cmd,
+            T_Annotation { token, .. } => token,
+            T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
+            _ => return false,
+        };
     }
 }
 
@@ -2428,9 +2639,99 @@ mod printf_format_tests {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
-    use super::{determine_shell, get_variables_from_literal};
+    use super::{
+        determine_shell, fix_depth, get_variables_from_literal, is_quote_free,
+        is_quote_free_context, is_quote_free_element,
+    };
     use crate::dialect::Dialect;
     use crate::interface::Shell;
+
+    #[test]
+    fn is_quote_free_equals_the_plain_climb() {
+        for shell in [crate::interface::Shell::Bash, crate::interface::Shell::Sh] {
+            let params =
+                crate::test_support::params_for_shell(crate::test_support::QUOTE_CONTEXTS, shell);
+            let climb = |t| {
+                if is_quote_free_element(&params, t) {
+                    return true;
+                }
+                let mut node = params.parent(t);
+                while let Some(a) = node {
+                    if let Some(b) = is_quote_free_context(&params, a) {
+                        return b;
+                    }
+                    node = params.parent(a);
+                }
+                false
+            };
+            let (mut free, mut bound) = (0, 0);
+            // Twice, so that the second round answers from the memo alone.
+            for _ in 0..2 {
+                for t in params.id_map.values() {
+                    let expected = climb(t);
+                    assert_eq!(is_quote_free(&params, t), expected, "{t:?}");
+                    if expected { free += 1 } else { bound += 1 }
+                }
+            }
+            assert!(free > 20 && bound > 20);
+        }
+    }
+
+    #[test]
+    fn list_head_equals_the_plain_walk() {
+        let params = crate::test_support::params_for(
+            "a && b && c || d || e && f && g\n{ x || y; } && z\nh || i\nj",
+        );
+        let walk = |t: &crate::ast::Token| {
+            let kind = std::mem::discriminant(&*t.inner);
+            let mut cur = t.clone();
+            loop {
+                let lhs = match &*cur.inner {
+                    crate::ast::InnerToken::T_AndIf { lhs, .. }
+                    | crate::ast::InnerToken::T_OrIf { lhs, .. } => lhs.clone(),
+                    _ => return cur,
+                };
+                if std::mem::discriminant(&*lhs.inner) != kind {
+                    return lhs;
+                }
+                cur = lhs;
+            }
+        };
+        let mut lists = 0;
+        for _ in 0..2 {
+            for t in params.id_map.values() {
+                assert_eq!(params.list_head(t).id(), walk(t).id(), "{t:?}");
+                if matches!(
+                    &*t.inner,
+                    crate::ast::InnerToken::T_AndIf { .. } | crate::ast::InnerToken::T_OrIf { .. }
+                ) {
+                    lists += 1;
+                }
+            }
+        }
+        assert_eq!(lists, 2 * 9);
+    }
+
+    #[test]
+    fn fix_depth_is_the_parent_path_length() {
+        let params = crate::test_support::params_for(
+            "f() { a=$(( (1 + (2)) )) cmd \"${x:-${y:-$(echo $z)}}\"; }\nf | g && h",
+        );
+        let climb = |id| {
+            let mut depth = 1;
+            let mut cur = id;
+            while let Some(&up) = params.parent_map.get(&cur) {
+                depth += 1;
+                cur = up;
+            }
+            depth
+        };
+        assert!(params.id_map.len() > 30);
+        for &id in params.id_map.keys() {
+            assert_eq!(fix_depth(&params, id), climb(id));
+        }
+        assert_eq!(fix_depth(&params, crate::ast::Id(i32::MAX)), 1);
+    }
 
     #[test]
     fn bats_run_variable_flow() {

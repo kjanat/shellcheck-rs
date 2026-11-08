@@ -38,7 +38,10 @@ fn main() -> ExitCode {
     let config = match options::parse_os(&argv, &Path::exists) {
         Outcome::Run(c) => *c,
         Outcome::PrintVersion => {
-            println!("{}", options::version_banner());
+            println!(
+                "{}",
+                options::version_banner(std::io::stdout().is_terminal())
+            );
             return ExitCode::SUCCESS;
         }
         Outcome::PrintHelp => {

@@ -16,27 +16,66 @@ pub fn get_literal_string_ext(
     t: &Token,
     fallback: &dyn Fn(&InnerToken) -> Option<String>,
 ) -> Option<String> {
-    fn go(t: &Token, fb: &dyn Fn(&InnerToken) -> Option<String>, out: &mut String) -> Option<()> {
+    // The walk visits the word's parts depth-first, left to right. When the
+    // fallback declines a part, the whole string is `Nothing`.
+    fn go(
+        t: &Token,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+        budget: usize,
+    ) -> Option<()> {
+        let Some(budget) = budget.checked_sub(1) else {
+            return listed(t, fb, out);
+        };
         match &*t.inner {
-            InnerToken::T_Literal(s)
-            | InnerToken::T_SingleQuoted(s)
-            | InnerToken::T_ParamSubSpecialChar(s) => out.push_str(s),
-            InnerToken::T_DollarSingleQuoted(s) => out.push_str(&decode_escapes(s)),
             InnerToken::T_NormalWord(parts)
             | InnerToken::T_DoubleQuoted(parts)
             | InnerToken::T_DollarDoubleQuoted(parts)
             | InnerToken::TA_Expansion(parts) => {
                 for p in parts {
-                    go(p, fb, out)?;
+                    go(p, fb, out, budget)?;
                 }
+                Some(())
             }
+            other => part(other, fb, out),
+        }
+    }
+    // The same walk with every pending part on a work list.
+    fn listed(
+        t: &Token,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+    ) -> Option<()> {
+        let mut pending = vec![t];
+        while let Some(t) = pending.pop() {
+            match &*t.inner {
+                InnerToken::T_NormalWord(parts)
+                | InnerToken::T_DoubleQuoted(parts)
+                | InnerToken::T_DollarDoubleQuoted(parts)
+                | InnerToken::TA_Expansion(parts) => pending.extend(parts.iter().rev()),
+                other => part(other, fb, out)?,
+            }
+        }
+        Some(())
+    }
+    // A part that holds no other parts.
+    fn part(
+        t: &InnerToken,
+        fb: &dyn Fn(&InnerToken) -> Option<String>,
+        out: &mut String,
+    ) -> Option<()> {
+        match t {
+            InnerToken::T_Literal(s)
+            | InnerToken::T_SingleQuoted(s)
+            | InnerToken::T_ParamSubSpecialChar(s) => out.push_str(s),
+            InnerToken::T_DollarSingleQuoted(s) => out.push_str(&decode_escapes(s)),
             other => out.push_str(&fb(other)?),
         }
         Some(())
     }
-    let mut s = String::new();
-    go(t, fallback, &mut s)?;
-    Some(s)
+    let mut out = String::new();
+    go(t, fallback, &mut out, crate::ast::RECURSION_BUDGET)?;
+    Some(out)
 }
 
 /// `decodeEscapes` from `getLiteralStringExt`: bash style `$'..'` decoding.
@@ -160,32 +199,55 @@ pub fn oversimplify(t: &Token) -> Vec<String> {
         T_ParamSubSpecialChar, T_Pipeline, T_Redirecting, T_SimpleCommand, T_SingleQuoted,
         TA_Expansion, TA_Sequence,
     };
-    match &*t.inner {
-        T_NormalWord(l) | T_DoubleQuoted(l) => {
-            let s: String = l.iter().flat_map(oversimplify).collect::<Vec<_>>().concat();
-            vec![s]
-        }
-        T_SingleQuoted(s)
-        | T_Glob(s)
-        | T_Literal(s)
-        | T_ParamSubSpecialChar(s)
-        | T_DollarSingleQuoted(s) => vec![s.clone()],
-        T_DollarBraced { .. } | T_DollarArithmetic(_) | T_DollarExpansion(_) | T_Backticked(_) => {
-            vec!["${VAR}".to_string()]
-        }
-        T_Pipeline { commands, .. } if commands.len() == 1 => oversimplify(&commands[0]),
-        T_SimpleCommand { words, .. } => words.iter().flat_map(oversimplify).collect(),
-        T_Redirecting { cmd, .. } => oversimplify(cmd),
-        T_Annotation { token, .. } => oversimplify(token),
-        // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
-        TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
-            match &*seq[0].inner {
-                TA_Expansion(v) => v.iter().flat_map(oversimplify).collect(),
-                _ => Vec::new(),
-            }
-        }
-        _ => Vec::new(),
+    /// Evaluate a token, or fold everything produced since `start` into one
+    /// string (`[concat $ concatMap oversimplify l]`).
+    enum Step<'a> {
+        Eval(&'a Token),
+        Join(usize),
     }
+    // Every case concatenates the results of its children. The whole walk
+    // therefore appends its results to one list in order.
+    let mut out: Vec<String> = Vec::new();
+    let mut pending = vec![Step::Eval(t)];
+    while let Some(step) = pending.pop() {
+        let t = match step {
+            Step::Join(start) => {
+                let joined: String = out.drain(start..).collect();
+                out.push(joined);
+                continue;
+            }
+            Step::Eval(t) => t,
+        };
+        match &*t.inner {
+            T_NormalWord(l) | T_DoubleQuoted(l) => {
+                pending.push(Step::Join(out.len()));
+                pending.extend(l.iter().rev().map(Step::Eval));
+            }
+            T_SingleQuoted(s)
+            | T_Glob(s)
+            | T_Literal(s)
+            | T_ParamSubSpecialChar(s)
+            | T_DollarSingleQuoted(s) => out.push(s.clone()),
+            T_DollarBraced { .. }
+            | T_DollarArithmetic(_)
+            | T_DollarExpansion(_)
+            | T_Backticked(_) => out.push("${VAR}".to_string()),
+            T_Pipeline { commands, .. } if commands.len() == 1 => {
+                pending.push(Step::Eval(&commands[0]));
+            }
+            T_SimpleCommand { words, .. } => pending.extend(words.iter().rev().map(Step::Eval)),
+            T_Redirecting { cmd, .. } => pending.push(Step::Eval(cmd)),
+            T_Annotation { token, .. } => pending.push(Step::Eval(token)),
+            // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
+            TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
+                if let TA_Expansion(v) = &*seq[0].inner {
+                    pending.extend(v.iter().rev().map(Step::Eval));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `onlyLiteralString = getLiteralStringDef ""`: definitely get a literal
@@ -205,6 +267,39 @@ pub fn only_literal_string(t: &Token) -> String {
 /// words reuse the original word's id.
 #[must_use]
 pub fn brace_expand(word: &Token) -> Vec<Token> {
+    // A brace element is itself a word to expand, and nested braces form a
+    // tree. The expansion runs bottom-up. It first lists every word, parents
+    // before their elements, and then expands the words in reverse order.
+    // Each word finds the expansions of its elements already done.
+    let mut words = Vec::new();
+    let mut pending = vec![word];
+    while let Some(w) = pending.pop() {
+        words.push(w);
+        if let InnerToken::T_NormalWord(list) = &*w.inner {
+            for part in list {
+                if let InnerToken::T_BraceExpansion(items) = &*part.inner {
+                    pending.extend(items);
+                }
+            }
+        }
+    }
+    let mut expanded: std::collections::HashMap<*const Token, Vec<Token>> =
+        std::collections::HashMap::new();
+    for w in words.into_iter().rev() {
+        let result = brace_expand_word(w, &expanded);
+        expanded.insert(std::ptr::from_ref(w), result);
+    }
+    expanded
+        .remove(&std::ptr::from_ref(word))
+        .unwrap_or_default()
+}
+
+/// One step of [`brace_expand`]: `word`'s expansion, given those of the
+/// words inside its brace expansions.
+fn brace_expand_word(
+    word: &Token,
+    expanded: &std::collections::HashMap<*const Token, Vec<Token>>,
+) -> Vec<Token> {
     let (id, list) = match &*word.inner {
         InnerToken::T_NormalWord(list) => (word.id, list),
         _ => return vec![word.clone()],
@@ -212,7 +307,7 @@ pub fn brace_expand(word: &Token) -> Vec<Token> {
     // Cartesian product over the parts, in Haskell list-monad order.
     let mut results: Vec<Vec<Token>> = vec![Vec::new()];
     for part in list {
-        let choices = part_choices(part);
+        let choices = part_choices(part, expanded);
         let mut next: Vec<Vec<Token>> = Vec::new();
         'outer: for acc in &results {
             for ch in &choices {
@@ -236,15 +331,20 @@ pub fn brace_expand(word: &Token) -> Vec<Token> {
 /// The list of alternative tokens a single word-part contributes to brace
 /// expansion: a `T_BraceExpansion` yields, for each of its element words, all of
 /// that element's own brace-expanded `T_NormalWord`s; anything else yields itself.
-fn part_choices(part: &Token) -> Vec<Token> {
+fn part_choices(
+    part: &Token,
+    expanded: &std::collections::HashMap<*const Token, Vec<Token>>,
+) -> Vec<Token> {
     match &*part.inner {
-        InnerToken::T_BraceExpansion(items) => {
-            let mut out = Vec::new();
-            for item in items {
-                out.extend(brace_expand(item));
-            }
-            out
-        }
+        InnerToken::T_BraceExpansion(items) => items
+            .iter()
+            .flat_map(|item| {
+                expanded
+                    .get(&std::ptr::from_ref(item))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect(),
         _ => vec![part.clone()],
     }
 }
@@ -325,16 +425,21 @@ fn from_env_args(args: &[&str]) -> String {
         .map_or_else(String::new, |a| (*a).to_string())
 }
 
-// ---- helpers consolidated from the check batches (ports of ASTLib) ----
+// helpers consolidated from the check batches (ports of ASTLib)
 
 /// `getWordParts`.
 pub(crate) fn get_word_parts(t: &Token) -> Vec<&Token> {
     use InnerToken::{T_DoubleQuoted, T_NormalWord, TA_Expansion};
-    match &*t.inner {
-        T_NormalWord(l) | TA_Expansion(l) => l.iter().flat_map(get_word_parts).collect(),
-        T_DoubleQuoted(l) => l.iter().collect(),
-        _ => vec![t],
+    let mut out = Vec::new();
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_NormalWord(l) | TA_Expansion(l) => pending.extend(l.iter().rev()),
+            T_DoubleQuoted(l) => out.extend(l),
+            _ => out.push(t),
+        }
     }
+    out
 }
 
 pub(crate) fn has_split_range(l: &[Token]) -> bool {
@@ -350,11 +455,16 @@ pub(crate) fn has_split_range(l: &[Token]) -> bool {
 /// Faithful port of `ShellCheck.ASTLib.isGlob`.
 pub(crate) fn is_glob(t: &Token) -> bool {
     use InnerToken::{T_Extglob, T_Glob, T_NormalWord};
-    match &*t.inner {
-        T_Extglob { .. } | T_Glob(_) => true,
-        T_NormalWord(l) => l.iter().any(is_glob) || has_split_range(l),
-        _ => false,
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_Extglob { .. } | T_Glob(_) => return true,
+            T_NormalWord(l) if has_split_range(l) => return true,
+            T_NormalWord(l) => pending.extend(l),
+            _ => {}
+        }
     }
+    false
 }
 
 /// `isFlag`: word whose first part is a `-`-prefixed literal.
@@ -367,22 +477,26 @@ pub(crate) fn is_flag(t: &Token) -> bool {
 /// Faithful port of `ShellCheck.ASTLib.isConstant`.
 pub(crate) fn is_constant(token: &Token) -> bool {
     use InnerToken::{T_DoubleQuoted, T_Literal, T_NormalWord, T_SingleQuoted};
-    match &*token.inner {
-        // This ignores some cases like ~"foo": a word whose first part is a
-        // literal starting with '~' is treated as non-constant.
-        T_NormalWord(l) => {
-            if let Some(first) = l.first()
-                && let T_Literal(s) = &*first.inner
-                && s.starts_with('~')
-            {
-                return false;
+    let mut pending = vec![token];
+    while let Some(token) = pending.pop() {
+        match &*token.inner {
+            // This ignores some cases like ~"foo": a word whose first part is a
+            // literal starting with '~' is treated as non-constant.
+            T_NormalWord(l) => {
+                if let Some(first) = l.first()
+                    && let T_Literal(s) = &*first.inner
+                    && s.starts_with('~')
+                {
+                    return false;
+                }
+                pending.extend(l);
             }
-            l.iter().all(is_constant)
+            T_DoubleQuoted(l) => pending.extend(l),
+            T_SingleQuoted(_) | T_Literal(_) => {}
+            _ => return false,
         }
-        T_DoubleQuoted(l) => l.iter().all(is_constant),
-        T_SingleQuoted(_) | T_Literal(_) => true,
-        _ => false,
     }
+    true
 }
 
 /// `getLeadingUnquotedString`.
@@ -414,30 +528,32 @@ pub(crate) fn is_literal(t: &Token) -> bool {
 }
 
 /// `isOnlyRedirection` (`ASTLib`).
-pub(crate) fn is_only_redirection(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => {
-            is_only_redirection(&commands[0])
-        }
-        InnerToken::T_Annotation { token, .. } => is_only_redirection(token),
-        InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => is_only_redirection(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            assignments.is_empty() && words.is_empty()
-        }
-        _ => false,
+pub(crate) fn is_only_redirection(mut t: &Token) -> bool {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Pipeline { commands, .. } if commands.len() == 1 => &commands[0],
+            InnerToken::T_Annotation { token, .. } => token,
+            InnerToken::T_Redirecting { redirs, cmd } if !redirs.is_empty() => cmd,
+            InnerToken::T_SimpleCommand { assignments, words } => {
+                return assignments.is_empty() && words.is_empty();
+            }
+            _ => return false,
+        };
     }
 }
 
 /// `isAssignment`.
-pub(crate) fn is_assignment(t: &Token) -> bool {
-    match &*t.inner {
-        InnerToken::T_Redirecting { cmd, .. } => is_assignment(cmd),
-        InnerToken::T_SimpleCommand { assignments, words } => {
-            !assignments.is_empty() && words.is_empty()
-        }
-        InnerToken::T_Assignment { .. } => true,
-        InnerToken::T_Annotation { token, .. } => is_assignment(token),
-        _ => false,
+pub(crate) fn is_assignment(mut t: &Token) -> bool {
+    loop {
+        t = match &*t.inner {
+            InnerToken::T_Redirecting { cmd, .. } => cmd,
+            InnerToken::T_SimpleCommand { assignments, words } => {
+                return !assignments.is_empty() && words.is_empty();
+            }
+            InnerToken::T_Assignment { .. } => return true,
+            InnerToken::T_Annotation { token, .. } => token,
+            _ => return false,
+        };
     }
 }
 
@@ -506,12 +622,15 @@ pub(crate) fn is_command_substitution(t: &Token) -> bool {
 }
 
 /// `getCommandSequences`.
-pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
+pub(crate) fn get_command_sequences(mut t: &Token) -> Vec<&[Token]> {
     use InnerToken::{
         T_Annotation, T_Backticked, T_BraceGroup, T_DollarBraceCommandExpansion, T_DollarExpansion,
         T_ForArithmetic, T_ForIn, T_IfExpression, T_Script, T_Subshell, T_UntilExpression,
         T_WhileExpression,
     };
+    while let T_Annotation { token, .. } = &*t.inner {
+        t = token;
+    }
     match &*t.inner {
         T_Script { commands, .. } => vec![&commands[..]],
         T_BraceGroup(cmds) | T_Subshell(cmds) | T_DollarExpansion(cmds) | T_Backticked(cmds) => {
@@ -530,7 +649,6 @@ pub(crate) fn get_command_sequences(t: &Token) -> Vec<&[Token]> {
             out.push(&elses[..]);
             out
         }
-        T_Annotation { token, .. } => get_command_sequences(token),
         T_DollarBraceCommandExpansion { list, .. } => vec![&list[..]],
         _ => vec![],
     }
@@ -547,17 +665,23 @@ pub(crate) fn will_split(t: &Token) -> bool {
         T_Backticked, T_BraceExpansion, T_DollarBraced, T_DollarExpansion, T_DoubleQuoted,
         T_Extglob, T_Glob, T_NormalWord,
     };
-    match &*t.inner {
-        T_DollarBraced { .. }
-        | T_DollarExpansion(_)
-        | T_Backticked(_)
-        | T_BraceExpansion(_)
-        | T_Glob(_)
-        | T_Extglob { .. } => true,
-        T_DoubleQuoted(l) => l.iter().any(crate::cfg::will_become_multiple_args),
-        T_NormalWord(l) => l.iter().any(will_split),
-        _ => false,
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        match &*t.inner {
+            T_DollarBraced { .. }
+            | T_DollarExpansion(_)
+            | T_Backticked(_)
+            | T_BraceExpansion(_)
+            | T_Glob(_)
+            | T_Extglob { .. } => return true,
+            T_DoubleQuoted(l) if l.iter().any(crate::cfg::will_become_multiple_args) => {
+                return true;
+            }
+            T_NormalWord(l) => pending.extend(l),
+            _ => {}
+        }
     }
+    false
 }
 
 /// `isQuoteableExpansion`.
@@ -567,7 +691,58 @@ pub(crate) fn is_quoteable_expansion(t: &Token) -> bool {
 
 /// `concat $ oversimplify t`, the form nearly every caller wants.
 pub(crate) fn oversimplify_concat(t: &Token) -> String {
-    oversimplify(t).concat()
+    let mut out = String::new();
+    oversimplify_into(t, &mut out, crate::ast::RECURSION_BUDGET);
+    out
+}
+
+/// Appends `concat $ oversimplify t` to `out`. The walk descends `budget`
+/// levels on the call stack and hands deeper tokens to [`oversimplify`].
+fn oversimplify_into(t: &Token, out: &mut String, budget: usize) {
+    use InnerToken::{
+        T_Annotation, T_Backticked, T_DollarArithmetic, T_DollarBraced, T_DollarExpansion,
+        T_DollarSingleQuoted, T_DoubleQuoted, T_Glob, T_Literal, T_NormalWord,
+        T_ParamSubSpecialChar, T_Pipeline, T_Redirecting, T_SimpleCommand, T_SingleQuoted,
+        TA_Expansion, TA_Sequence,
+    };
+    let Some(budget) = budget.checked_sub(1) else {
+        out.extend(oversimplify(t));
+        return;
+    };
+    match &*t.inner {
+        T_NormalWord(l) | T_DoubleQuoted(l) => {
+            for c in l {
+                oversimplify_into(c, out, budget);
+            }
+        }
+        T_SingleQuoted(s)
+        | T_Glob(s)
+        | T_Literal(s)
+        | T_ParamSubSpecialChar(s)
+        | T_DollarSingleQuoted(s) => out.push_str(s),
+        T_DollarBraced { .. } | T_DollarArithmetic(_) | T_DollarExpansion(_) | T_Backticked(_) => {
+            out.push_str("${VAR}");
+        }
+        T_Pipeline { commands, .. } if commands.len() == 1 => {
+            oversimplify_into(&commands[0], out, budget);
+        }
+        T_SimpleCommand { words, .. } => {
+            for w in words {
+                oversimplify_into(w, out, budget);
+            }
+        }
+        T_Redirecting { cmd, .. } => oversimplify_into(cmd, out, budget),
+        T_Annotation { token, .. } => oversimplify_into(token, out, budget),
+        // Workaround for `let "foo = bar"` parsing (as in the Haskell source).
+        TA_Sequence(seq) if seq.len() == 1 && matches!(&*seq[0].inner, TA_Expansion(_)) => {
+            if let TA_Expansion(v) = &*seq[0].inner {
+                for c in v {
+                    oversimplify_into(c, out, budget);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// `getTrailingUnquotedLiteral`: the word's last part, when it is an unquoted

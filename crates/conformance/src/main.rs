@@ -44,9 +44,7 @@ use shellcheck_cli::formatter::{fixer, json1};
 use shellcheck_cli::options::parse_dialect;
 use shellcheck_rs::interface::{CheckSpec, NoExternalSources, PositionedComment};
 
-// ---------------------------------------------------------------------------
 // Comparison keys
-// ---------------------------------------------------------------------------
 
 /// One replacement in a fix, in comparison order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,9 +282,7 @@ fn report_crashes(oracle: &oracle::Oracle, max: usize, quiet: bool) -> usize {
     crashes.len()
 }
 
-// ---------------------------------------------------------------------------
 // gate: ShellCheck's own prop_ properties
-// ---------------------------------------------------------------------------
 
 fn gate(args: &Args) -> Result<bool, String> {
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
@@ -455,9 +451,7 @@ fn print_divergences(
     }
 }
 
-// ---------------------------------------------------------------------------
 // audit: the `try` emulation
-// ---------------------------------------------------------------------------
 
 /// Report every `reset` site that rewinds over a commitment.
 ///
@@ -516,9 +510,7 @@ fn audit(args: &Args) -> Result<bool, String> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Arguments
-// ---------------------------------------------------------------------------
 
 /// What to run. `gate` when nothing is named, since that is the check that
 /// must pass.
