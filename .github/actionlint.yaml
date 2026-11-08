@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/kjanat/actionlint@f97b5231b8634a165263db1fad9ee0e13d4700e4/actionlint.schema.json
 ---
 plugins:
-  - kjanat/actionlint-plugin-shellcheck@v0.3.0
+  - kjanat/actionlint-plugin-shellcheck@v0.3.1
   - kjanat/actionlint-plugin-ruff@v0.2.0

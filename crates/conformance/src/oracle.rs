@@ -80,6 +80,13 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// The diagnostics of a `--format=json1` report. A report without a
+/// `comments` array answers nothing, so it reads as no report at all rather
+/// than as zero findings.
+fn json1_comments(report: &Value) -> Option<Vec<Value>> {
+    report.get("comments").and_then(Value::as_array).cloned()
+}
+
 impl Oracle {
     /// Prepare an oracle runner with its own scratch directory.
     ///
@@ -160,15 +167,17 @@ impl Oracle {
                 .output()
                 .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
             let stdout = String::from_utf8_lossy(&res.stdout);
-            let v: Value = if let Ok(v) = serde_json::from_str(stdout.trim()) {
-                v
-            } else {
+            let comments = serde_json::from_str::<Value>(stdout.trim())
+                .ok()
+                .as_ref()
+                .and_then(json1_comments);
+            let Some(comments) = comments else {
                 // One input in this batch killed the oracle, and its answer
                 // for the other 199 died with it. Re-run them one at a time
                 // so the run continues and the culprit is named, rather than
                 // ending the comparison on an upstream crash.
                 for (name, body) in chunk {
-                    match self.check_one_enabled(body, shell, enable) {
+                    match self.check_named(name, body, shell, enable) {
                         Ok((comments, _)) => {
                             out.entry(name.clone()).or_default().extend(comments);
                         }
@@ -183,12 +192,7 @@ impl Oracle {
                 }
                 continue;
             };
-            for c in v
-                .get("comments")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-            {
+            for c in comments {
                 let file = c.get("file").and_then(Value::as_str).unwrap_or_default();
                 let base = Path::new(file)
                     .file_name()
@@ -220,8 +224,19 @@ impl Oracle {
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<(Vec<Value>, i32), String> {
-        let name = self.name();
-        let p = self.dir.join(&name);
+        self.check_named(&self.name(), script, shell, enable)
+    }
+
+    /// As [`Oracle::check_one_enabled`], under `name`, so a recognised
+    /// extension in it still selects the dialect.
+    fn check_named(
+        &self,
+        name: &str,
+        script: &str,
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<(Vec<Value>, i32), String> {
+        let p = self.dir.join(name);
         std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
         let mut cmd = Command::new(&self.binary);
         cmd.arg("--norc").arg("--format=json1");
@@ -238,23 +253,23 @@ impl Oracle {
             .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
         let _ = std::fs::remove_file(&p);
         let stdout = String::from_utf8_lossy(&res.stdout);
-        let v: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
-            // Not "bad json": the process died before writing any. Carry the
-            // reason the oracle itself gave, which is what names the bug.
-            let stderr = String::from_utf8_lossy(&res.stderr);
-            let why = stderr
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("no output")
-                .trim()
-                .to_string();
-            format!("exit {}: {why}", res.status.code().unwrap_or(-1))
-        })?;
-        let comments = v
-            .get("comments")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let comments = serde_json::from_str::<Value>(stdout.trim())
+            .ok()
+            .as_ref()
+            .and_then(json1_comments)
+            .ok_or_else(|| {
+                // Not "bad json": the process died before writing a json1
+                // report. Carry the reason the oracle itself gave, which is
+                // what names the bug.
+                let stderr = String::from_utf8_lossy(&res.stderr);
+                let why = stderr
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("no output")
+                    .trim()
+                    .to_string();
+                format!("exit {}: {why}", res.status.code().unwrap_or(-1))
+            })?;
         Ok((comments, res.status.code().unwrap_or(-1)))
     }
 
@@ -413,6 +428,25 @@ mod tests {
         let crashes = o.crashes();
         assert_eq!(crashes.len(), 1, "one recorded crash: {crashes:?}");
         assert!(crashes[0].0.contains("coproc"));
+    }
+
+    /// The one-at-a-time retry after a crash checks each script under its own
+    /// name, so a `.bash` file keeps the dialect its extension implies.
+    #[test]
+    fn a_crash_retry_keeps_each_scripts_file_name() {
+        let Some(o) = oracle() else { return };
+        let scripts = vec![
+            ("crasher".to_string(), "x=$(coproc foo)\n".to_string()),
+            ("healthy.bash".to_string(), "true\n".to_string()),
+        ];
+        let out = o.check(&scripts, None).expect("batch must not fail");
+        let healthy = out
+            .get("healthy.bash")
+            .expect("the rest of the batch survives");
+        assert!(
+            healthy.is_empty(),
+            "a `.bash` file needs no shebang, got {healthy:?}"
+        );
     }
 
     #[test]

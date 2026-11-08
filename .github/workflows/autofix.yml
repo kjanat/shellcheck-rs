@@ -6,7 +6,7 @@ jobs:
     # An autofix commit pushed to a stacked PR rewrites a layer the merge queue coordinates
     concurrency:
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-      group: ${{ join('[github.workflow, github.head_ref || github.ref, github.actor]') }}
+      group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ github.actor }}
     if: github.event.pull_request.stack == null
     runs-on: ubuntu-latest
     timeout-minutes: 2
