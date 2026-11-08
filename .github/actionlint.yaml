@@ -1,3 +1,5 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/kjanat/actionlint/v1/actionlint.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/kjanat/actionlint@f97b5231b8634a165263db1fad9ee0e13d4700e4/actionlint.schema.json
 ---
-paths: { .github/workflows/rust.yml: { ignore: ['undefined variable "insert"'] } }
+plugins:
+  - kjanat/actionlint-plugin-shellcheck@v0.3.0
+  - kjanat/actionlint-plugin-ruff@v0.2.0

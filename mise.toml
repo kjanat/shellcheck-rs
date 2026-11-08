@@ -21,6 +21,14 @@ go             = { prefix = "1.27" }
 node           = "26"
 python         = "3.15"                                           # conformance harness (rust/harness/*.py)
 uv             = { prefix = "0.13" }
+npm            = "12.2.0"
+
+[tools."http:actionlint"]
+version          = "343"
+url              = 'https://pkg.pr.new/kjanat/actionlint/@kjanat-actionlint/actionlint-{{ os(macos="darwin", windows="win32") }}-{{ arch() }}@{{ version }}'
+format           = "tar.gz"
+strip_components = 1
+bin_path         = "bin"
 
 [tools.rust]
 version    = "latest"

@@ -24,24 +24,14 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    env:
-      ${{ insert }}: ${{ fromJsOn(vars.ACTIONLINT) }}
     steps:
       - parallel:
           - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-          - uses: actions/setup-go@v7
-            with: { go-version: "1.27.3" }
           - uses: $/
-      - env:
-          ref: "${{ case(env.actionlint_ref != '', env.actionlint_ref, 'go-identity-model') }}"
-          GOBIN: "${{ runner.temp }}/actionlint/bin"
-        run: go install "actionlint.kjanat.dev/v2/cmd/actionlint@${ref}";
-          echo "${GOBIN}" >> "${GITHUB_PATH}"
-      - run: actionlint plugin install shellcheck # `-v` INSTALL HAS NO VERBOSE... FFS
-        if: false # ignore[if-cond]
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with: { install_args: "http:actionlint" }
       - run: actionlint check -v --network-stats
           --experimental -o github -o pretty --summary
-          --no-tool shellcheck --no-tool ruff
 
   lint:
     name: "Format, clippy, workflows"
@@ -54,7 +44,7 @@ jobs:
         uses: *CO
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - name: Check formatting
         uses: kjanat/dprint-check@b6a885d3403db5e40ed59f2c27917d758381f577 # v3.2.0

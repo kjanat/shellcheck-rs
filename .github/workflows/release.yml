@@ -72,11 +72,17 @@ jobs:
       - name: Resolve once
         id: plan
         env: { PUBLISH_EXISTING: "${{ inputs.publish_existing }}", GH_TOKEN: "${{ github.token }}" }
-        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release plan
+        run: uv run --locked --no-dev
+          --package rshellcheck-release
+          rshellcheck-release plan
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with: { toolchain: "${{ steps.plan.outputs.rust }}" }
       - name: Test release tooling
-        run: uv run --locked --no-dev --package rshellcheck-release python -m unittest discover -s .github/release -p 'test_*.py' -v
+        run: uv run --locked --no-dev
+          --package rshellcheck-release
+          python -m unittest discover
+          -s .github/release
+          -p 'test_*.py' -v
 
   check:
     name: Rust tests and behavior snapshot
@@ -255,7 +261,10 @@ jobs:
           upload-release-assets: false
           dependency-snapshot: false
       - name: Validate SBOM and checksum the complete payload
-        run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-supply-chain dist --lockfile sbom-source/Cargo.lock
+        run: uv run --locked --no-dev
+          --package rshellcheck-release
+          rshellcheck-supply-chain dist
+          --lockfile sbom-source/Cargo.lock
       - uses: *ul
         with:
           name: rshellcheck-${{ needs.plan.outputs.label }}
@@ -345,8 +354,10 @@ jobs:
           PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
           SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
         run: |
-          identity=(--repo "${GH_REPO}" --signer-workflow "${GH_REPO}/.github/workflows/release.yml"
-            --source-digest "${GITHUB_SHA}" --source-ref "${GITHUB_REF}")
+          identity=(
+            --repo "${GH_REPO}" --signer-workflow "${GH_REPO}/.github/workflows/release.yml"
+            --source-digest "${GITHUB_SHA}" --source-ref "${GITHUB_REF}"
+          )
           for asset in dist/*; do
             gh attestation verify "${asset}" --bundle "${PROVENANCE_BUNDLE}" "${identity[@]}"
           done
@@ -623,12 +634,10 @@ jobs:
     if: ${{ inputs.registry != 'npm' && !cancelled() && (needs.assemble.result == 'success' || needs.registry-payload.result == 'success') }}
     strategy:
       fail-fast: false
-      matrix:
-        runner: [ubuntu-26.04, windows-2025, macos-15]
+      matrix: { runner: [ubuntu-26.04, windows-2025, macos-15] }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
-    env:
-      RELEASE_SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+    env: { RELEASE_SOURCE_COMMIT: "${{ needs.plan.outputs.commit }}" }
     steps:
       - *co0
       - *py
@@ -680,7 +689,7 @@ jobs:
       - *co0
       - uses: *node
         with: { node-version: "26", registry-url: "https://registry.npmjs.org" }
-      - run: npm install --global npm@12.2.0
+      - run: npm install --global "npm@$(yq '.tools.npm' mise.toml)"
       - *py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: *dockerLogin
