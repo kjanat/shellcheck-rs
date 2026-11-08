@@ -212,6 +212,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn an_oracle_answer_without_a_comments_array_differs() {
+        let dir = Scratch::new("no-comments");
+        let oracle = fake_oracle(dir.path(), "{}");
+        let path = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
+        let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
+        assert_eq!(
+            got,
+            [Judgement {
+                path,
+                verdict: Verdict::Differs,
+                deviations: Vec::new(),
+            }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_file_with_invalid_utf8_is_judged() {
         let dir = Scratch::new("latin1");
         let oracle = fake_oracle(dir.path(), "{\"comments\":[]}");

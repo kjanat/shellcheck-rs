@@ -80,6 +80,13 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// The diagnostics of a `--format=json1` report. A report without a
+/// `comments` array answers nothing, so it reads as no report at all rather
+/// than as zero findings.
+fn json1_comments(report: &Value) -> Option<Vec<Value>> {
+    report.get("comments").and_then(Value::as_array).cloned()
+}
+
 impl Oracle {
     /// Prepare an oracle runner with its own scratch directory.
     ///
@@ -160,9 +167,11 @@ impl Oracle {
                 .output()
                 .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
             let stdout = String::from_utf8_lossy(&res.stdout);
-            let v: Value = if let Ok(v) = serde_json::from_str(stdout.trim()) {
-                v
-            } else {
+            let comments = serde_json::from_str::<Value>(stdout.trim())
+                .ok()
+                .as_ref()
+                .and_then(json1_comments);
+            let Some(comments) = comments else {
                 // One input in this batch killed the oracle, and its answer
                 // for the other 199 died with it. Re-run them one at a time
                 // so the run continues and the culprit is named, rather than
@@ -183,12 +192,7 @@ impl Oracle {
                 }
                 continue;
             };
-            for c in v
-                .get("comments")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-            {
+            for c in comments {
                 let file = c.get("file").and_then(Value::as_str).unwrap_or_default();
                 let base = Path::new(file)
                     .file_name()
@@ -249,23 +253,23 @@ impl Oracle {
             .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
         let _ = std::fs::remove_file(&p);
         let stdout = String::from_utf8_lossy(&res.stdout);
-        let v: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
-            // Not "bad json": the process died before writing any. Carry the
-            // reason the oracle itself gave, which is what names the bug.
-            let stderr = String::from_utf8_lossy(&res.stderr);
-            let why = stderr
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("no output")
-                .trim()
-                .to_string();
-            format!("exit {}: {why}", res.status.code().unwrap_or(-1))
-        })?;
-        let comments = v
-            .get("comments")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let comments = serde_json::from_str::<Value>(stdout.trim())
+            .ok()
+            .as_ref()
+            .and_then(json1_comments)
+            .ok_or_else(|| {
+                // Not "bad json": the process died before writing a json1
+                // report. Carry the reason the oracle itself gave, which is
+                // what names the bug.
+                let stderr = String::from_utf8_lossy(&res.stderr);
+                let why = stderr
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("no output")
+                    .trim()
+                    .to_string();
+                format!("exit {}: {why}", res.status.code().unwrap_or(-1))
+            })?;
         Ok((comments, res.status.code().unwrap_or(-1)))
     }
 
