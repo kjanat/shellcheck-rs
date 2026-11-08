@@ -1,0 +1,44 @@
+name: Prepare release
+on:
+  workflow_dispatch:
+    inputs:
+      beepboop_execution_id:
+        description: Beepboop execution
+        required: true
+        type: string
+      beepboop_title:
+        description: Beepboop run title
+        required: false
+        type: string
+jobs:
+  prepare:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kjanat/beepboop/actions/begin@v1
+        id: beepboop
+        with:
+          execution-id: ${{ inputs.beepboop_execution_id }}
+          stream: go
+          operation: prepare
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(steps.beepboop.outputs.context).sourceSha }}
+          persist-credentials: false
+      - uses: kjanat/beepboop/actions/prepare@v1
+        with:
+          mode: apply
+          context: ${{ steps.beepboop.outputs.context }}
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - name: Prepare and validate
+        run: (cd 'go' && go mod tidy -diff)
+      - uses: kjanat/beepboop/actions/prepare@v1
+        with:
+          mode: submit
+          context: ${{ steps.beepboop.outputs.context }}
+run-name: ${{ inputs.beepboop_title || github.workflow }}

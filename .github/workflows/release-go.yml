@@ -1,0 +1,57 @@
+name: Publish packages
+on:
+  workflow_dispatch:
+    inputs:
+      beepboop_execution_id:
+        description: Beepboop execution
+        required: true
+        type: string
+      beepboop_title:
+        description: Beepboop run title
+        required: false
+        type: string
+jobs:
+  promote:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kjanat/beepboop/actions/begin@v1
+        id: beepboop
+        with:
+          execution-id: ${{ inputs.beepboop_execution_id }}
+          stream: go
+          operation: promote
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(steps.beepboop.outputs.context).sourceSha }}
+          persist-credentials: false
+      - id: beepboop_token
+        uses: kjanat/beepboop/actions/token@v1
+        with:
+          execution-id: ${{ steps.beepboop.outputs.execution-id }}
+          permission-contents: write
+      - id: beepboop_refs
+        uses: kjanat/beepboop/actions/publish-refs@v1
+        with:
+          token: ${{ steps.beepboop_token.outputs.token }}
+      - uses: kjanat/beepboop/actions/report@v1
+        if: ${{ !cancelled() && steps.beepboop.outcome == 'success' }}
+        with:
+          execution-id: ${{ steps.beepboop.outputs.execution-id }}
+          publications: |
+            [
+              {
+                "id": "pkg:golang/github.com/kjanat/shellcheck-rs/go",
+                "manager": "go",
+                "name": "github.com/kjanat/shellcheck-rs/go",
+                "version": "${{ fromJSON(steps.beepboop.outputs.context).version }}",
+                "required": true,
+                "outcome": "${{ steps.beepboop_refs.outcome == 'success' && 'succeeded' || 'failed' }}"
+              }
+            ]
+run-name: ${{ inputs.beepboop_title || github.workflow }}

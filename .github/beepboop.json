@@ -1,0 +1,139 @@
+{
+  "$schema": "https://beepboop.kjanat.dev/schema/v1.json",
+  "streams": {
+    "rshellcheck": {
+      "packages": [
+        "pkg:npm/%40kjanat/rshellcheck",
+        "pkg:npm/%40kjanat/rshellcheck-wasm",
+        "pkg:pypi/rshellcheck-wasm",
+        "pkg:pypi/rshellcheck",
+        "pkg:cargo/rshellcheck-core",
+        "pkg:cargo/rshellcheck",
+        "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
+      ],
+      "versioning": "workspace",
+      "required": [
+        "pkg:npm/%40kjanat/rshellcheck",
+        "pkg:npm/%40kjanat/rshellcheck-wasm",
+        "pkg:pypi/rshellcheck-wasm",
+        "pkg:pypi/rshellcheck",
+        "pkg:cargo/rshellcheck-core",
+        "pkg:cargo/rshellcheck",
+        "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
+      ],
+      "needs": {
+        "pkg:npm/%40kjanat/rshellcheck": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go",
+          "pkg:github/kjanat/shellcheck-rs"
+        ],
+        "pkg:npm/%40kjanat/rshellcheck-wasm": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go",
+          "pkg:github/kjanat/shellcheck-rs"
+        ],
+        "pkg:pypi/rshellcheck-wasm": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go",
+          "pkg:github/kjanat/shellcheck-rs"
+        ],
+        "pkg:pypi/rshellcheck": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go",
+          "pkg:github/kjanat/shellcheck-rs"
+        ],
+        "pkg:github/kjanat/shellcheck-rs": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
+        ],
+        "pkg:cargo/rshellcheck-core": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
+        ],
+        "pkg:cargo/rshellcheck": [
+          "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go",
+          "pkg:cargo/rshellcheck-core"
+        ]
+      },
+      "credentials": ["crates-io"],
+      "workflows": {
+        "release": {
+          "file": "release.yml",
+          "mode": "observe",
+          "ref": "refs/tags/rshellcheck-v*",
+          "publications": [
+            "pkg:npm/%40kjanat/rshellcheck",
+            "pkg:npm/%40kjanat/rshellcheck-wasm",
+            "pkg:pypi/rshellcheck-wasm",
+            "pkg:pypi/rshellcheck",
+            "pkg:github/kjanat/shellcheck-rs"
+          ],
+          "needs": ["promote"]
+        },
+        "crates": {
+          "file": "publish-crates.yml",
+          "ref": "master",
+          "publications": [
+            "pkg:cargo/rshellcheck-core",
+            "pkg:cargo/rshellcheck"
+          ],
+          "needs": ["release"],
+          "needsJobs": {
+            "release": [
+              "plan",
+              "check",
+              "build",
+              "bindings",
+              "assemble",
+              "registry-payload"
+            ]
+          }
+        }
+      },
+      "prepare": {
+        "strategy": "managed",
+        "workflow": {
+          "file": "prepare-release.yml",
+          "ref": "master"
+        }
+      },
+      "promote": {
+        "approval": "required",
+        "workflow": {
+          "file": "release-rshellcheck.yml",
+          "ref": "master",
+          "publications": [
+            "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
+          ],
+          "refs": {
+            "phase": "version",
+            "prefix": "rshellcheck-v"
+          }
+        }
+      }
+    },
+    "go": {
+      "packages": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
+      "versioning": "workspace",
+      "required": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
+      "versionSource": {
+        "kind": "tags",
+        "prefix": "go/v"
+      },
+      "prepare": {
+        "strategy": "managed",
+        "workflow": {
+          "file": "prepare-go.yml",
+          "ref": "master"
+        }
+      },
+      "promote": {
+        "approval": "required",
+        "workflow": {
+          "file": "release-go.yml",
+          "ref": "master",
+          "publications": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
+          "refs": {
+            "phase": "version",
+            "prefix": "go/v"
+          }
+        }
+      }
+    }
+  },
+  "managers": ["cargo", "go", "npm", "pypi", "workflow"]
+}
