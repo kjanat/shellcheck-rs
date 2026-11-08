@@ -5,5 +5,10 @@
 	],
 	"github-actions": {
 		"enabled": false
-	}
+	},
+	"forkProcessing": "enabled",
+	"baseBranchPatterns": [
+		"$default",
+		"bench"
+	]
 }
