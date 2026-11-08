@@ -168,7 +168,7 @@ impl Oracle {
                 // so the run continues and the culprit is named, rather than
                 // ending the comparison on an upstream crash.
                 for (name, body) in chunk {
-                    match self.check_one_enabled(body, shell, enable) {
+                    match self.check_named(name, body, shell, enable) {
                         Ok((comments, _)) => {
                             out.entry(name.clone()).or_default().extend(comments);
                         }
@@ -220,8 +220,19 @@ impl Oracle {
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<(Vec<Value>, i32), String> {
-        let name = self.name();
-        let p = self.dir.join(&name);
+        self.check_named(&self.name(), script, shell, enable)
+    }
+
+    /// As [`Oracle::check_one_enabled`], under `name`, so a recognised
+    /// extension in it still selects the dialect.
+    fn check_named(
+        &self,
+        name: &str,
+        script: &str,
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<(Vec<Value>, i32), String> {
+        let p = self.dir.join(name);
         std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
         let mut cmd = Command::new(&self.binary);
         cmd.arg("--norc").arg("--format=json1");
@@ -413,6 +424,25 @@ mod tests {
         let crashes = o.crashes();
         assert_eq!(crashes.len(), 1, "one recorded crash: {crashes:?}");
         assert!(crashes[0].0.contains("coproc"));
+    }
+
+    /// The one-at-a-time retry after a crash checks each script under its own
+    /// name, so a `.bash` file keeps the dialect its extension implies.
+    #[test]
+    fn a_crash_retry_keeps_each_scripts_file_name() {
+        let Some(o) = oracle() else { return };
+        let scripts = vec![
+            ("crasher".to_string(), "x=$(coproc foo)\n".to_string()),
+            ("healthy.bash".to_string(), "true\n".to_string()),
+        ];
+        let out = o.check(&scripts, None).expect("batch must not fail");
+        let healthy = out
+            .get("healthy.bash")
+            .expect("the rest of the batch survives");
+        assert!(
+            healthy.is_empty(),
+            "a `.bash` file needs no shebang, got {healthy:?}"
+        );
     }
 
     #[test]
