@@ -5,13 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and test commands
 
 ```sh
-cabal build                          # compile
-cabal test                           # run unit tests (source of truth)
-cabal run shellcheck -- file.sh      # run on a file
-cabal run shellcheck - <<< 'cmd'     # run on inline input
-./quickrun - <<< 'cmd'               # run interpreted (fast, no recompile)
-./quicktest                          # run tests interpreted (fast, no recompile)
-./nextnumber                         # print next available SC1xxx/SC2xxx/SC3xxx code
+cabal build                     # compile
+cabal test                      # run unit tests (source of truth)
+cabal run shellcheck -- file.sh # run on a file
+cabal run shellcheck - <<<'cmd' # run on inline input
+./quickrun - <<<'cmd'           # run interpreted (fast, no recompile)
+./quicktest                     # run tests interpreted (fast, no recompile)
+./nextnumber                    # print next available SC1xxx/SC2xxx/SC3xxx code
 ```
 
 For interactive development, use `cabal repl` then `:load ShellCheck.Debug`. After editing, reload with `:r` and test with `shellcheckString "your shell code"`.
