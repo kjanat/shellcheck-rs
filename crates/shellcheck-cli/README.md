@@ -43,9 +43,11 @@ rshellcheck --list-optional
 `checkstyle`, `diff` or `quiet`. `-j N` checks files on N workers, up to four
 by default. `rshellcheck --help` lists every option.
 
-The exit status is 0 when no file has a finding, 1 when one does, 2 when a file
-could not be read or checked, and 3 for a bad option. `-f quiet` prints
-nothing and only sets the status.
+The exit status is 0 when no file has a finding and 1 when one does. It is 2
+when a file could not be read or checked, 3 for a malformed option, and 4 for
+an unsupported value, such as `--shell=fish` or an invalid `.editorconfig`.
+`-f quiet` prints nothing and exits 1 for a finding and for a file it could not
+read or check.
 
 ## What the port adds
 
