@@ -2,11 +2,11 @@
 //! They apply fixes with `formatter::fixer`, which only this crate has.
 #![allow(non_snake_case)]
 
-use shellcheck_cli::formatter::fixer::{apply_fix, fix_mconcat, lines};
-use shellcheck_rs::interface::CheckSpec;
+use rshellcheck::formatter::fixer::{apply_fix, fix_mconcat, lines};
+use rshellcheck_core::interface::CheckSpec;
 
 fn verify_tree_fix(optional: &str, script: &str, expected: &str) -> bool {
-    let result = shellcheck_rs::check_script(&CheckSpec {
+    let result = rshellcheck_core::check_script(&CheckSpec {
         filename: "test".to_string(),
         script: script.to_string(),
         optional_checks: vec![optional.to_string()],

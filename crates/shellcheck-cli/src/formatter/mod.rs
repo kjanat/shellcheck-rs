@@ -8,7 +8,7 @@ pub mod json;
 pub mod json1;
 pub mod tty;
 
-use shellcheck_rs::interface::ColorOption;
+use rshellcheck_core::interface::ColorOption;
 
 /// A TTY color function: `(level, text) -> rendered`.
 ///

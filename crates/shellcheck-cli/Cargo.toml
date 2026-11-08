@@ -1,21 +1,27 @@
 [package]
-name                   = "shellcheck-cli"
+name                   = "rshellcheck"
 version                = "1.0.0"
+authors.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
-description            = "ShellCheck CLI and output formatters (TTY/JSON/JSON1/GCC/CheckStyle/Diff/Quiet)."
+description            = "Rust port of ShellCheck, the static analysis tool for shell scripts"
+documentation          = "https://docs.rs/rshellcheck"
+readme                 = "README.md"
 repository.workspace   = true
 license.workspace      = true
+keywords               = ["bash", "cli", "lint", "shell", "shellcheck"]
+categories             = ["command-line-utilities", "development-tools"]
+include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/README.md", "/LICENSE"]
 
 [[bin]]
 name = "rshellcheck"
 path = "src/bin/shellcheck.rs"
 
 [dependencies]
-schemars                = { workspace = true, optional = true }
-serde.workspace         = true
-serde_json.workspace    = true
-shellcheck-rs.workspace = true
+rshellcheck-core.workspace = true
+schemars                   = { workspace = true, optional = true }
+serde.workspace            = true
+serde_json.workspace       = true
 
 [build-dependencies]
 schemars             = { workspace = true, optional = true }

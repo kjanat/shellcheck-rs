@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use shellcheck_rs::Dialect;
+use rshellcheck_core::Dialect;
 
 use crate::corpus;
 use crate::fuzz::{Rng, generate};

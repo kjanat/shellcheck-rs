@@ -1,10 +1,10 @@
 use std::path::Path;
 
+use rshellcheck::formatter::json1;
+use rshellcheck::oracle::UpstreamPin;
 use schemars::generate::SchemaSettings;
 use schemars::{JsonSchema, Schema};
 use serde_json::Value;
-use shellcheck_cli::formatter::json1;
-use shellcheck_cli::oracle::UpstreamPin;
 
 use crate::validity::{matrix, outcomes, sources, spec};
 
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn json1_output_constrains_severities_and_insertion_points() {
-        use shellcheck_rs::interface::{
+        use rshellcheck_core::interface::{
             Comment, Fix, InsertionPoint, Position, PositionedComment, Replacement, Severity,
         };
 

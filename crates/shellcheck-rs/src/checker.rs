@@ -357,7 +357,7 @@ fn shell_from_filename(filename: &str) -> Option<Shell> {
 mod source_tests {
     //! The properties of `ShellCheck.Checker`, which upstream runs against
     //! `mockedSystemInterface`. The ones that read an rc file are in
-    //! `shellcheck_cli::rc`, where this port reads it.
+    //! `rshellcheck::rc`, where this port reads it.
     use super::*;
     use crate::interface::{ErrorMessage, MockSystem};
     use std::cell::RefCell;

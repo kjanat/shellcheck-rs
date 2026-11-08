@@ -443,7 +443,7 @@ def build(target: Triple) -> None:
         "--release",
         "--locked",
         "-p",
-        "shellcheck-cli",
+        "rshellcheck",
         "--bin",
         "rshellcheck",
         "--target",

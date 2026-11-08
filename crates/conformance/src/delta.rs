@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
+use rshellcheck_core::Dialect;
 use serde::{Deserialize, Serialize};
-use shellcheck_rs::Dialect;
 
 use crate::{Args, CommentKey, port_keys};
 
@@ -55,7 +55,7 @@ fn added() -> impl Iterator<Item = Dialect> {
 }
 
 pub fn collect(args: &Args) -> Result<Findings, String> {
-    let dropped = shellcheck_rs::dialect_policy::dropped()
+    let dropped = rshellcheck_core::dialect_policy::dropped()
         .into_iter()
         .map(|(dialect, code)| (dialect.name().to_string(), code))
         .collect();

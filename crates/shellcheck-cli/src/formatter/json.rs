@@ -8,7 +8,7 @@
 //! - Comment keys follow Haskell declaration order.
 //! - Replacement keys are sorted alphabetically (aeson standard).
 
-use shellcheck_rs::interface::PositionedComment;
+use rshellcheck_core::interface::PositionedComment;
 
 use super::json1;
 

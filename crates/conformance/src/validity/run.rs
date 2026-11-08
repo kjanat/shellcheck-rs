@@ -4,8 +4,8 @@ use super::matrix::{self, Cell};
 use super::outcomes::{self, Outcome, Outcomes, Row};
 use super::spec::{self, Kind, Spec};
 use crate::port_keys;
-use shellcheck_rs::Dialect;
-use shellcheck_rs::dialect_policy::Policy;
+use rshellcheck_core::Dialect;
+use rshellcheck_core::dialect_policy::Policy;
 
 pub fn run(args: &ValidityArgs) -> Result<bool, String> {
     let matrix = matrix::load()?;
@@ -487,7 +487,7 @@ fn keeps_floor_by_design(dialect: &str, script: &str) -> bool {
     let Some(dialect) = Dialect::from_name(dialect) else {
         return false;
     };
-    shellcheck_rs::parser::parse_script("-", script)
+    rshellcheck_core::parser::parse_script("-", script)
         .root
         .is_some_and(|root| dialect.is_added() && Policy::of(dialect, &root) == Policy::Floor)
 }

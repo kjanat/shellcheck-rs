@@ -1,4 +1,4 @@
-//! # shellcheck-rs (core)
+//! # rshellcheck-core
 //!
 //! A structural Rust port of [ShellCheck](https://www.shellcheck.net).
 //! This crate is the reusable, IO-free analysis core: it parses a shell script into an AST,
@@ -49,6 +49,11 @@ pub mod regex_lib;
 pub mod tdfa;
 #[cfg(test)]
 mod test_support;
+
+// Compiles the README examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 pub use analytics::optional_checks::{OptionalCheck, optional_checks};
 pub use checker::check_script;

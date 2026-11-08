@@ -25,7 +25,7 @@ pub const RSC_DATAFLOW_SKIPPED: &str = "RSC1001";
 /// its own, and the caller decides what a sourced file may read.
 ///
 /// `siGetConfig` has no counterpart here: this port reads rc files in the CLI
-/// (see `shellcheck_cli::rc`) rather than from inside the parser.
+/// (see `rshellcheck::rc`) rather than from inside the parser.
 pub trait System {
     /// `siReadFile`: given what annotations say about including external files
     /// (`None` when nothing said anything) and a resolved filename from

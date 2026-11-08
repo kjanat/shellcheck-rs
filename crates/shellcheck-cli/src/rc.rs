@@ -24,11 +24,11 @@
 use std::cell::RefCell;
 use std::path::Path;
 
-use shellcheck_rs::ast::Annotation;
-use shellcheck_rs::editor_config::{
+use rshellcheck_core::ast::Annotation;
+use rshellcheck_core::editor_config::{
     invalid_root_lines, is_editor_config_root, is_rejection, rejected_root,
 };
-use shellcheck_rs::interface::{CheckSpec, RcDirectives, RcParseProblem, decode_bytes};
+use rshellcheck_core::interface::{CheckSpec, RcDirectives, RcParseProblem, decode_bytes};
 
 use crate::paths::{does_file_exist, io_error_message, normalize_path, xdg_config_home};
 
@@ -751,7 +751,7 @@ fn editor_config_with(filename: &str, global: Option<&str>) -> Option<RawConfig>
 fn directives_for(path: &str, (file, contents): &RawConfig) -> Option<RawConfig> {
     let blob = match invalid_root_lines(contents).first() {
         Some(&line) => rejected_root(line),
-        None => shellcheck_rs::editor_config::directives(
+        None => rshellcheck_core::editor_config::directives(
             contents,
             &make_relative_to(
                 &Path::new(file)
@@ -835,8 +835,8 @@ fn default_paths() -> Vec<String> {
 mod tests {
     use super::*;
     use crate::options::parse_dialect;
-    use shellcheck_rs::Dialect;
-    use shellcheck_rs::interface::Shell;
+    use rshellcheck_core::Dialect;
+    use rshellcheck_core::interface::Shell;
 
     impl Config {
         fn disabled(&self) -> Vec<(i64, i64)> {
@@ -1272,7 +1272,7 @@ mod tests {
     /// .shellcheckrc. We simulate that here by feeding
     /// `editorConfigDirectives`' output through the rc parser.
     fn with_editor_config(ec: &str, name: &str) -> Config {
-        let blob = shellcheck_rs::editor_config::directives(ec, name).unwrap_or_default();
+        let blob = rshellcheck_core::editor_config::directives(ec, name).unwrap_or_default();
         parse_contents(".editorconfig", &blob)
     }
 
@@ -1481,16 +1481,16 @@ mod tests {
 
     /// `mockedSystemInterface` with `siFindSource` replaced.
     struct Resolver {
-        files: shellcheck_rs::interface::MockSystem,
+        files: rshellcheck_core::interface::MockSystem,
         find: Finder,
     }
 
-    impl shellcheck_rs::interface::System for Resolver {
+    impl rshellcheck_core::interface::System for Resolver {
         fn read_file(
             &self,
             external_sources: Option<bool>,
             file: &str,
-        ) -> Result<String, shellcheck_rs::interface::ErrorMessage> {
+        ) -> Result<String, rshellcheck_core::interface::ErrorMessage> {
             self.files.read_file(external_sources, file)
         }
 
@@ -1517,10 +1517,10 @@ mod tests {
             merge_into(&mut spec, &parse_contents(".shellcheckrc", rc()));
         }
         let sys = std::rc::Rc::new(Resolver {
-            files: shellcheck_rs::interface::MockSystem::new(includes),
+            files: rshellcheck_core::interface::MockSystem::new(includes),
             find,
         });
-        let mut codes: Vec<i64> = shellcheck_rs::checker::check_script_with(sys, &spec)
+        let mut codes: Vec<i64> = rshellcheck_core::checker::check_script_with(sys, &spec)
             .comments
             .iter()
             .map(|c| c.comment.code)

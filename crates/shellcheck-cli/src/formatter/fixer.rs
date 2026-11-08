@@ -13,7 +13,7 @@
 //!
 //! Columns and lines are 1-based, matching the Haskell `Position`.
 
-use shellcheck_rs::interface::{
+use rshellcheck_core::interface::{
     Fix, InsertionPoint, Position, PositionedComment, Replacement, columns,
 };
 
@@ -486,7 +486,7 @@ pub fn apply_fix(fix: &Fix, file_lines: &[String]) -> Vec<String> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
-    use shellcheck_rs::interface::{InsertionPoint, Position};
+    use rshellcheck_core::interface::{InsertionPoint, Position};
 
     fn pos(line: i64, col: i64) -> Position {
         Position {

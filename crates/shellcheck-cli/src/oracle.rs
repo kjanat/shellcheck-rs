@@ -1,4 +1,5 @@
-//! The upstream ShellCheck pin in `tools/oracle.json`.
+//! The upstream ShellCheck pin in `tools/oracle.json`, copied to this crate's
+//! `upstream.json` so the published package builds without the repository.
 
 use serde::Deserialize;
 

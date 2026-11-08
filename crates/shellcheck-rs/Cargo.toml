@@ -1,13 +1,20 @@
 [package]
-name                   = "shellcheck-rs"
+name                   = "rshellcheck-core"
 version                = "1.0.0"
+authors.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
-description            = "Rust port of ShellCheck: the reusable parse + analyze core (LSP-friendly, std, regex, im-rc and reblessive only)."
+description            = "Parser and analysis core of rshellcheck, a Rust port of ShellCheck"
+documentation          = "https://docs.rs/rshellcheck-core"
+readme                 = "README.md"
+repository.workspace   = true
 license.workspace      = true
+keywords               = ["bash", "lint", "shell", "shellcheck", "static-analysis"]
+categories             = ["development-tools", "parser-implementations"]
+include                = ["/src/**/*.rs", "/README.md", "/LICENSE"]
 
 [lib]
-name = "shellcheck_rs"
+name = "rshellcheck_core"
 path = "src/lib.rs"
 
 [dependencies]

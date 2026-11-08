@@ -8,8 +8,8 @@
 //!
 //! which yields SC2046 (warning), SC2005 (style), SC2006 (style, with a fix).
 
-use shellcheck_cli::formatter::{checkstyle, diff, gcc, json, json1, tty};
-use shellcheck_rs::interface::{
+use rshellcheck::formatter::{checkstyle, diff, gcc, json, json1, tty};
+use rshellcheck_core::interface::{
     Comment, Fix, InsertionPoint, Position, PositionedComment, Replacement, Severity,
 };
 
@@ -157,7 +157,7 @@ fn json_legacy_matches_oracle() {
 
 #[test]
 fn tty_matches_oracle_no_color() {
-    let color = shellcheck_cli::formatter::tty_color_func(false);
+    let color = rshellcheck::formatter::tty_color_func(false);
     let mut wiki: Vec<tty::WikiEntry> = Vec::new();
     let mut out = String::new();
     tty::render_file(&color, "fix.sh", CONTENTS, &sample(), &mut wiki, &mut out);
@@ -219,7 +219,7 @@ fn diff_no_trailing_newline_marker() {
 
 #[test]
 fn tty_links_port_codes_to_the_docs() {
-    let color = shellcheck_cli::formatter::tty_color_func(false);
+    let color = rshellcheck::formatter::tty_color_func(false);
     let comments = vec![
         comment(Severity::WarningC, 9001, "Interpreter path.", 6, 12, None),
         comment(Severity::WarningC, 9999, "Future port code.", 6, 12, None),

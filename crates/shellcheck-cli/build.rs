@@ -1,4 +1,4 @@
-//! Exposes the upstream ShellCheck pin from `tools/oracle.json` to the CLI.
+//! Exposes the upstream ShellCheck pin from `upstream.json` to the CLI.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 mod oracle;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let pin = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("../../tools/oracle.json");
+    let pin = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("upstream.json");
     println!("cargo:rerun-if-changed={}", pin.display());
     let pin: oracle::UpstreamPin = serde_json::from_str(&std::fs::read_to_string(&pin)?)?;
     println!(
