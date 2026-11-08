@@ -464,7 +464,9 @@ def build_candidate(build: Build, state: Path) -> Path:
         origin = source if source_tools.get(name) else ROOT
         run(["mise", "install", "--locked", name], origin)
     verify_source(build, "during toolchain setup")
-    execute = ["mise", "exec", *pinned, "--"]
+    # A candidate's own `[deps]` (such as `uv sync`) needs tools its unlocked
+    # mise.toml cannot resolve under MISE_LOCKED, and the build needs none.
+    execute = ["mise", "exec", "--no-deps", *pinned, "--"]
     if "cabal" in build.spec.tools:
         cache = subprocess.run(
             [*execute, "cabal", "path", "--remote-repo-cache"],

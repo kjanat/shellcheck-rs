@@ -46,6 +46,9 @@ if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'p
     if os.environ.get('MISE_LOCKED') != '1' or os.environ.get('MISE_TASK_RUN_AUTO_INSTALL') != 'false':
         with pathlib.Path('mise.lock').open('a') as output:
             output.write('\\n# nested mise task rewrote the lockfile\\n')
+if sys.argv[1] == 'exec' and '--no-deps' not in sys.argv[:sys.argv.index('--')]:
+    print('mise exec prepared the candidate dependencies', file=sys.stderr)
+    sys.exit(9)
 if sys.argv[1:3] == ['which', 'shellcheck']:
     print({str(self.binary)!r})
     sys.exit(0)
