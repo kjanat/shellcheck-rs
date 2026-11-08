@@ -1,5 +1,5 @@
 name: Release rshellcheck
-run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.publish_existing, inputs.registry == 'npm' && 'npm' || inputs.registry == 'pypi' && 'PyPI' || 'npm, PyPI, GHCR and crates.io') || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
+run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.publish_existing, inputs.registry == 'npm' && 'npm' || inputs.registry == 'pypi' && 'PyPI' || 'npm, PyPI and GHCR') || (github.ref_type == 'tag' && format('Release {0}', github.ref_name)) || format('Validate release packaging — {0}', github.head_ref || github.ref_name) }}
 
 on:
   push:
@@ -668,49 +668,6 @@ jobs:
         run: sha256sum --check SHA256SUMS
       - name: Publish native wheels with trusted publishing
         run: uv run --locked --no-dev --package rshellcheck-release python -m native_wheels publish dist
-
-  crates-core:
-    name: Publish rshellcheck-core to crates.io
-    needs: [plan, publish, registry-payload]
-    if: ${{ (inputs.registry == '' || inputs.registry == 'all') && !cancelled() && (needs.publish.result == 'success' || needs.registry-payload.result == 'success') && needs.plan.outputs.publish == 'true' && github.repository == 'kjanat/shellcheck-rs' }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    permissions: { contents: read, id-token: write }
-    environment:
-      name: crates-io
-      url: https://crates.io/crates/rshellcheck-core/${{ needs.plan.outputs.label }}
-    env:
-      CRATE: rshellcheck-core
-      HAS_CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
-    steps: &CratesPublishSteps
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { persist-credentials: false, ref: "${{ needs.plan.outputs.commit }}" }
-      - *py
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with: { toolchain: "${{ needs.plan.outputs.rust }}" }
-      # Trusted publishing cannot create a crate; its first release uses the secret.
-      - name: Mint a crates.io token with trusted publishing
-        id: auth
-        if: env.HAS_CRATES_TOKEN != 'true'
-        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-      - name: Publish and verify the package
-        env: { CARGO_REGISTRY_TOKEN: "${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}" }
-        run: uv run --locked --no-dev --package rshellcheck-release python -m crates_publish "${CRATE}"
-
-  crates-cli:
-    name: Publish rshellcheck to crates.io
-    needs: [plan, crates-core]
-    if: ${{ !cancelled() && needs.crates-core.result == 'success' }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    permissions: { contents: read, id-token: write }
-    environment:
-      name: crates-io
-      url: https://crates.io/crates/rshellcheck/${{ needs.plan.outputs.label }}
-    env:
-      CRATE: rshellcheck
-      HAS_CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
-    steps: *CratesPublishSteps
 
   upstream-aliases:
     name: Advance stable upstream aliases

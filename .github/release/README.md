@@ -205,25 +205,6 @@ are skipped only when their registry integrity matches the release archive.
 A partial npm publication can be resumed by rerunning its failed job.
 Prerelease versions use the `next` dist-tag; stable versions use `latest`.
 
-## crates.io
-
-After the GitHub release is published, the `crates-core` job publishes
-`rshellcheck-core` and then the `crates-cli` job publishes `rshellcheck`, both
-from the release commit, in the `crates-io` environment.
-[crates_publish.py](crates_publish.py) packages each crate, uploads it, and
-waits until crates.io reports the same SHA-256 as the local package. A version
-already on crates.io is skipped when its checksum matches and fails the job
-when it does not, so a failed job can be rerun. Rate-limited uploads wait for
-the time crates.io names and retry up to five times.
-
-Trusted publishing cannot create a crate. For the first release, store an API
-token with the `publish-new` and `publish-update` scopes as
-`CARGO_REGISTRY_TOKEN` in the `crates-io` environment. Then configure a trusted
-publisher on crates.io for both crates: repository `kjanat/shellcheck-rs`,
-workflow `release.yml`, environment `crates-io`. Delete the secret afterwards;
-without it, each job mints a short-lived token through
-`rust-lang/crates-io-auth-action`.
-
 ## Follow an upstream version
 
 After all distributions publish successfully, stable releases advance aliases

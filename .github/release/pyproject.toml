@@ -28,7 +28,6 @@ setuptools            = { py-modules = [
   "release_aliases",
   "registry_payload",
   "native_wheels",
-  "registry_checks",
-  "crates_publish"
+  "registry_checks"
 ] }
 ty.environment.python = "../../.venv"
