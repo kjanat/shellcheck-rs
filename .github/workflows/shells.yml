@@ -198,7 +198,8 @@ jobs:
         if: needs.pin.outputs.cells != '[]'
         env: { CELLS: "${{ needs.pin.outputs.cells }}" }
         run: |
-          mapfile -t cells < <(jq -r '.[] | "--cell=" + .' <<< "${CELLS}")
+          listed="$(jq -r '.[] | "--cell=" + .' <<< "${CELLS}")"
+          mapfile -t cells <<< "${listed}"
           cargo validity pin "${cells[@]}"
 
       - name: Record outcomes
