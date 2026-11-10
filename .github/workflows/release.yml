@@ -149,7 +149,7 @@ jobs:
         run: cargo install cross --locked --version "${CROSS_VERSION}"
       - name: Install Android NDK
         if: matrix.backend == 'android'
-        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"'
+        run: '"${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"'
       - name: Build and smoke-test
         run: uv run --locked --no-dev --package rshellcheck-release rshellcheck-release build --target "${TARGET}"
       - name: Smoke-test on FreeBSD
@@ -558,7 +558,7 @@ jobs:
         id: npm
         run: |
           if [[ "${NPM_PLAN:-false}" == true ]]; then uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --plan
-          else uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --package "${NPM_PACKAGE}"
+          else uv run --locked --no-dev --package rshellcheck-release python -m npm_publish dist --package "${NPM_PACKAGE:?}"
           fi
 
   npm:
@@ -689,7 +689,9 @@ jobs:
       - *co0
       - uses: *node
         with: { node-version: "26", registry-url: "https://registry.npmjs.org" }
-      - run: npm install --global "npm@$(yq '.tools.npm' mise.toml)"
+      - run: |
+          version="$(yq '.tools.npm' mise.toml)"
+          npm install --global "npm@${version}"
       - *py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: *dockerLogin
