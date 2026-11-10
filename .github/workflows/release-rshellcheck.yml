@@ -39,6 +39,8 @@ jobs:
         uses: kjanat/beepboop/actions/publish-refs@v1
         with:
           token: ${{ steps.beepboop_token.outputs.token }}
+        env:
+          ${{ insert }}: ${{ fromJSON(steps.beepboop_token.outputs.gitId || '{}') }}
       - uses: kjanat/beepboop/actions/report@v1
         if: ${{ !cancelled() && steps.beepboop.outcome == 'success' }}
         with:
@@ -54,4 +56,5 @@ jobs:
                 "outcome": "${{ steps.beepboop_refs.outcome == 'success' && 'succeeded' || 'failed' }}"
               }
             ]
+    timeout-minutes: 90
 run-name: ${{ inputs.beepboop_title || github.workflow }}

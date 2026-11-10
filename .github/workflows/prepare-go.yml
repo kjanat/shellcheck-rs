@@ -41,4 +41,5 @@ jobs:
         with:
           mode: submit
           context: ${{ steps.beepboop.outputs.context }}
+    timeout-minutes: 120
 run-name: ${{ inputs.beepboop_title || github.workflow }}

@@ -66,4 +66,5 @@ jobs:
                 "outcome": "${{ steps.beepboop_publish.outcome == 'success' && 'succeeded' || 'failed' }}"
               }
             ]
+    timeout-minutes: 150
 run-name: ${{ inputs.beepboop_title || github.workflow }}
