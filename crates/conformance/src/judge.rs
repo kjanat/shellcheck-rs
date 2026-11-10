@@ -94,7 +94,8 @@ pub fn judge(
                 });
             };
             let ok = oracle_keys(comments);
-            let pk = port_keys(script, &oracle.dir().join(name).to_string_lossy(), shell)?;
+            let filename = oracle.dir().join(name).to_string_lossy().into_owned();
+            let pk = port_keys(script, &filename, shell)?;
             if keys_match(&pk, &ok) {
                 return Ok(Judgement {
                     path: path.clone(),
@@ -103,7 +104,7 @@ pub fn judge(
                 });
             }
             let ids: Vec<&'static str> =
-                deviations::sanctioned(script, shell, &pk, &ok, Some(oracle))
+                deviations::sanctioned(script, &filename, shell, &pk, &ok, Some(oracle))
                     .iter()
                     .map(|d| d.id)
                     .collect();

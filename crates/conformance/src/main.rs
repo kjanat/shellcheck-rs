@@ -330,15 +330,21 @@ fn gate(args: &Args) -> Result<bool, String> {
             continue;
         };
         compared += 1;
-        let path = oracle.dir().join(name);
+        let path = oracle.dir().join(name).to_string_lossy().into_owned();
         let ok = oracle_keys(ocomments);
-        let pk = port_keys(script, &path.to_string_lossy(), args.shell.as_deref())?;
+        let pk = port_keys(script, &path, args.shell.as_deref())?;
         if keys_match(&pk, &ok) {
             continue;
         }
         // A difference the port is entitled to is not a divergence.
-        let sanction =
-            deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle));
+        let sanction = deviations::sanctioned(
+            script,
+            &path,
+            args.shell.as_deref(),
+            &pk,
+            &ok,
+            Some(&oracle),
+        );
         if sanction.is_empty() {
             divergent.push((entry.id.clone(), pk, ok));
         } else {

@@ -467,7 +467,7 @@ impl Shrinker<'_> {
             return Ok(false);
         }
         Ok(signature(&pk, &ok, self.shell) == self.want
-            && crate::deviations::sanctioned(cand, self.shell, &pk, &ok, Some(self.oracle))
+            && crate::deviations::sanctioned(cand, &name, self.shell, &pk, &ok, Some(self.oracle))
                 .is_empty())
     }
 
@@ -590,15 +590,21 @@ pub fn run(args: &Args) -> Result<bool, String> {
                 continue;
             };
             let ok = crate::oracle_keys(ocomments);
-            let path = oracle.dir().join(name);
-            let pk = port_keys(source, &path.to_string_lossy(), shell.as_deref())?;
+            let path = oracle.dir().join(name).to_string_lossy().into_owned();
+            let pk = port_keys(source, &path, shell.as_deref())?;
             if keys_match(&pk, &ok) {
                 continue;
             }
             // A difference the port is entitled to (see `deviations`) is not a
             // finding, however the generator spelled it.
-            let sanction =
-                crate::deviations::sanctioned(source, shell.as_deref(), &pk, &ok, Some(&oracle));
+            let sanction = crate::deviations::sanctioned(
+                source,
+                &path,
+                shell.as_deref(),
+                &pk,
+                &ok,
+                Some(&oracle),
+            );
             if !sanction.is_empty() {
                 for d in sanction {
                     if sanctioned.insert(d.id) && !args.quiet {
