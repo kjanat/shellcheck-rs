@@ -129,7 +129,7 @@ pub fn judge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oracle::Scratch;
+    use crate::oracle::testing::Scratch;
 
     fn write(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
@@ -172,7 +172,7 @@ mod tests {
     /// A fake oracle printing `stdout`, whatever it is asked.
     #[cfg(unix)]
     fn fake_oracle(dir: &Path, stdout: &str) -> oracle::Oracle {
-        oracle::fake_oracle(dir, &format!("echo '{stdout}'"))
+        oracle::testing::fake_oracle(dir, &format!("echo '{stdout}'"))
     }
 
     #[cfg(unix)]
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn a_file_name_of_maximum_length_is_judged() {
         let dir = Scratch::new("long-name");
-        let oracle = oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE);
+        let oracle = oracle::testing::fake_oracle(dir.path(), oracle::testing::DIRTY_ORACLE);
         let name = format!("{}.sh", "a".repeat(252));
         assert_eq!(name.len(), 255);
         let path = write(dir.path(), &name, "#!/bin/sh\ntrue\n");
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn files_sharing_a_name_get_their_own_answers() {
         let dir = Scratch::new("same-name");
-        let oracle = oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE);
+        let oracle = oracle::testing::fake_oracle(dir.path(), oracle::testing::DIRTY_ORACLE);
         for sub in ["one", "two"] {
             std::fs::create_dir_all(dir.path().join(sub)).expect("fixture directory");
         }
@@ -302,11 +302,12 @@ mod tests {
         );
     }
 
-    /// `conformance judge` as the benchmark runs it: `argv` after the command
+    /// `conformance judge` as the benchmark runs it: `flags` after the command
     /// name, `stdin` holding the paths. Returns the exit status and stdout.
-    fn cli(argv: &[&str], stdin: &str) -> (u8, String) {
+    fn cli(flags: &[&str], stdin: &str) -> (u8, String) {
         use clap::Parser;
-        let args = Args::try_parse_from(["conformance", "judge"].iter().chain(argv)).expect("args");
+        let args =
+            Args::try_parse_from(["conformance", "judge"].iter().chain(flags)).expect("args");
         let mut out = Vec::new();
         let res = run_on(&args, stdin.as_bytes(), &mut out);
         (
@@ -338,7 +339,10 @@ mod tests {
     fn the_cli_reports_every_path_in_input_order_and_exits_by_verdict() {
         let dir = Scratch::new("cli-verdicts");
         let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
-        drop(oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE));
+        drop(oracle::testing::fake_oracle(
+            dir.path(),
+            oracle::testing::DIRTY_ORACLE,
+        ));
         let clean = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
         let dirty = write(dir.path(), "dirty.sh", "#!/bin/sh\n# dirty\n");
         let (status, out) = cli(&["--oracle", &oracle], &format!("{dirty}\n\n{clean}\n"));
@@ -360,7 +364,7 @@ mod tests {
     fn the_cli_fails_closed_on_unusable_oracle_output() {
         let dir = Scratch::new("cli-garbage");
         let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
-        drop(oracle::fake_oracle(dir.path(), "echo 'not json'"));
+        drop(oracle::testing::fake_oracle(dir.path(), "echo 'not json'"));
         let clean = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
         let (status, out) = cli(&["--oracle", &oracle], &format!("{clean}\n"));
         assert_eq!(status, 1, "{out}");
@@ -372,7 +376,10 @@ mod tests {
     fn the_cli_exits_2_and_prints_nothing_for_a_missing_file() {
         let dir = Scratch::new("cli-missing");
         let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
-        drop(oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE));
+        drop(oracle::testing::fake_oracle(
+            dir.path(),
+            oracle::testing::DIRTY_ORACLE,
+        ));
         let missing = dir.path().join("absent.sh").to_string_lossy().into_owned();
         let (status, out) = cli(&["--oracle", &oracle], &format!("{missing}\n"));
         assert_eq!((status, out.as_str()), (2, ""));
@@ -385,7 +392,7 @@ mod tests {
     fn the_cli_checks_as_the_shell_it_is_given() {
         let dir = Scratch::new("cli-shell");
         let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
-        drop(oracle::fake_oracle(
+        drop(oracle::testing::fake_oracle(
             dir.path(),
             r#"case " $* " in *" --shell=bash "*) ;; *) exit 3 ;; esac; echo '{"comments":[]}'"#,
         ));

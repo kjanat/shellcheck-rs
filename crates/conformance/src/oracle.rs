@@ -179,12 +179,12 @@ impl Run {
     /// Did the oracle check every file it was given? ShellCheck exits 0
     /// without findings and 1 with them; any other ending means it gave up
     /// on some input, whatever it printed first.
-    fn checked(&self) -> bool {
+    const fn checked(&self) -> bool {
         matches!(self.ended, Ended::Exited(0 | 1))
     }
 
     /// The exit code, with -1 for a process a signal ended.
-    fn code(&self) -> i32 {
+    const fn code(&self) -> i32 {
         match self.ended {
             Ended::Exited(code) => code,
             Ended::Signalled | Ended::OutOfTime(_) => -1,
@@ -235,7 +235,7 @@ impl Oracle {
     /// This oracle with `base` and `per_script` as its allowance, so a test
     /// reaches the deadline without waiting a minute.
     #[cfg(test)]
-    fn with_allowance(mut self, base: Duration, per_script: Duration) -> Self {
+    const fn with_allowance(mut self, base: Duration, per_script: Duration) -> Self {
         self.allowance = Allowance { base, per_script };
         self
     }
@@ -589,77 +589,82 @@ pub fn test_oracle() -> Option<Oracle> {
         .ok()
 }
 
-/// A scratch directory removed when the test ends.
+/// Fixtures the tests of this crate share.
 #[cfg(test)]
-pub struct Scratch(PathBuf);
+pub mod testing {
+    use super::*;
 
-#[cfg(test)]
-impl Scratch {
-    pub fn new(test: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("conformance-{test}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch directory");
-        Self(dir)
-    }
+    /// A scratch directory removed when the test ends.
+    pub struct Scratch(PathBuf);
 
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-}
+    impl Scratch {
+        pub fn new(test: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("conformance-{test}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("scratch directory");
+            Self(dir)
+        }
 
-#[cfg(test)]
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A shell script in `dir` standing in for the oracle, running `body` for
-/// every invocation except `--version`.
-#[cfg(all(test, unix))]
-pub fn fake_oracle(dir: &Path, body: &str) -> Oracle {
-    let fake = dir.join("oracle");
-    std::fs::write(
-        &fake,
-        format!("#!/bin/sh\n[ \"$1\" = --version ] && exit 0\n{body}\n"),
-    )
-    .expect("write oracle");
-    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("chmod oracle");
-    // A child another test thread forked while the write was open holds
-    // the descriptor until it execs, and exec fails with ETXTBSY until
-    // then. Once one exec succeeds, no process can hold it any more.
-    for _ in 0..100 {
-        match Command::new(&fake).arg("--version").output() {
-            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            ran => {
-                ran.expect("run fake oracle");
-                break;
-            }
+        pub fn path(&self) -> &Path {
+            &self.0
         }
     }
-    Oracle::new(&fake.to_string_lossy()).expect("oracle")
-}
 
-/// A fake oracle body that reports one SC2086 for every file containing
-/// `dirty`, and nothing for any other.
-#[cfg(all(test, unix))]
-pub const DIRTY_ORACLE: &str = r#"sep=
-printf '{"comments":['
-for f; do
-  case $f in --*) continue ;; esac
-  case $(cat "$f") in
-    *dirty*)
-      printf '%s{"file":"%s","line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m","fix":null}' "$sep" "$f"
-      sep=,
-      ;;
-  esac
-done
-printf ']}\n'"#;
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A shell script in `dir` standing in for the oracle, running `body` for
+    /// every invocation except `--version`.
+    #[cfg(unix)]
+    pub fn fake_oracle(dir: &Path, body: &str) -> Oracle {
+        let fake = dir.join("oracle");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\n[ \"$1\" = --version ] && exit 0\n{body}\n"),
+        )
+        .expect("write oracle");
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .expect("chmod oracle");
+        // A child another test thread forked while the write was open holds
+        // the descriptor until it execs, and exec fails with ETXTBSY until
+        // then. Once one exec succeeds, no process can hold it any more.
+        for _ in 0..100 {
+            match Command::new(&fake).arg("--version").output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                ran => {
+                    ran.expect("run fake oracle");
+                    break;
+                }
+            }
+        }
+        Oracle::new(&fake.to_string_lossy()).expect("oracle")
+    }
+
+    /// A fake oracle body that reports one SC2086 for every file containing
+    /// `dirty`, and nothing for any other.
+    #[cfg(unix)]
+    pub const DIRTY_ORACLE: &str = r#"sep=
+    printf '{"comments":['
+    for f; do
+      case $f in --*) continue ;; esac
+      case $(cat "$f") in
+        *dirty*)
+          printf '%s{"file":"%s","line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m","fix":null}' "$sep" "$f"
+          sep=,
+          ;;
+      esac
+    done
+    printf ']}\n'"#;
+}
 
 #[cfg(test)]
 mod tests {
+    use super::testing::*;
     use super::*;
 
     fn oracle() -> Option<Oracle> {
@@ -731,7 +736,7 @@ mod tests {
         let out = o.check(&batch, None).expect("check");
         assert_eq!(out[&batch[0].0].len(), 1, "{out:?}");
         assert!(out[&batch[1].0].is_empty(), "{out:?}");
-        assert!(o.crashes().is_empty());
+        assert_eq!(o.crashes(), Vec::<(String, String)>::new());
     }
 
     /// A report the oracle could not have printed for these files answers
