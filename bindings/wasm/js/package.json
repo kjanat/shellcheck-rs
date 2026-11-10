@@ -1,6 +1,6 @@
 {
 	"name": "@kjanat/rshellcheck-wasm",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "ShellCheck Rust core for JavaScript and browsers, powered by WebAssembly",
 	"repository": {
 		"type": "git",

@@ -12,8 +12,8 @@ license      = "GPL-3.0-or-later"
 # A release sets these versions together with the package versions. The exact
 # pin builds a published `rshellcheck` only with the core it was released with.
 [workspace.dependencies]  # workspace
-rshellcheck      = { path = "crates/shellcheck-cli", version = "=1.0.0" }
-rshellcheck-core = { path = "crates/shellcheck-rs", version = "=1.0.0" }
+rshellcheck      = { path = "crates/shellcheck-cli", version = "=1.1.0" }
+rshellcheck-core = { path = "crates/shellcheck-rs", version = "=1.1.0" }
 shellcheck-wasm  = { path = "crates/shellcheck-wasm" }
 
 # own shit
