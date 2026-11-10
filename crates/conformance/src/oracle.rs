@@ -80,11 +80,70 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     ))
 }
 
-/// The diagnostics of a `--format=json1` report. A report without a
-/// `comments` array answers nothing, so it reads as no report at all rather
-/// than as zero findings.
-fn json1_comments(report: &Value) -> Option<Vec<Value>> {
-    report.get("comments").and_then(Value::as_array).cloned()
+/// The diagnostics of a `--format=json1` report, one list for each of `paths`
+/// in the same order.
+///
+/// `None` unless ShellCheck could have printed the report for exactly these
+/// files: a `comments` array whose every entry carries each json1 field the
+/// comparison reads and names one of `paths`. A comment naming no file or
+/// another file would otherwise leave every real input looking clean.
+fn json1_report(stdout: &[u8], paths: &[String]) -> Option<Vec<Vec<Value>>> {
+    let stdout = String::from_utf8_lossy(stdout);
+    let report = serde_json::from_str::<Value>(stdout.trim()).ok()?;
+    let mut by_path = vec![Vec::new(); paths.len()];
+    for comment in report.get("comments")?.as_array()? {
+        let file = comment.get("file")?.as_str()?;
+        let at = paths.iter().position(|p| p == file)?;
+        if !json1_comment(comment) {
+            return None;
+        }
+        by_path[at].push(comment.clone());
+    }
+    Some(by_path)
+}
+
+/// Does `comment` carry every field of a json1 comment, each with its type?
+fn json1_comment(comment: &Value) -> bool {
+    let fields = |value: &Value, numbers: &[&str], texts: &[&str]| {
+        numbers
+            .iter()
+            .all(|k| value.get(k).is_some_and(Value::is_i64))
+            && texts
+                .iter()
+                .all(|k| value.get(k).is_some_and(Value::is_string))
+    };
+    fields(
+        comment,
+        &["line", "endLine", "column", "endColumn", "code"],
+        &["level", "message"],
+    ) && match comment.get("fix") {
+        None | Some(Value::Null) => true,
+        Some(fix) => fix
+            .get("replacements")
+            .and_then(Value::as_array)
+            .is_some_and(|replacements| {
+                replacements.iter().all(|r| {
+                    fields(
+                        r,
+                        &["line", "endLine", "column", "endColumn", "precedence"],
+                        &["insertionPoint", "replacement"],
+                    )
+                })
+            }),
+    }
+}
+
+/// Why the oracle gave no usable report: its exit status and the first line
+/// it wrote to standard error, which is what names an upstream bug.
+fn unanswered(res: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&res.stderr);
+    let why = stderr
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("no json1 report for the file")
+        .trim()
+        .to_string();
+    format!("exit {}: {why}", res.status.code().unwrap_or(-1))
 }
 
 impl Oracle {
@@ -127,8 +186,8 @@ impl Oracle {
     /// Check `scripts` (name -> source) in as few invocations as possible,
     /// returning each script's diagnostics keyed by the same name.
     ///
-    /// A name missing from the result had no diagnostics. A name mapping to
-    /// `Err` means the oracle produced nothing parseable for it.
+    /// A name the oracle gave no usable report for is missing from the
+    /// result, and [`Oracle::crashes`] says why.
     pub fn check(
         &self,
         scripts: &[(String, String)],
@@ -151,60 +210,48 @@ impl Oracle {
                 let p = self.dir.join(name);
                 std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
                 paths.push(p.to_string_lossy().into_owned());
-                out.entry(name.clone()).or_default();
             }
-            let mut cmd = Command::new(&self.binary);
-            cmd.arg("--norc").arg("--format=json1");
-            if let Some(s) = shell {
-                cmd.arg(format!("--shell={s}"));
-            }
-            if let Some(e) = enable {
-                cmd.arg(format!("--enable={e}"));
-            }
-            cmd.args(&paths);
-            cmd.env_remove("SHELLCHECK_OPTS");
-            let res = cmd
+            let res = self
+                .command(shell, enable)
+                .args(&paths)
                 .output()
-                .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
-            let stdout = String::from_utf8_lossy(&res.stdout);
-            let comments = serde_json::from_str::<Value>(stdout.trim())
-                .ok()
-                .as_ref()
-                .and_then(json1_comments);
-            let Some(comments) = comments else {
-                // One input in this batch killed the oracle, and its answer
-                // for the other 199 died with it. Re-run them one at a time
-                // so the run continues and the culprit is named, rather than
-                // ending the comparison on an upstream crash.
-                for (name, body) in chunk {
-                    match self.check_named(name, body, shell, enable) {
-                        Ok((comments, _)) => {
-                            out.entry(name.clone()).or_default().extend(comments);
-                        }
-                        Err(why) => {
-                            self.crashes.borrow_mut().push((body.clone(), why));
-                            out.remove(name);
-                        }
-                    }
-                }
-                for p in &paths {
-                    let _ = std::fs::remove_file(p);
-                }
-                continue;
-            };
-            for c in comments {
-                let file = c.get("file").and_then(Value::as_str).unwrap_or_default();
-                let base = Path::new(file)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                out.entry(base).or_default().push(c);
-            }
+                .map_err(|e| format!("running {}: {e}", self.binary.display()));
             for p in &paths {
                 let _ = std::fs::remove_file(p);
             }
+            if let Some(by_path) = json1_report(&res?.stdout, &paths) {
+                out.extend(chunk.iter().map(|(name, _)| name.clone()).zip(by_path));
+                continue;
+            }
+            // One input in this batch killed the oracle, or its report is not
+            // one for these files, and the answer for the other 199 went with
+            // it. Re-run them one at a time so the run continues and the
+            // culprit is named, rather than ending the comparison there.
+            for (name, body) in chunk {
+                match self.check_named(name, body, shell, enable) {
+                    Ok((comments, _)) => {
+                        out.insert(name.clone(), comments);
+                    }
+                    Err(why) => self.crashes.borrow_mut().push((body.clone(), why)),
+                }
+            }
         }
         Ok(out)
+    }
+
+    /// The oracle invocation every check shares: json1 output, no rc file,
+    /// no `SHELLCHECK_OPTS`.
+    fn command(&self, shell: Option<&str>, enable: Option<&str>) -> Command {
+        let mut cmd = Command::new(&self.binary);
+        cmd.arg("--norc").arg("--format=json1");
+        if let Some(s) = shell {
+            cmd.arg(format!("--shell={s}"));
+        }
+        if let Some(e) = enable {
+            cmd.arg(format!("--enable={e}"));
+        }
+        cmd.env_remove("SHELLCHECK_OPTS");
+        cmd
     }
 
     /// Check a single script, also returning the process exit status, which a
@@ -238,38 +285,17 @@ impl Oracle {
     ) -> Result<(Vec<Value>, i32), String> {
         let p = self.dir.join(name);
         std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
-        let mut cmd = Command::new(&self.binary);
-        cmd.arg("--norc").arg("--format=json1");
-        if let Some(s) = shell {
-            cmd.arg(format!("--shell={s}"));
-        }
-        if let Some(e) = enable {
-            cmd.arg(format!("--enable={e}"));
-        }
-        cmd.arg(&p);
-        cmd.env_remove("SHELLCHECK_OPTS");
-        let res = cmd
+        let path = p.to_string_lossy().into_owned();
+        let res = self
+            .command(shell, enable)
+            .arg(&path)
             .output()
-            .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
+            .map_err(|e| format!("running {}: {e}", self.binary.display()));
         let _ = std::fs::remove_file(&p);
-        let stdout = String::from_utf8_lossy(&res.stdout);
-        let comments = serde_json::from_str::<Value>(stdout.trim())
-            .ok()
-            .as_ref()
-            .and_then(json1_comments)
-            .ok_or_else(|| {
-                // Not "bad json": the process died before writing a json1
-                // report. Carry the reason the oracle itself gave, which is
-                // what names the bug.
-                let stderr = String::from_utf8_lossy(&res.stderr);
-                let why = stderr
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("no output")
-                    .trim()
-                    .to_string();
-                format!("exit {}: {why}", res.status.code().unwrap_or(-1))
-            })?;
+        let res = res?;
+        let comments = json1_report(&res.stdout, std::slice::from_ref(&path))
+            .and_then(|mut by_path| by_path.pop())
+            .ok_or_else(|| unanswered(&res))?;
         Ok((comments, res.status.code().unwrap_or(-1)))
     }
 
@@ -393,6 +419,70 @@ pub fn test_oracle() -> Option<Oracle> {
         .ok()
 }
 
+/// A scratch directory removed when the test ends.
+#[cfg(test)]
+pub struct Scratch(PathBuf);
+
+#[cfg(test)]
+impl Scratch {
+    pub fn new(test: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("conformance-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        Self(dir)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A shell script in `dir` standing in for the oracle, running `body`.
+#[cfg(all(test, unix))]
+pub fn fake_oracle(dir: &Path, body: &str) -> Oracle {
+    let fake = dir.join("oracle");
+    std::fs::write(&fake, format!("#!/bin/sh\n{body}\n")).expect("write oracle");
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("chmod oracle");
+    // A child another test thread forked while the write was open holds
+    // the descriptor until it execs, and exec fails with ETXTBSY until
+    // then. Once one exec succeeds, no process can hold it any more.
+    for _ in 0..100 {
+        match Command::new(&fake).arg("--version").output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            ran => {
+                ran.expect("run fake oracle");
+                break;
+            }
+        }
+    }
+    Oracle::new(&fake.to_string_lossy()).expect("oracle")
+}
+
+/// A fake oracle body that reports one SC2086 for every file containing
+/// `dirty`, and nothing for any other.
+#[cfg(all(test, unix))]
+pub const DIRTY_ORACLE: &str = r#"sep=
+printf '{"comments":['
+for f; do
+  case $f in --*) continue ;; esac
+  case $(cat "$f") in
+    *dirty*)
+      printf '%s{"file":"%s","line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m","fix":null}' "$sep" "$f"
+      sep=,
+      ;;
+  esac
+done
+printf ']}\n'"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +537,65 @@ mod tests {
             healthy.is_empty(),
             "a `.bash` file needs no shebang, got {healthy:?}"
         );
+    }
+
+    #[cfg(unix)]
+    fn scripts(oracle: &Oracle, bodies: &[&str]) -> Vec<(String, String)> {
+        bodies
+            .iter()
+            .map(|b| (oracle.name(), (*b).to_string()))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_file_gets_the_comments_naming_it() {
+        let dir = Scratch::new("naming-it");
+        let o = fake_oracle(dir.path(), DIRTY_ORACLE);
+        let batch = scripts(&o, &["dirty\n", "clean\n"]);
+        let out = o.check(&batch, None).expect("check");
+        assert_eq!(out[&batch[0].0].len(), 1, "{out:?}");
+        assert!(out[&batch[1].0].is_empty(), "{out:?}");
+        assert!(o.crashes().is_empty());
+    }
+
+    /// A report the oracle could not have printed for these files answers
+    /// for none of them, so no input reads as clean on its say-so.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_with_an_unusable_comment_answers_nothing() {
+        let fields = r#""line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m""#;
+        let reporting = |comment: &str| {
+            format!(
+                "for f; do last=$f; done\nprintf '%s\\n' '{{\"comments\":[{comment}]}}' | sed \"s|@FILE@|$last|\""
+            )
+        };
+        let dir = Scratch::new("usable");
+        let o = fake_oracle(
+            dir.path(),
+            &reporting(&format!(r#"{{"file":"@FILE@",{fields},"fix":null}}"#)),
+        );
+        let one = scripts(&o, &["true\n"]);
+        let out = o.check(&one, None).expect("check");
+        assert_eq!(
+            out[&one[0].0].len(),
+            1,
+            "the control report is usable: {out:?}"
+        );
+        for comment in [
+            "{}".to_string(),
+            format!("{{{fields}}}"),
+            format!(r#"{{"file":"elsewhere",{fields}}}"#),
+            r#"{"file":"@FILE@","line":1}"#.to_string(),
+            format!(r#"{{"file":"@FILE@",{fields},"fix":{{"replacements":[{{}}]}}}}"#),
+        ] {
+            let dir = Scratch::new("unusable");
+            let o = fake_oracle(dir.path(), &reporting(&comment));
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let out = o.check(&batch, None).expect("check");
+            assert!(out.is_empty(), "{comment}: {out:?}");
+            assert_eq!(o.crashes().len(), 2, "{comment}");
+        }
     }
 
     #[test]

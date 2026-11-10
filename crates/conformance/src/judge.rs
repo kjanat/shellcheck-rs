@@ -124,27 +124,7 @@ pub fn judge(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A scratch directory removed when the test ends.
-    struct Scratch(std::path::PathBuf);
-
-    impl Scratch {
-        fn new(test: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("judge-{test}-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("scratch directory");
-            Self(dir)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::oracle::Scratch;
 
     fn write(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
@@ -184,28 +164,10 @@ mod tests {
         );
     }
 
-    /// A shell script standing in for the oracle, printing `stdout`.
+    /// A fake oracle printing `stdout`, whatever it is asked.
     #[cfg(unix)]
     fn fake_oracle(dir: &Path, stdout: &str) -> oracle::Oracle {
-        let fake = dir.join("oracle");
-        std::fs::write(&fake, format!("#!/bin/sh\necho '{stdout}'\n")).expect("write oracle");
-        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .expect("chmod oracle");
-        // A child another test thread forked while the write was open holds
-        // the descriptor until it execs, and exec fails with ETXTBSY until
-        // then. Once one exec succeeds, no process can hold it any more.
-        for _ in 0..100 {
-            match std::process::Command::new(&fake).output() {
-                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                ran => {
-                    ran.expect("run fake oracle");
-                    break;
-                }
-            }
-        }
-        oracle::Oracle::new(&fake.to_string_lossy()).expect("oracle")
+        oracle::fake_oracle(dir, &format!("echo '{stdout}'"))
     }
 
     #[cfg(unix)]
@@ -230,6 +192,23 @@ mod tests {
     fn an_oracle_answer_without_a_comments_array_differs() {
         let dir = Scratch::new("no-comments");
         let oracle = fake_oracle(dir.path(), "{}");
+        let path = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
+        let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
+        assert_eq!(
+            got,
+            [Judgement {
+                path,
+                verdict: Verdict::Differs,
+                deviations: Vec::new(),
+            }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_oracle_comment_naming_no_file_differs() {
+        let dir = Scratch::new("malformed-comment");
+        let oracle = fake_oracle(dir.path(), r#"{"comments":[{}]}"#);
         let path = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
         let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
         assert_eq!(
