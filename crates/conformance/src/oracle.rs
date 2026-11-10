@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -31,6 +32,16 @@ pub struct Oracle {
     crashes: std::cell::RefCell<Vec<(String, String)>>,
     allowance: Allowance,
 }
+
+/// How long the output of a finished or killed run may take to arrive. A
+/// killed oracle's pipes close at once, unless a process it started still
+/// holds them; that process is left running with its reader.
+const DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// How many scripts in a row may run out of time before the oracle counts as
+/// broken. One stuck input is a finding about it. Three in a row mean the
+/// oracle answers nothing, and retrying the rest of a batch would take hours.
+const HUNG_IN_A_ROW: usize = 3;
 
 /// How long one invocation may run before it is killed: `base`, plus
 /// `per_script` for each script it checks. A run past this is stuck, and its
@@ -183,6 +194,11 @@ impl Run {
         matches!(self.ended, Ended::Exited(0 | 1))
     }
 
+    /// Did the oracle run out of its allowance?
+    const fn out_of_time(&self) -> bool {
+        matches!(self.ended, Ended::OutOfTime(_))
+    }
+
     /// The exit code, with -1 for a process a signal ended.
     const fn code(&self) -> i32 {
         match self.ended {
@@ -275,6 +291,7 @@ impl Oracle {
         enable: Option<&str>,
     ) -> Result<HashMap<String, Vec<Value>>, String> {
         let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+        let mut hung = 0;
         for chunk in scripts.chunks(BATCH) {
             let mut paths: Vec<String> = Vec::with_capacity(chunk.len());
             for (name, body) in chunk {
@@ -289,6 +306,7 @@ impl Oracle {
                 && let Some(by_path) = json1_report(&run.stdout, &paths)
             {
                 out.extend(chunk.iter().map(|(name, _)| name.clone()).zip(by_path));
+                hung = 0;
                 continue;
             }
             // One input in this batch killed the oracle, or its report is not
@@ -296,15 +314,27 @@ impl Oracle {
             // it. Re-run them one at a time so the run continues and the
             // culprit is named, rather than ending the comparison there.
             for (name, body) in chunk {
-                match self.run_named(name, body, shell, enable) {
+                let why = match self.run_named(name, body, shell, enable) {
                     Ok((Some(comments), run)) if run.checked() => {
                         out.insert(name.clone(), comments);
+                        hung = 0;
+                        continue;
                     }
-                    Ok((_, run)) => self
-                        .crashes
-                        .borrow_mut()
-                        .push((body.clone(), run.failure())),
-                    Err(why) => self.crashes.borrow_mut().push((body.clone(), why)),
+                    Ok((_, run)) => {
+                        hung = if run.out_of_time() { hung + 1 } else { 0 };
+                        run.failure()
+                    }
+                    Err(why) => {
+                        hung = 0;
+                        why
+                    }
+                };
+                self.crashes.borrow_mut().push((body.clone(), why.clone()));
+                if hung == HUNG_IN_A_ROW {
+                    return Err(format!(
+                        "{}: {HUNG_IN_A_ROW} scripts in a row got no answer, the last: {why}",
+                        self.binary.display()
+                    ));
                 }
             }
         }
@@ -368,18 +398,14 @@ impl Oracle {
             .map_err(running)?;
         let limit = self.allowance.for_scripts(paths.len());
         let deadline = Instant::now() + limit;
-        let (closed, pipes_closed) = std::sync::mpsc::channel();
-        let stdout = drain(child.stdout.take(), closed.clone());
-        let stderr = drain(child.stderr.take(), closed);
+        let (sent, drained) = std::sync::mpsc::channel();
+        drain(child.stdout.take(), Stream::Out, sent.clone());
+        drain(child.stderr.take(), Stream::Err, sent);
+        let mut output = Output::default();
         // The pipes close when the process exits, which wakes this thread
         // without polling. A process that closes them and runs on is polled
         // until the deadline.
-        for _ in 0..2 {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if pipes_closed.recv_timeout(left).is_err() {
-                break;
-            }
-        }
+        output.collect(&drained, deadline);
         let status: Option<ExitStatus> = loop {
             if let Some(status) = child.try_wait().map_err(running)? {
                 break Some(status);
@@ -393,12 +419,13 @@ impl Oracle {
             let _ = child.kill();
             let _ = child.wait();
         }
+        output.collect(&drained, Instant::now() + DRAIN_GRACE);
         Ok(Run {
             ended: status.map_or(Ended::OutOfTime(limit), |s| {
                 s.code().map_or(Ended::Signalled, Ended::Exited)
             }),
-            stdout: stdout.join().unwrap_or_default(),
-            stderr: stderr.join().unwrap_or_default(),
+            stdout: output.stdout.unwrap_or_default(),
+            stderr: output.stderr.unwrap_or_default(),
         })
     }
 
@@ -553,19 +580,48 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
     ))
 }
 
-/// Read `pipe` to its end on a thread of its own, then say so on `closed`.
+/// Which of a run's output streams a drained buffer holds.
+#[derive(Clone, Copy)]
+enum Stream {
+    Out,
+    Err,
+}
+
+/// The output of one run, each stream once its pipe has closed.
+#[derive(Default)]
+struct Output {
+    stdout: Option<Vec<u8>>,
+    stderr: Option<Vec<u8>>,
+}
+
+impl Output {
+    /// Take drained streams from `drained` until both are in or `until`
+    /// passes. A stream still open then stays `None`, and its reader is left
+    /// behind rather than waited for.
+    fn collect(&mut self, drained: &Receiver<(Stream, Vec<u8>)>, until: Instant) {
+        while self.stdout.is_none() || self.stderr.is_none() {
+            match drained.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                Ok((Stream::Out, bytes)) => self.stdout = Some(bytes),
+                Ok((Stream::Err, bytes)) => self.stderr = Some(bytes),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+/// Read `pipe` to its end on a thread of its own, then send what it read.
 fn drain(
     pipe: Option<impl Read + Send + 'static>,
-    closed: std::sync::mpsc::Sender<()>,
-) -> std::thread::JoinHandle<Vec<u8>> {
+    stream: Stream,
+    sent: Sender<(Stream, Vec<u8>)>,
+) {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut pipe) = pipe {
             let _ = pipe.read_to_end(&mut buf);
         }
-        let _ = closed.send(());
-        buf
-    })
+        let _ = sent.send((stream, buf));
+    });
 }
 
 impl Drop for Oracle {
@@ -842,6 +898,65 @@ mod tests {
                 "{body}: {crashes:?}"
             );
         }
+    }
+
+    /// A process the oracle started can hold its output open after the oracle
+    /// is gone. The run still ends one grace period after the deadline.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_holding_the_output_does_not_outlast_the_deadline() {
+        for body in ["sleep 20 & wait", r#"sleep 20 & echo '{"comments":[]}'"#] {
+            let dir = Scratch::new("held-output");
+            let o = fake_oracle(dir.path(), body)
+                .with_allowance(Duration::from_millis(100), Duration::ZERO);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let started = Instant::now();
+            let out = o.check(&batch, None).expect("check");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{body}: {:?}",
+                started.elapsed()
+            );
+            assert!(out.is_empty(), "{body}: {out:?}");
+            assert_eq!(o.crashes().len(), 2, "{body}");
+        }
+    }
+
+    /// An oracle that answers nothing for three scripts in a row fails the
+    /// run, so a dead oracle does not take hours to report.
+    #[cfg(unix)]
+    #[test]
+    fn three_hung_scripts_in_a_row_fail_the_run() {
+        let dir = Scratch::new("dead");
+        let o = fake_oracle(dir.path(), "exec sleep 30")
+            .with_allowance(Duration::from_millis(100), Duration::ZERO);
+        let batch = scripts(&o, &["true\n"; 5]);
+        let err = o.check(&batch, None).expect_err("a dead oracle");
+        assert!(err.contains("3 scripts in a row got no answer"), "{err}");
+        assert_eq!(o.crashes().len(), 3);
+    }
+
+    /// Scripts the oracle answers between two that hang reset the count,
+    /// and each hanging script is named.
+    #[cfg(unix)]
+    #[test]
+    fn hung_scripts_between_answers_are_each_recorded() {
+        let dir = Scratch::new("some-hang");
+        let o = fake_oracle(
+            dir.path(),
+            r#"for f; do case $f in --*) ;; *) case $(cat "$f") in *hang*) exec sleep 30 ;; esac ;; esac; done
+echo '{"comments":[]}'"#,
+        )
+        .with_allowance(Duration::from_millis(100), Duration::ZERO);
+        let batch = scripts(&o, &["ok\n", "hang\n", "hang\n", "ok\n", "hang\n", "ok\n"]);
+        let out = o.check(&batch, None).expect("check");
+        assert_eq!(out.len(), 3, "{out:?}");
+        let crashes = o.crashes();
+        assert_eq!(crashes.len(), 3);
+        assert!(
+            crashes.iter().all(|(body, _)| body == "hang\n"),
+            "{crashes:?}"
+        );
     }
 
     #[test]
