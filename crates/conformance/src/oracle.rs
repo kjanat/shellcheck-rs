@@ -11,8 +11,10 @@
 //! cannot silently change what the oracle says.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -27,6 +29,30 @@ pub struct Oracle {
     /// implementation that dies on an input is a finding about *it* — and a
     /// run that stops there tells us nothing about the rest of the corpus.
     crashes: std::cell::RefCell<Vec<(String, String)>>,
+    allowance: Allowance,
+}
+
+/// How long one invocation may run before it is killed: `base`, plus
+/// `per_script` for each script it checks. A run past this is stuck, and its
+/// scripts are retried one at a time like those of a crashed batch.
+#[derive(Debug, Clone, Copy)]
+struct Allowance {
+    base: Duration,
+    per_script: Duration,
+}
+
+impl Allowance {
+    const DEFAULT: Self = Self {
+        base: Duration::from_secs(60),
+        per_script: Duration::from_secs(2),
+    };
+
+    fn for_scripts(self, scripts: usize) -> Duration {
+        self.base.saturating_add(
+            self.per_script
+                .saturating_mul(u32::try_from(scripts).unwrap_or(u32::MAX)),
+        )
+    }
 }
 
 /// How many scripts to check per oracle invocation.
@@ -138,6 +164,8 @@ fn json1_comment(comment: &Value) -> bool {
 enum Ended {
     Exited(i32),
     Signalled,
+    /// Killed when its allowance ran out.
+    OutOfTime(Duration),
 }
 
 /// What one oracle invocation produced.
@@ -148,14 +176,6 @@ struct Run {
 }
 
 impl Run {
-    fn from_output(out: std::process::Output) -> Self {
-        Self {
-            ended: out.status.code().map_or(Ended::Signalled, Ended::Exited),
-            stdout: out.stdout,
-            stderr: out.stderr,
-        }
-    }
-
     /// Did the oracle check every file it was given? ShellCheck exits 0
     /// without findings and 1 with them; any other ending means it gave up
     /// on some input, whatever it printed first.
@@ -167,7 +187,7 @@ impl Run {
     fn code(&self) -> i32 {
         match self.ended {
             Ended::Exited(code) => code,
-            Ended::Signalled => -1,
+            Ended::Signalled | Ended::OutOfTime(_) => -1,
         }
     }
 
@@ -183,6 +203,7 @@ impl Run {
         match self.ended {
             Ended::Exited(code) => format!("exit {code}: {why}"),
             Ended::Signalled => format!("killed by a signal: {why}"),
+            Ended::OutOfTime(limit) => format!("no answer within {limit:?}: {why}"),
         }
     }
 }
@@ -207,7 +228,16 @@ impl Oracle {
             dir,
             counter: std::cell::Cell::new(0),
             crashes: std::cell::RefCell::new(Vec::new()),
+            allowance: Allowance::DEFAULT,
         })
+    }
+
+    /// This oracle with `base` and `per_script` as its allowance, so a test
+    /// reaches the deadline without waiting a minute.
+    #[cfg(test)]
+    fn with_allowance(mut self, base: Duration, per_script: Duration) -> Self {
+        self.allowance = Allowance { base, per_script };
+        self
     }
 
     /// The scratch directory, so callers can name files inside it.
@@ -298,18 +328,57 @@ impl Oracle {
         cmd
     }
 
-    /// Run the oracle over `paths`. `Err` means it could not be started.
+    /// Run the oracle over `paths`, killing it once its allowance runs out.
+    /// `Err` means it could not be started.
     fn invoke(
         &self,
         paths: &[String],
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<Run, String> {
-        self.command(shell, enable)
+        let running = |e: std::io::Error| format!("running {}: {e}", self.binary.display());
+        let mut child = self
+            .command(shell, enable)
             .args(paths)
-            .output()
-            .map(Run::from_output)
-            .map_err(|e| format!("running {}: {e}", self.binary.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(running)?;
+        let limit = self.allowance.for_scripts(paths.len());
+        let deadline = Instant::now() + limit;
+        let (closed, pipes_closed) = std::sync::mpsc::channel();
+        let stdout = drain(child.stdout.take(), closed.clone());
+        let stderr = drain(child.stderr.take(), closed);
+        // The pipes close when the process exits, which wakes this thread
+        // without polling. A process that closes them and runs on is polled
+        // until the deadline.
+        for _ in 0..2 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if pipes_closed.recv_timeout(left).is_err() {
+                break;
+            }
+        }
+        let status: Option<ExitStatus> = loop {
+            if let Some(status) = child.try_wait().map_err(running)? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(Run {
+            ended: status.map_or(Ended::OutOfTime(limit), |s| {
+                s.code().map_or(Ended::Signalled, Ended::Exited)
+            }),
+            stdout: stdout.join().unwrap_or_default(),
+            stderr: stderr.join().unwrap_or_default(),
+        })
     }
 
     /// Check a single script, also returning the process exit status, which a
@@ -465,6 +534,21 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
     ))
 }
 
+/// Read `pipe` to its end on a thread of its own, then say so on `closed`.
+fn drain(
+    pipe: Option<impl Read + Send + 'static>,
+    closed: std::sync::mpsc::Sender<()>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        let _ = closed.send(());
+        buf
+    })
+}
+
 impl Drop for Oracle {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -510,11 +594,16 @@ impl Drop for Scratch {
     }
 }
 
-/// A shell script in `dir` standing in for the oracle, running `body`.
+/// A shell script in `dir` standing in for the oracle, running `body` for
+/// every invocation except `--version`.
 #[cfg(all(test, unix))]
 pub fn fake_oracle(dir: &Path, body: &str) -> Oracle {
     let fake = dir.join("oracle");
-    std::fs::write(&fake, format!("#!/bin/sh\n{body}\n")).expect("write oracle");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\n[ \"$1\" = --version ] && exit 0\n{body}\n"),
+    )
+    .expect("write oracle");
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
         .expect("chmod oracle");
     // A child another test thread forked while the write was open holds
@@ -699,6 +788,45 @@ mod tests {
         let dir = Scratch::new("single-status");
         let o = fake_oracle(dir.path(), r#"echo '{"comments":[]}'; exit 2"#);
         assert_eq!(o.check_one("true\n", None), Ok((Vec::new(), 2)));
+    }
+
+    /// An oracle that hangs is killed when its allowance runs out, and the
+    /// scripts it held are recorded as unanswered.
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_oracle_is_killed_at_its_deadline() {
+        // The second oracle closes its output first, so only polling sees it.
+        for body in ["exec sleep 30", "exec >&- 2>&-; exec sleep 30"] {
+            let dir = Scratch::new("hung");
+            let o = fake_oracle(dir.path(), body)
+                .with_allowance(Duration::from_millis(100), Duration::ZERO);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let started = Instant::now();
+            let out = o.check(&batch, None).expect("check");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{body}: {:?}",
+                started.elapsed()
+            );
+            assert!(out.is_empty(), "{body}: {out:?}");
+            let crashes = o.crashes();
+            assert_eq!(crashes.len(), 2, "{body}");
+            assert!(
+                crashes
+                    .iter()
+                    .all(|(_, why)| why.starts_with("no answer within 100ms: ")),
+                "{body}: {crashes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_allowance_grows_with_the_scripts_in_a_run() {
+        assert_eq!(Allowance::DEFAULT.for_scripts(1), Duration::from_secs(62));
+        assert_eq!(
+            Allowance::DEFAULT.for_scripts(BATCH),
+            Duration::from_secs(460)
+        );
     }
 
     #[test]
