@@ -126,12 +126,33 @@ jobs:
       - name: Test rshellcheck
         run: cargo test -p rshellcheck
 
+      - name: Test the conformance harness
+        run: cargo test --locked -p conformance
+
       - name: Conformance gate
         run: cargo conformance-gate
 
       - name: Differential fuzz
         env: { "${{ insert }}": "${{ fromJSON(vars.FUZZ) }}" }
         run: cargo conformance-fuzz
+
+  package:
+    name: Package crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: *CO
+
+      - name: Install Rust stable
+        uses: *rust
+
+      - name: Package the core and the CLI built against it
+        run: cargo package --locked --package rshellcheck-core --package rshellcheck
+
+      - name: Run the core doctests from its package
+        run: |
+          tar -xzf target/package/rshellcheck-core-*.crate -C "${RUNNER_TEMP}"
+          cargo test --doc --locked --manifest-path "${RUNNER_TEMP}"/rshellcheck-core-*/Cargo.toml
 
   validity-smoke:
     name: Validity smoke
