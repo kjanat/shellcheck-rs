@@ -11,8 +11,8 @@
         "pkg:cargo/rshellcheck",
         "pkg:golang/github.com/kjanat/shellcheck-rs/bindings/wasm/go"
       ],
-      "versioning": "workspace",
-      "required": [
+      "versionScope": "one-for-stream",
+      "mustPublish": [
         "pkg:npm/%40kjanat/rshellcheck",
         "pkg:npm/%40kjanat/rshellcheck-wasm",
         "pkg:pypi/rshellcheck-wasm",
@@ -51,19 +51,6 @@
       },
       "credentials": ["crates-io"],
       "workflows": {
-        "release": {
-          "file": "release.yml",
-          "mode": "observe",
-          "ref": "refs/tags/rshellcheck-v*",
-          "publications": [
-            "pkg:npm/%40kjanat/rshellcheck",
-            "pkg:npm/%40kjanat/rshellcheck-wasm",
-            "pkg:pypi/rshellcheck-wasm",
-            "pkg:pypi/rshellcheck",
-            "pkg:github/kjanat/shellcheck-rs"
-          ],
-          "needs": ["promote"]
-        },
         "crates": {
           "file": "publish-crates.yml",
           "ref": "master",
@@ -81,18 +68,42 @@
               "assemble",
               "registry-payload"
             ]
+          },
+          "setup": {
+            "commands": "cargo publish --locked --package 'rshellcheck-core'\ncargo publish --locked --package 'rshellcheck'",
+            "credentials": {
+              "CARGO_REGISTRY_TOKEN": "crates-io"
+            }
           }
+        },
+        "release": {
+          "file": "release.yml",
+          "mode": "observe",
+          "ref": "refs/tags/rshellcheck-v*",
+          "publications": [
+            "pkg:npm/%40kjanat/rshellcheck",
+            "pkg:npm/%40kjanat/rshellcheck-wasm",
+            "pkg:pypi/rshellcheck-wasm",
+            "pkg:pypi/rshellcheck",
+            "pkg:github/kjanat/shellcheck-rs"
+          ],
+          "needs": ["promote"]
         }
       },
       "prepare": {
         "strategy": "managed",
         "workflow": {
           "file": "prepare-release.yml",
-          "ref": "master"
-        }
+          "ref": "master",
+          "setup": {
+            "job": "prepare",
+            "commands": "cargo update --workspace\nnpm install --package-lock-only\nuv lock\ncargo test --workspace --locked --lib --bins"
+          }
+        },
+        "versionLands": "via-version-pr"
       },
       "promote": {
-        "approval": "required",
+        "publishWhen": "version-pr-merged",
         "workflow": {
           "file": "release-rshellcheck.yml",
           "ref": "master",
@@ -102,14 +113,30 @@
           "refs": {
             "phase": "version",
             "prefix": "rshellcheck-v"
+          },
+          "setup": {
+            "job": "promote",
+            "tagPrefix": "rshellcheck-v"
           }
         }
-      }
+      },
+      "startFrom": [
+        {
+          "via": "action",
+          "workflow": "start-release.yml"
+        },
+        {
+          "via": "dashboard"
+        },
+        {
+          "via": "cli"
+        }
+      ]
     },
     "go": {
       "packages": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
-      "versioning": "workspace",
-      "required": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
+      "versionScope": "one-for-stream",
+      "mustPublish": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
       "versionSource": {
         "kind": "tags",
         "prefix": "go/v"
@@ -118,11 +145,15 @@
         "strategy": "managed",
         "workflow": {
           "file": "prepare-go.yml",
-          "ref": "master"
+          "ref": "master",
+          "setup": {
+            "job": "prepare",
+            "commands": "(cd 'go' && go mod tidy -diff)"
+          }
         }
       },
       "promote": {
-        "approval": "required",
+        "publishWhen": "approved-in-beepboop",
         "workflow": {
           "file": "release-go.yml",
           "ref": "master",
@@ -130,6 +161,10 @@
           "refs": {
             "phase": "version",
             "prefix": "go/v"
+          },
+          "setup": {
+            "job": "promote",
+            "tagPrefix": "go/v"
           }
         }
       }
