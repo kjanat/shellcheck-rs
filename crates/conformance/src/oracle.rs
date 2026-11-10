@@ -278,13 +278,11 @@ impl Oracle {
         for chunk in scripts.chunks(BATCH) {
             let mut paths: Vec<String> = Vec::with_capacity(chunk.len());
             for (name, body) in chunk {
-                let p = self.dir.join(name);
-                std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
-                paths.push(p.to_string_lossy().into_owned());
+                paths.push(self.place(name, body)?);
             }
             let run = self.invoke(&paths, shell, enable);
             for p in &paths {
-                let _ = std::fs::remove_file(p);
+                self.clear(p);
             }
             let run = run?;
             if run.checked()
@@ -311,6 +309,29 @@ impl Oracle {
             }
         }
         Ok(out)
+    }
+
+    /// Write `body` under `name` in the scratch directory, creating the
+    /// directory a name such as `s000001/build.bash` puts it in, and return
+    /// the path the oracle is given.
+    fn place(&self, name: &str, body: &str) -> Result<String, String> {
+        let p = self.dir.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
+        Ok(p.to_string_lossy().into_owned())
+    }
+
+    /// Remove a file [`Oracle::place`] wrote, and the directory it created.
+    fn clear(&self, path: &str) {
+        let p = Path::new(path);
+        let _ = std::fs::remove_file(p);
+        if let Some(parent) = p.parent()
+            && parent != self.dir
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
     }
 
     /// The oracle invocation every check shares: json1 output, no rc file,
@@ -424,11 +445,9 @@ impl Oracle {
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<(Option<Vec<Value>>, Run), String> {
-        let p = self.dir.join(name);
-        std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
-        let path = p.to_string_lossy().into_owned();
+        let path = self.place(name, script)?;
         let run = self.invoke(std::slice::from_ref(&path), shell, enable);
-        let _ = std::fs::remove_file(&p);
+        self.clear(&path);
         let run = run?;
         let comments = json1_report(&run.stdout, std::slice::from_ref(&path))
             .and_then(|mut by_path| by_path.pop());

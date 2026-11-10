@@ -75,11 +75,12 @@ pub fn judge(
         // Upstream's lenient decoding, as the CLI reads a file.
         let script = decode_bytes(&bytes);
         // Both tools infer a dialect from a recognised extension, so the copy
-        // the oracle reads keeps the file's own name after a unique prefix.
+        // the oracle reads keeps the file's own name, in a directory of its
+        // own: a prefix could push a valid name past the length limit.
         let base = Path::new(path)
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        named.push((format!("{}-{base}", oracle.name()), script));
+        named.push((format!("{}/{base}", oracle.name()), script));
     }
     let by_name = oracle.check(&named, shell)?;
     named
@@ -237,6 +238,63 @@ mod tests {
                 verdict: Verdict::Identical,
                 deviations: Vec::new(),
             }]
+        );
+    }
+
+    /// A name at the 255-byte limit stays valid in the oracle's scratch
+    /// directory, and nothing of it is left there afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_of_maximum_length_is_judged() {
+        let dir = Scratch::new("long-name");
+        let oracle = oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE);
+        let name = format!("{}.sh", "a".repeat(252));
+        assert_eq!(name.len(), 255);
+        let path = write(dir.path(), &name, "#!/bin/sh\ntrue\n");
+        let got = judge(&oracle, std::slice::from_ref(&path), None).expect("judge");
+        assert_eq!(
+            got,
+            [Judgement {
+                path,
+                verdict: Verdict::Identical,
+                deviations: Vec::new(),
+            }]
+        );
+        let left: Vec<_> = std::fs::read_dir(oracle.dir())
+            .expect("scratch directory")
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    /// Two inputs with the same file name get the oracle's answer for each
+    /// file's own content.
+    #[cfg(unix)]
+    #[test]
+    fn files_sharing_a_name_get_their_own_answers() {
+        let dir = Scratch::new("same-name");
+        let oracle = oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE);
+        for sub in ["one", "two"] {
+            std::fs::create_dir_all(dir.path().join(sub)).expect("fixture directory");
+        }
+        let paths = [
+            write(dir.path(), "one/x.sh", "#!/bin/sh\n# dirty\n"),
+            write(dir.path(), "two/x.sh", "#!/bin/sh\ntrue\n"),
+        ];
+        let got = judge(&oracle, &paths, None).expect("judge");
+        assert_eq!(
+            got,
+            [
+                Judgement {
+                    path: paths[0].clone(),
+                    verdict: Verdict::Differs,
+                    deviations: Vec::new(),
+                },
+                Judgement {
+                    path: paths[1].clone(),
+                    verdict: Verdict::Identical,
+                    deviations: Vec::new(),
+                },
+            ]
         );
     }
 
