@@ -18,7 +18,7 @@
 //!
 //! Exit codes: 0 = no file differs, 1 = at least one does, 2 = harness error.
 
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 use std::path::Path;
 
 use rshellcheck_core::interface::decode_bytes;
@@ -50,8 +50,12 @@ struct Report<'a> {
 
 /// Judge every path named on standard input and print the report.
 pub fn run(args: &Args) -> Result<bool, String> {
-    let paths: Vec<String> = std::io::stdin()
-        .lock()
+    run_on(args, std::io::stdin().lock(), &mut std::io::stdout().lock())
+}
+
+/// [`run`], reading the paths from `input` and writing the report to `out`.
+fn run_on(args: &Args, input: impl BufRead, out: &mut impl Write) -> Result<bool, String> {
+    let paths: Vec<String> = input
         .lines()
         .map(|line| line.map_err(|e| format!("reading paths from standard input: {e}")))
         .filter(|line| line.as_ref().map_or(true, |l| !l.trim().is_empty()))
@@ -59,7 +63,7 @@ pub fn run(args: &Args) -> Result<bool, String> {
     let oracle = oracle::Oracle::new(args.oracle())?;
     let files = judge(&oracle, &paths, args.shell.as_deref())?;
     let json = serde_json::to_string(&Report { files: &files }).map_err(|e| e.to_string())?;
-    println!("{json}");
+    writeln!(out, "{json}").map_err(|e| format!("writing the report: {e}"))?;
     Ok(files.iter().all(|f| f.verdict != Verdict::Differs))
 }
 
@@ -134,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn each_file_is_identical_sanctioned_or_differs_in_input_order() {
+    fn each_file_is_identical_or_sanctioned_in_input_order() {
         let Some(oracle) = crate::oracle::test_oracle() else {
             return;
         };
@@ -296,6 +300,105 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// `conformance judge` as the benchmark runs it: `argv` after the command
+    /// name, `stdin` holding the paths. Returns the exit status and stdout.
+    fn cli(argv: &[&str], stdin: &str) -> (u8, String) {
+        use clap::Parser;
+        let args = Args::try_parse_from(["conformance", "judge"].iter().chain(argv)).expect("args");
+        let mut out = Vec::new();
+        let res = run_on(&args, stdin.as_bytes(), &mut out);
+        (
+            crate::status(&res),
+            String::from_utf8(out).expect("utf-8 report"),
+        )
+    }
+
+    /// The verdicts in a report, after checking it is one JSON document on
+    /// one line.
+    fn verdicts(report: &str) -> Vec<(String, String)> {
+        assert_eq!(report.lines().count(), 1, "{report}");
+        let doc: serde_json::Value = serde_json::from_str(report).expect("one JSON document");
+        doc["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().expect("path").to_string(),
+                    f["verdict"].as_str().expect("verdict").to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_reports_every_path_in_input_order_and_exits_by_verdict() {
+        let dir = Scratch::new("cli-verdicts");
+        let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
+        drop(oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE));
+        let clean = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
+        let dirty = write(dir.path(), "dirty.sh", "#!/bin/sh\n# dirty\n");
+        let (status, out) = cli(&["--oracle", &oracle], &format!("{dirty}\n\n{clean}\n"));
+        assert_eq!(status, 1, "{out}");
+        assert_eq!(
+            verdicts(&out),
+            [
+                (dirty, "differs".to_string()),
+                (clean.clone(), "identical".to_string())
+            ]
+        );
+        let (status, out) = cli(&["--oracle", &oracle], &format!("{clean}\n"));
+        assert_eq!(status, 0, "{out}");
+        assert_eq!(verdicts(&out), [(clean, "identical".to_string())]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_fails_closed_on_unusable_oracle_output() {
+        let dir = Scratch::new("cli-garbage");
+        let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
+        drop(oracle::fake_oracle(dir.path(), "echo 'not json'"));
+        let clean = write(dir.path(), "clean.sh", "#!/bin/sh\ntrue\n");
+        let (status, out) = cli(&["--oracle", &oracle], &format!("{clean}\n"));
+        assert_eq!(status, 1, "{out}");
+        assert_eq!(verdicts(&out), [(clean, "differs".to_string())]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_exits_2_and_prints_nothing_for_a_missing_file() {
+        let dir = Scratch::new("cli-missing");
+        let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
+        drop(oracle::fake_oracle(dir.path(), oracle::DIRTY_ORACLE));
+        let missing = dir.path().join("absent.sh").to_string_lossy().into_owned();
+        let (status, out) = cli(&["--oracle", &oracle], &format!("{missing}\n"));
+        assert_eq!((status, out.as_str()), (2, ""));
+    }
+
+    /// `--shell` reaches both tools: the fake oracle refuses to answer
+    /// without it, and the port would ask for a shebang.
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_checks_as_the_shell_it_is_given() {
+        let dir = Scratch::new("cli-shell");
+        let oracle = dir.path().join("oracle").to_string_lossy().into_owned();
+        drop(oracle::fake_oracle(
+            dir.path(),
+            r#"case " $* " in *" --shell=bash "*) ;; *) exit 3 ;; esac; echo '{"comments":[]}'"#,
+        ));
+        let script = write(dir.path(), "plain", "true\n");
+        let (status, out) = cli(
+            &["--oracle", &oracle, "--shell", "bash"],
+            &format!("{script}\n"),
+        );
+        assert_eq!(status, 0, "{out}");
+        assert_eq!(verdicts(&out), [(script.clone(), "identical".to_string())]);
+        let (status, out) = cli(&["--oracle", &oracle], &format!("{script}\n"));
+        assert_eq!(status, 1, "{out}");
+        assert_eq!(verdicts(&out), [(script, "differs".to_string())]);
     }
 
     #[test]

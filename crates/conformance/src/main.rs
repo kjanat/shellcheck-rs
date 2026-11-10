@@ -765,13 +765,19 @@ fn main() -> ExitCode {
             })
         }
     };
+    if let Err(msg) = &res {
+        eprintln!("conformance: {msg}");
+    }
+    ExitCode::from(status(&res))
+}
+
+/// The exit status for a command's outcome: 0 when it passed, 1 when it
+/// found a difference, 2 when the harness itself failed.
+fn status(res: &Result<bool, String>) -> u8 {
     match res {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
-        Err(msg) => {
-            eprintln!("conformance: {msg}");
-            ExitCode::from(2)
-        }
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => 2,
     }
 }
 
