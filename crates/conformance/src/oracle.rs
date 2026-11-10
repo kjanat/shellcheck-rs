@@ -133,17 +133,58 @@ fn json1_comment(comment: &Value) -> bool {
     }
 }
 
-/// Why the oracle gave no usable report: its exit status and the first line
-/// it wrote to standard error, which is what names an upstream bug.
-fn unanswered(res: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&res.stderr);
-    let why = stderr
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("no json1 report for the file")
-        .trim()
-        .to_string();
-    format!("exit {}: {why}", res.status.code().unwrap_or(-1))
+/// How one oracle invocation ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Exited(i32),
+    Signalled,
+}
+
+/// What one oracle invocation produced.
+struct Run {
+    ended: Ended,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl Run {
+    fn from_output(out: std::process::Output) -> Self {
+        Self {
+            ended: out.status.code().map_or(Ended::Signalled, Ended::Exited),
+            stdout: out.stdout,
+            stderr: out.stderr,
+        }
+    }
+
+    /// Did the oracle check every file it was given? ShellCheck exits 0
+    /// without findings and 1 with them; any other ending means it gave up
+    /// on some input, whatever it printed first.
+    fn checked(&self) -> bool {
+        matches!(self.ended, Ended::Exited(0 | 1))
+    }
+
+    /// The exit code, with -1 for a process a signal ended.
+    fn code(&self) -> i32 {
+        match self.ended {
+            Ended::Exited(code) => code,
+            Ended::Signalled => -1,
+        }
+    }
+
+    /// Why the oracle gave no usable report: how it ended and the first line
+    /// it wrote to standard error, which is what names an upstream bug.
+    fn failure(&self) -> String {
+        let stderr = String::from_utf8_lossy(&self.stderr);
+        let why = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no json1 report for the file")
+            .trim();
+        match self.ended {
+            Ended::Exited(code) => format!("exit {code}: {why}"),
+            Ended::Signalled => format!("killed by a signal: {why}"),
+        }
+    }
 }
 
 impl Oracle {
@@ -211,15 +252,14 @@ impl Oracle {
                 std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
                 paths.push(p.to_string_lossy().into_owned());
             }
-            let res = self
-                .command(shell, enable)
-                .args(&paths)
-                .output()
-                .map_err(|e| format!("running {}: {e}", self.binary.display()));
+            let run = self.invoke(&paths, shell, enable);
             for p in &paths {
                 let _ = std::fs::remove_file(p);
             }
-            if let Some(by_path) = json1_report(&res?.stdout, &paths) {
+            let run = run?;
+            if run.checked()
+                && let Some(by_path) = json1_report(&run.stdout, &paths)
+            {
                 out.extend(chunk.iter().map(|(name, _)| name.clone()).zip(by_path));
                 continue;
             }
@@ -228,10 +268,14 @@ impl Oracle {
             // it. Re-run them one at a time so the run continues and the
             // culprit is named, rather than ending the comparison there.
             for (name, body) in chunk {
-                match self.check_named(name, body, shell, enable) {
-                    Ok((comments, _)) => {
+                match self.run_named(name, body, shell, enable) {
+                    Ok((Some(comments), run)) if run.checked() => {
                         out.insert(name.clone(), comments);
                     }
+                    Ok((_, run)) => self
+                        .crashes
+                        .borrow_mut()
+                        .push((body.clone(), run.failure())),
                     Err(why) => self.crashes.borrow_mut().push((body.clone(), why)),
                 }
             }
@@ -252,6 +296,20 @@ impl Oracle {
         }
         cmd.env_remove("SHELLCHECK_OPTS");
         cmd
+    }
+
+    /// Run the oracle over `paths`. `Err` means it could not be started.
+    fn invoke(
+        &self,
+        paths: &[String],
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<Run, String> {
+        self.command(shell, enable)
+            .args(paths)
+            .output()
+            .map(Run::from_output)
+            .map_err(|e| format!("running {}: {e}", self.binary.display()))
     }
 
     /// Check a single script, also returning the process exit status, which a
@@ -283,20 +341,29 @@ impl Oracle {
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<(Vec<Value>, i32), String> {
+        let (comments, run) = self.run_named(name, script, shell, enable)?;
+        let comments = comments.ok_or_else(|| run.failure())?;
+        Ok((comments, run.code()))
+    }
+
+    /// Check `script` alone under `name`: its diagnostics, if the oracle
+    /// printed a usable report, and how the oracle ended.
+    fn run_named(
+        &self,
+        name: &str,
+        script: &str,
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<(Option<Vec<Value>>, Run), String> {
         let p = self.dir.join(name);
         std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
         let path = p.to_string_lossy().into_owned();
-        let res = self
-            .command(shell, enable)
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("running {}: {e}", self.binary.display()));
+        let run = self.invoke(std::slice::from_ref(&path), shell, enable);
         let _ = std::fs::remove_file(&p);
-        let res = res?;
-        let comments = json1_report(&res.stdout, std::slice::from_ref(&path))
-            .and_then(|mut by_path| by_path.pop())
-            .ok_or_else(|| unanswered(&res))?;
-        Ok((comments, res.status.code().unwrap_or(-1)))
+        let run = run?;
+        let comments = json1_report(&run.stdout, std::slice::from_ref(&path))
+            .and_then(|mut by_path| by_path.pop());
+        Ok((comments, run))
     }
 
     /// Inputs the oracle could not answer for, as (script, reason) pairs.
@@ -596,6 +663,42 @@ mod tests {
             assert!(out.is_empty(), "{comment}: {out:?}");
             assert_eq!(o.crashes().len(), 2, "{comment}");
         }
+    }
+
+    /// A run that failed answers for no file it was given, even when it
+    /// printed a valid report first.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_from_a_failed_run_answers_nothing() {
+        for (body, why) in [
+            (r#"echo '{"comments":[]}'; exit 2"#, "exit 2: "),
+            (
+                r#"echo '{"comments":[]}'; kill -9 $$"#,
+                "killed by a signal: ",
+            ),
+        ] {
+            let dir = Scratch::new("failed-run");
+            let o = fake_oracle(dir.path(), body);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let out = o.check(&batch, None).expect("check");
+            assert!(out.is_empty(), "{body}: {out:?}");
+            let crashes = o.crashes();
+            assert_eq!(crashes.len(), 2, "{body}");
+            assert!(
+                crashes.iter().all(|(_, reason)| reason.starts_with(why)),
+                "{crashes:?}"
+            );
+        }
+    }
+
+    /// A single check still reports the exit status, so the fuzzer can
+    /// compare it with the port's.
+    #[cfg(unix)]
+    #[test]
+    fn a_single_check_returns_the_exit_status_with_the_report() {
+        let dir = Scratch::new("single-status");
+        let o = fake_oracle(dir.path(), r#"echo '{"comments":[]}'; exit 2"#);
+        assert_eq!(o.check_one("true\n", None), Ok((Vec::new(), 2)));
     }
 
     #[test]
