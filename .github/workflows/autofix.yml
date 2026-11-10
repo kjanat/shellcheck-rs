@@ -13,5 +13,6 @@ jobs:
     cancel-timeout-minutes: 2
     steps:
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: kjanat/actions@fmt
       - uses: autofix-ci/action@v1

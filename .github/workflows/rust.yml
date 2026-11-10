@@ -27,6 +27,7 @@ jobs:
     steps:
       - parallel:
           - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+            with: { persist-credentials: false }
           - uses: $/
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with: { install_args: "http:actionlint" }
@@ -42,6 +43,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: *CO
+        with: { persist-credentials: false }
 
       - name: Install the toolchain (mise)
         uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
@@ -59,6 +61,7 @@ jobs:
       - parallel:
           - name: Checkout repository
             uses: *CO
+            with: { persist-credentials: false }
           - name: Remove shellcheck from runner
             run: sudo apt-get remove -y shellcheck 2>/dev/null || true
 
@@ -126,6 +129,9 @@ jobs:
       - name: Test rshellcheck
         run: cargo test -p rshellcheck
 
+      - name: Test the conformance harness
+        run: cargo test --locked -p conformance
+
       - name: Conformance gate
         run: cargo conformance-gate
 
@@ -133,12 +139,32 @@ jobs:
         env: { "${{ insert }}": "${{ fromJSON(vars.FUZZ) }}" }
         run: cargo conformance-fuzz
 
+  package:
+    name: Package crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: *CO
+        with: { persist-credentials: false }
+
+      - name: Install Rust stable
+        uses: *rust
+
+      - name: Package the core and the CLI built against it
+        run: cargo package --locked --package rshellcheck-core --package rshellcheck
+
+      - name: Run the core doctests from its package
+        run: |
+          tar -xzf target/package/rshellcheck-core-*.crate -C "${RUNNER_TEMP}"
+          cargo test --doc --locked --manifest-path "${RUNNER_TEMP}"/rshellcheck-core-*/Cargo.toml
+
   validity-smoke:
     name: Validity smoke
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: *CO
+        with: { persist-credentials: false }
 
       - name: Install Rust stable
         uses: *rust

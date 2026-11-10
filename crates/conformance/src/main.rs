@@ -286,6 +286,7 @@ fn report_crashes(oracle: &oracle::Oracle, max: usize, quiet: bool) -> usize {
 // gate: ShellCheck's own prop_ properties
 
 fn gate(args: &Args) -> Result<bool, String> {
+    let shell = args.shell.as_deref();
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
     let coverage = corpus::coverage(&src)?;
     // Say what the corpus cannot reach before saying how well it did on the
@@ -320,7 +321,7 @@ fn gate(args: &Args) -> Result<bool, String> {
         .iter()
         .map(|e| (oracle.name(), e.script.clone()))
         .collect();
-    let by_name = oracle.check(&named, args.shell.as_deref())?;
+    let by_name = oracle.check(&named, shell)?;
 
     let mut divergent: Vec<(String, Vec<CommentKey>, Vec<CommentKey>)> = Vec::new();
     let mut deviations: Vec<(String, Vec<&'static deviations::Deviation>)> = Vec::new();
@@ -330,15 +331,14 @@ fn gate(args: &Args) -> Result<bool, String> {
             continue;
         };
         compared += 1;
-        let path = oracle.dir().join(name);
+        let path = oracle.dir().join(name).to_string_lossy().into_owned();
         let ok = oracle_keys(ocomments);
-        let pk = port_keys(script, &path.to_string_lossy(), args.shell.as_deref())?;
+        let pk = port_keys(script, &path, shell)?;
         if keys_match(&pk, &ok) {
             continue;
         }
         // A difference the port is entitled to is not a divergence.
-        let sanction =
-            deviations::sanctioned(script, args.shell.as_deref(), &pk, &ok, Some(&oracle));
+        let sanction = deviations::sanctioned(script, &path, shell, &pk, &ok, Some(&oracle));
         if sanction.is_empty() {
             divergent.push((entry.id.clone(), pk, ok));
         } else {
@@ -355,7 +355,7 @@ fn gate(args: &Args) -> Result<bool, String> {
         for (kind, script) in [("positive", &ex.positive), ("negative", &ex.negative)] {
             let name = oracle.name();
             let named = [(name.clone(), script.clone())];
-            let by_name = oracle.check_with(&named, args.shell.as_deref(), Some(&ex.name))?;
+            let by_name = oracle.check_with(&named, shell, Some(&ex.name))?;
             let Some(ocomments) = by_name.get(&name) else {
                 continue;
             };
@@ -365,7 +365,7 @@ fn gate(args: &Args) -> Result<bool, String> {
             let pk = port_keys_with(
                 script,
                 &path.to_string_lossy(),
-                args.shell.as_deref(),
+                shell,
                 std::slice::from_ref(&ex.name),
             )?;
             if !keys_match(&pk, &ok) {
@@ -759,13 +759,19 @@ fn main() -> ExitCode {
             })
         }
     };
+    if let Err(msg) = &res {
+        eprintln!("conformance: {msg}");
+    }
+    ExitCode::from(status(&res))
+}
+
+/// The exit status for a command's outcome: 0 when it passed, 1 when it
+/// found a difference, 2 when the harness itself failed.
+const fn status(res: &Result<bool, String>) -> u8 {
     match res {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
-        Err(msg) => {
-            eprintln!("conformance: {msg}");
-            ExitCode::from(2)
-        }
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => 2,
     }
 }
 

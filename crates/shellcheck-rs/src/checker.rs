@@ -336,7 +336,8 @@ fn order_key(pc: &PositionedComment) -> OrderKey<'_> {
 }
 
 /// `shellFromFilename`: infer a fallback shell from the file extension.
-fn shell_from_filename(filename: &str) -> Option<Shell> {
+#[must_use]
+pub fn shell_from_filename(filename: &str) -> Option<Shell> {
     let candidates = [
         (".ksh", Shell::Ksh),
         (".bash", Shell::Bash),

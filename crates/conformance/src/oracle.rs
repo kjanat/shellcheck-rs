@@ -11,8 +11,11 @@
 //! cannot silently change what the oracle says.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc::{Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -27,6 +30,40 @@ pub struct Oracle {
     /// implementation that dies on an input is a finding about *it* — and a
     /// run that stops there tells us nothing about the rest of the corpus.
     crashes: std::cell::RefCell<Vec<(String, String)>>,
+    allowance: Allowance,
+}
+
+/// How long the output of a finished or killed run may take to arrive. A
+/// killed oracle's pipes close at once, unless a process it started still
+/// holds them; that process is left running with its reader.
+const DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// How many scripts in a row may run out of time before the oracle counts as
+/// broken. One stuck input is a finding about it. Three in a row mean the
+/// oracle answers nothing, and retrying the rest of a batch would take hours.
+const HUNG_IN_A_ROW: usize = 3;
+
+/// How long one invocation may run before it is killed: `base`, plus
+/// `per_script` for each script it checks. A run past this is stuck, and its
+/// scripts are retried one at a time like those of a crashed batch.
+#[derive(Debug, Clone, Copy)]
+struct Allowance {
+    base: Duration,
+    per_script: Duration,
+}
+
+impl Allowance {
+    const DEFAULT: Self = Self {
+        base: Duration::from_secs(60),
+        per_script: Duration::from_secs(2),
+    };
+
+    fn for_scripts(self, scripts: usize) -> Duration {
+        self.base.saturating_add(
+            self.per_script
+                .saturating_mul(u32::try_from(scripts).unwrap_or(u32::MAX)),
+        )
+    }
 }
 
 /// How many scripts to check per oracle invocation.
@@ -80,11 +117,111 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     ))
 }
 
-/// The diagnostics of a `--format=json1` report. A report without a
-/// `comments` array answers nothing, so it reads as no report at all rather
-/// than as zero findings.
-fn json1_comments(report: &Value) -> Option<Vec<Value>> {
-    report.get("comments").and_then(Value::as_array).cloned()
+/// The diagnostics of a `--format=json1` report, one list for each of `paths`
+/// in the same order.
+///
+/// `None` unless ShellCheck could have printed the report for exactly these
+/// files: a `comments` array whose every entry carries each json1 field the
+/// comparison reads and names one of `paths`. A comment naming no file or
+/// another file would otherwise leave every real input looking clean.
+fn json1_report(stdout: &[u8], paths: &[String]) -> Option<Vec<Vec<Value>>> {
+    let stdout = String::from_utf8_lossy(stdout);
+    let report = serde_json::from_str::<Value>(stdout.trim()).ok()?;
+    let mut by_path = vec![Vec::new(); paths.len()];
+    for comment in report.get("comments")?.as_array()? {
+        let file = comment.get("file")?.as_str()?;
+        let at = paths.iter().position(|p| p == file)?;
+        if !json1_comment(comment) {
+            return None;
+        }
+        by_path[at].push(comment.clone());
+    }
+    Some(by_path)
+}
+
+/// Does `comment` carry every field of a json1 comment, each with its type?
+fn json1_comment(comment: &Value) -> bool {
+    let fields = |value: &Value, numbers: &[&str], texts: &[&str]| {
+        numbers
+            .iter()
+            .all(|k| value.get(k).is_some_and(Value::is_i64))
+            && texts
+                .iter()
+                .all(|k| value.get(k).is_some_and(Value::is_string))
+    };
+    fields(
+        comment,
+        &["line", "endLine", "column", "endColumn", "code"],
+        &["level", "message"],
+    ) && match comment.get("fix") {
+        None | Some(Value::Null) => true,
+        Some(fix) => fix
+            .get("replacements")
+            .and_then(Value::as_array)
+            .is_some_and(|replacements| {
+                replacements.iter().all(|r| {
+                    fields(
+                        r,
+                        &["line", "endLine", "column", "endColumn", "precedence"],
+                        &["insertionPoint", "replacement"],
+                    )
+                })
+            }),
+    }
+}
+
+/// How one oracle invocation ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Exited(i32),
+    Signalled,
+    /// Killed when its allowance ran out.
+    OutOfTime(Duration),
+}
+
+/// What one oracle invocation produced.
+struct Run {
+    ended: Ended,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl Run {
+    /// Did the oracle check every file it was given? ShellCheck exits 0
+    /// without findings and 1 with them; any other ending means it gave up
+    /// on some input, whatever it printed first.
+    const fn checked(&self) -> bool {
+        matches!(self.ended, Ended::Exited(0 | 1))
+    }
+
+    /// Did the oracle run out of its allowance?
+    const fn out_of_time(&self) -> bool {
+        matches!(self.ended, Ended::OutOfTime(_))
+    }
+
+    /// The exit code, with -1 for a process a signal ended.
+    const fn code(&self) -> i32 {
+        match self.ended {
+            Ended::Exited(code) => code,
+            Ended::Signalled | Ended::OutOfTime(_) => -1,
+        }
+    }
+
+    /// Why the oracle gave no usable report: how it ended and the first line
+    /// it wrote to standard error, which is what names an upstream bug.
+    fn failure(&self) -> String {
+        let stderr = String::from_utf8_lossy(&self.stderr);
+        let why = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no json1 report for the file")
+            .trim();
+        match self.ended {
+            Ended::Exited(code) => format!("exit {code}: {why}"),
+            Ended::Signalled => format!("killed by a signal: {why}"),
+            Ended::OutOfTime(limit) => format!("no answer within {limit:?}: {why}"),
+        }
+    }
 }
 
 impl Oracle {
@@ -107,7 +244,16 @@ impl Oracle {
             dir,
             counter: std::cell::Cell::new(0),
             crashes: std::cell::RefCell::new(Vec::new()),
+            allowance: Allowance::DEFAULT,
         })
+    }
+
+    /// This oracle with `base` and `per_script` as its allowance, so a test
+    /// reaches the deadline without waiting a minute.
+    #[cfg(test)]
+    const fn with_allowance(mut self, base: Duration, per_script: Duration) -> Self {
+        self.allowance = Allowance { base, per_script };
+        self
     }
 
     /// The scratch directory, so callers can name files inside it.
@@ -127,8 +273,8 @@ impl Oracle {
     /// Check `scripts` (name -> source) in as few invocations as possible,
     /// returning each script's diagnostics keyed by the same name.
     ///
-    /// A name missing from the result had no diagnostics. A name mapping to
-    /// `Err` means the oracle produced nothing parseable for it.
+    /// A name the oracle gave no usable report for is missing from the
+    /// result, and [`Oracle::crashes`] says why.
     pub fn check(
         &self,
         scripts: &[(String, String)],
@@ -145,66 +291,142 @@ impl Oracle {
         enable: Option<&str>,
     ) -> Result<HashMap<String, Vec<Value>>, String> {
         let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+        let mut hung = 0;
         for chunk in scripts.chunks(BATCH) {
             let mut paths: Vec<String> = Vec::with_capacity(chunk.len());
             for (name, body) in chunk {
-                let p = self.dir.join(name);
-                std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
-                paths.push(p.to_string_lossy().into_owned());
-                out.entry(name.clone()).or_default();
+                paths.push(self.place(name, body)?);
             }
-            let mut cmd = Command::new(&self.binary);
-            cmd.arg("--norc").arg("--format=json1");
-            if let Some(s) = shell {
-                cmd.arg(format!("--shell={s}"));
-            }
-            if let Some(e) = enable {
-                cmd.arg(format!("--enable={e}"));
-            }
-            cmd.args(&paths);
-            cmd.env_remove("SHELLCHECK_OPTS");
-            let res = cmd
-                .output()
-                .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
-            let stdout = String::from_utf8_lossy(&res.stdout);
-            let comments = serde_json::from_str::<Value>(stdout.trim())
-                .ok()
-                .as_ref()
-                .and_then(json1_comments);
-            let Some(comments) = comments else {
-                // One input in this batch killed the oracle, and its answer
-                // for the other 199 died with it. Re-run them one at a time
-                // so the run continues and the culprit is named, rather than
-                // ending the comparison on an upstream crash.
-                for (name, body) in chunk {
-                    match self.check_named(name, body, shell, enable) {
-                        Ok((comments, _)) => {
-                            out.entry(name.clone()).or_default().extend(comments);
-                        }
-                        Err(why) => {
-                            self.crashes.borrow_mut().push((body.clone(), why));
-                            out.remove(name);
-                        }
-                    }
-                }
-                for p in &paths {
-                    let _ = std::fs::remove_file(p);
-                }
-                continue;
-            };
-            for c in comments {
-                let file = c.get("file").and_then(Value::as_str).unwrap_or_default();
-                let base = Path::new(file)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                out.entry(base).or_default().push(c);
-            }
+            let run = self.invoke(&paths, shell, enable);
             for p in &paths {
-                let _ = std::fs::remove_file(p);
+                self.clear(p);
+            }
+            let run = run?;
+            if run.checked()
+                && let Some(by_path) = json1_report(&run.stdout, &paths)
+            {
+                out.extend(chunk.iter().map(|(name, _)| name.clone()).zip(by_path));
+                hung = 0;
+                continue;
+            }
+            // One input in this batch killed the oracle, or its report is not
+            // one for these files, and the answer for the other 199 went with
+            // it. Re-run them one at a time so the run continues and the
+            // culprit is named, rather than ending the comparison there.
+            for (name, body) in chunk {
+                let why = match self.run_named(name, body, shell, enable) {
+                    Ok((Some(comments), run)) if run.checked() => {
+                        out.insert(name.clone(), comments);
+                        hung = 0;
+                        continue;
+                    }
+                    Ok((_, run)) => {
+                        hung = if run.out_of_time() { hung + 1 } else { 0 };
+                        run.failure()
+                    }
+                    Err(why) => {
+                        hung = 0;
+                        why
+                    }
+                };
+                self.crashes.borrow_mut().push((body.clone(), why.clone()));
+                if hung == HUNG_IN_A_ROW {
+                    return Err(format!(
+                        "{}: {HUNG_IN_A_ROW} scripts in a row got no answer, the last: {why}",
+                        self.binary.display()
+                    ));
+                }
             }
         }
         Ok(out)
+    }
+
+    /// Write `body` under `name` in the scratch directory, creating the
+    /// directory a name such as `s000001/build.bash` puts it in, and return
+    /// the path the oracle is given.
+    fn place(&self, name: &str, body: &str) -> Result<String, String> {
+        let p = self.dir.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&p, body).map_err(|e| format!("{}: {e}", p.display()))?;
+        Ok(p.to_string_lossy().into_owned())
+    }
+
+    /// Remove a file [`Oracle::place`] wrote, and the directory it created.
+    fn clear(&self, path: &str) {
+        let p = Path::new(path);
+        let _ = std::fs::remove_file(p);
+        if let Some(parent) = p.parent()
+            && parent != self.dir
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    /// The oracle invocation every check shares: json1 output, no rc file,
+    /// no `SHELLCHECK_OPTS`.
+    fn command(&self, shell: Option<&str>, enable: Option<&str>) -> Command {
+        let mut cmd = Command::new(&self.binary);
+        cmd.arg("--norc").arg("--format=json1");
+        if let Some(s) = shell {
+            cmd.arg(format!("--shell={s}"));
+        }
+        if let Some(e) = enable {
+            cmd.arg(format!("--enable={e}"));
+        }
+        cmd.env_remove("SHELLCHECK_OPTS");
+        cmd
+    }
+
+    /// Run the oracle over `paths`, killing it once its allowance runs out.
+    /// `Err` means it could not be started.
+    fn invoke(
+        &self,
+        paths: &[String],
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<Run, String> {
+        let running = |e: std::io::Error| format!("running {}: {e}", self.binary.display());
+        let mut child = self
+            .command(shell, enable)
+            .args(paths)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(running)?;
+        let limit = self.allowance.for_scripts(paths.len());
+        let deadline = Instant::now() + limit;
+        let (sent, drained) = std::sync::mpsc::channel();
+        drain(child.stdout.take(), Stream::Out, sent.clone());
+        drain(child.stderr.take(), Stream::Err, sent);
+        let mut output = Output::default();
+        // The pipes close when the process exits, which wakes this thread
+        // without polling. A process that closes them and runs on is polled
+        // until the deadline.
+        output.collect(&drained, deadline);
+        let status: Option<ExitStatus> = loop {
+            if let Some(status) = child.try_wait().map_err(running)? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        output.collect(&drained, Instant::now() + DRAIN_GRACE);
+        Ok(Run {
+            ended: status.map_or(Ended::OutOfTime(limit), |s| {
+                s.code().map_or(Ended::Signalled, Ended::Exited)
+            }),
+            stdout: output.stdout.unwrap_or_default(),
+            stderr: output.stderr.unwrap_or_default(),
+        })
     }
 
     /// Check a single script, also returning the process exit status, which a
@@ -236,41 +458,27 @@ impl Oracle {
         shell: Option<&str>,
         enable: Option<&str>,
     ) -> Result<(Vec<Value>, i32), String> {
-        let p = self.dir.join(name);
-        std::fs::write(&p, script).map_err(|e| format!("{}: {e}", p.display()))?;
-        let mut cmd = Command::new(&self.binary);
-        cmd.arg("--norc").arg("--format=json1");
-        if let Some(s) = shell {
-            cmd.arg(format!("--shell={s}"));
-        }
-        if let Some(e) = enable {
-            cmd.arg(format!("--enable={e}"));
-        }
-        cmd.arg(&p);
-        cmd.env_remove("SHELLCHECK_OPTS");
-        let res = cmd
-            .output()
-            .map_err(|e| format!("running {}: {e}", self.binary.display()))?;
-        let _ = std::fs::remove_file(&p);
-        let stdout = String::from_utf8_lossy(&res.stdout);
-        let comments = serde_json::from_str::<Value>(stdout.trim())
-            .ok()
-            .as_ref()
-            .and_then(json1_comments)
-            .ok_or_else(|| {
-                // Not "bad json": the process died before writing a json1
-                // report. Carry the reason the oracle itself gave, which is
-                // what names the bug.
-                let stderr = String::from_utf8_lossy(&res.stderr);
-                let why = stderr
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("no output")
-                    .trim()
-                    .to_string();
-                format!("exit {}: {why}", res.status.code().unwrap_or(-1))
-            })?;
-        Ok((comments, res.status.code().unwrap_or(-1)))
+        let (comments, run) = self.run_named(name, script, shell, enable)?;
+        let comments = comments.ok_or_else(|| run.failure())?;
+        Ok((comments, run.code()))
+    }
+
+    /// Check `script` alone under `name`: its diagnostics, if the oracle
+    /// printed a usable report, and how the oracle ended.
+    fn run_named(
+        &self,
+        name: &str,
+        script: &str,
+        shell: Option<&str>,
+        enable: Option<&str>,
+    ) -> Result<(Option<Vec<Value>>, Run), String> {
+        let path = self.place(name, script)?;
+        let run = self.invoke(std::slice::from_ref(&path), shell, enable);
+        self.clear(&path);
+        let run = run?;
+        let comments = json1_report(&run.stdout, std::slice::from_ref(&path))
+            .and_then(|mut by_path| by_path.pop());
+        Ok((comments, run))
     }
 
     /// Inputs the oracle could not answer for, as (script, reason) pairs.
@@ -372,6 +580,50 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
     ))
 }
 
+/// Which of a run's output streams a drained buffer holds.
+#[derive(Clone, Copy)]
+enum Stream {
+    Out,
+    Err,
+}
+
+/// The output of one run, each stream once its pipe has closed.
+#[derive(Default)]
+struct Output {
+    stdout: Option<Vec<u8>>,
+    stderr: Option<Vec<u8>>,
+}
+
+impl Output {
+    /// Take drained streams from `drained` until both are in or `until`
+    /// passes. A stream still open then stays `None`, and its reader is left
+    /// behind rather than waited for.
+    fn collect(&mut self, drained: &Receiver<(Stream, Vec<u8>)>, until: Instant) {
+        while self.stdout.is_none() || self.stderr.is_none() {
+            match drained.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                Ok((Stream::Out, bytes)) => self.stdout = Some(bytes),
+                Ok((Stream::Err, bytes)) => self.stderr = Some(bytes),
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+/// Read `pipe` to its end on a thread of its own, then send what it read.
+fn drain(
+    pipe: Option<impl Read + Send + 'static>,
+    stream: Stream,
+    sent: Sender<(Stream, Vec<u8>)>,
+) {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        let _ = sent.send((stream, buf));
+    });
+}
+
 impl Drop for Oracle {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -393,8 +645,82 @@ pub fn test_oracle() -> Option<Oracle> {
         .ok()
 }
 
+/// Fixtures the tests of this crate share.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// A scratch directory removed when the test ends.
+    pub struct Scratch(PathBuf);
+
+    impl Scratch {
+        pub fn new(test: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("conformance-{test}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("scratch directory");
+            Self(dir)
+        }
+
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A shell script in `dir` standing in for the oracle, running `body` for
+    /// every invocation except `--version`.
+    #[cfg(unix)]
+    pub fn fake_oracle(dir: &Path, body: &str) -> Oracle {
+        let fake = dir.join("oracle");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\n[ \"$1\" = --version ] && exit 0\n{body}\n"),
+        )
+        .expect("write oracle");
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .expect("chmod oracle");
+        // A child another test thread forked while the write was open holds
+        // the descriptor until it execs, and exec fails with ETXTBSY until
+        // then. Once one exec succeeds, no process can hold it any more.
+        for _ in 0..100 {
+            match Command::new(&fake).arg("--version").output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                ran => {
+                    ran.expect("run fake oracle");
+                    break;
+                }
+            }
+        }
+        Oracle::new(&fake.to_string_lossy()).expect("oracle")
+    }
+
+    /// A fake oracle body that reports one SC2086 for every file containing
+    /// `dirty`, and nothing for any other.
+    #[cfg(unix)]
+    pub const DIRTY_ORACLE: &str = r#"sep=
+    printf '{"comments":['
+    for f; do
+      case $f in --*) continue ;; esac
+      case $(cat "$f") in
+        *dirty*)
+          printf '%s{"file":"%s","line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m","fix":null}' "$sep" "$f"
+          sep=,
+          ;;
+      esac
+    done
+    printf ']}\n'"#;
+}
+
 #[cfg(test)]
 mod tests {
+    use super::testing::*;
     use super::*;
 
     fn oracle() -> Option<Oracle> {
@@ -446,6 +772,199 @@ mod tests {
         assert!(
             healthy.is_empty(),
             "a `.bash` file needs no shebang, got {healthy:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn scripts(oracle: &Oracle, bodies: &[&str]) -> Vec<(String, String)> {
+        bodies
+            .iter()
+            .map(|b| (oracle.name(), (*b).to_string()))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_file_gets_the_comments_naming_it() {
+        let dir = Scratch::new("naming-it");
+        let o = fake_oracle(dir.path(), DIRTY_ORACLE);
+        let batch = scripts(&o, &["dirty\n", "clean\n"]);
+        let out = o.check(&batch, None).expect("check");
+        assert_eq!(out[&batch[0].0].len(), 1, "{out:?}");
+        assert!(out[&batch[1].0].is_empty(), "{out:?}");
+        assert_eq!(o.crashes(), Vec::<(String, String)>::new());
+    }
+
+    /// A report the oracle could not have printed for these files answers
+    /// for none of them, so no input reads as clean on its say-so.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_with_an_unusable_comment_answers_nothing() {
+        let fields = r#""line":1,"endLine":1,"column":1,"endColumn":2,"level":"style","code":2086,"message":"m""#;
+        let reporting = |comment: &str| {
+            format!(
+                "for f; do last=$f; done\nprintf '%s\\n' '{{\"comments\":[{comment}]}}' | sed \"s|@FILE@|$last|\""
+            )
+        };
+        let dir = Scratch::new("usable");
+        let o = fake_oracle(
+            dir.path(),
+            &reporting(&format!(r#"{{"file":"@FILE@",{fields},"fix":null}}"#)),
+        );
+        let one = scripts(&o, &["true\n"]);
+        let out = o.check(&one, None).expect("check");
+        assert_eq!(
+            out[&one[0].0].len(),
+            1,
+            "the control report is usable: {out:?}"
+        );
+        for comment in [
+            "{}".to_string(),
+            format!("{{{fields}}}"),
+            format!(r#"{{"file":"elsewhere",{fields}}}"#),
+            r#"{"file":"@FILE@","line":1}"#.to_string(),
+            format!(r#"{{"file":"@FILE@",{fields},"fix":{{"replacements":[{{}}]}}}}"#),
+        ] {
+            let dir = Scratch::new("unusable");
+            let o = fake_oracle(dir.path(), &reporting(&comment));
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let out = o.check(&batch, None).expect("check");
+            assert!(out.is_empty(), "{comment}: {out:?}");
+            assert_eq!(o.crashes().len(), 2, "{comment}");
+        }
+    }
+
+    /// A run that failed answers for no file it was given, even when it
+    /// printed a valid report first.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_from_a_failed_run_answers_nothing() {
+        for (body, why) in [
+            (r#"echo '{"comments":[]}'; exit 2"#, "exit 2: "),
+            (
+                r#"echo '{"comments":[]}'; kill -9 $$"#,
+                "killed by a signal: ",
+            ),
+        ] {
+            let dir = Scratch::new("failed-run");
+            let o = fake_oracle(dir.path(), body);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let out = o.check(&batch, None).expect("check");
+            assert!(out.is_empty(), "{body}: {out:?}");
+            let crashes = o.crashes();
+            assert_eq!(crashes.len(), 2, "{body}");
+            assert!(
+                crashes.iter().all(|(_, reason)| reason.starts_with(why)),
+                "{crashes:?}"
+            );
+        }
+    }
+
+    /// A single check still reports the exit status, so the fuzzer can
+    /// compare it with the port's.
+    #[cfg(unix)]
+    #[test]
+    fn a_single_check_returns_the_exit_status_with_the_report() {
+        let dir = Scratch::new("single-status");
+        let o = fake_oracle(dir.path(), r#"echo '{"comments":[]}'; exit 2"#);
+        assert_eq!(o.check_one("true\n", None), Ok((Vec::new(), 2)));
+    }
+
+    /// An oracle that hangs is killed when its allowance runs out, and the
+    /// scripts it held are recorded as unanswered.
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_oracle_is_killed_at_its_deadline() {
+        // The second oracle closes its output first, so only polling sees it.
+        for body in ["exec sleep 30", "exec >&- 2>&-; exec sleep 30"] {
+            let dir = Scratch::new("hung");
+            let o = fake_oracle(dir.path(), body)
+                .with_allowance(Duration::from_millis(100), Duration::ZERO);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let started = Instant::now();
+            let out = o.check(&batch, None).expect("check");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{body}: {:?}",
+                started.elapsed()
+            );
+            assert!(out.is_empty(), "{body}: {out:?}");
+            let crashes = o.crashes();
+            assert_eq!(crashes.len(), 2, "{body}");
+            assert!(
+                crashes
+                    .iter()
+                    .all(|(_, why)| why.starts_with("no answer within 100ms: ")),
+                "{body}: {crashes:?}"
+            );
+        }
+    }
+
+    /// A process the oracle started can hold its output open after the oracle
+    /// is gone. The run still ends one grace period after the deadline.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_holding_the_output_does_not_outlast_the_deadline() {
+        for body in ["sleep 20 & wait", r#"sleep 20 & echo '{"comments":[]}'"#] {
+            let dir = Scratch::new("held-output");
+            let o = fake_oracle(dir.path(), body)
+                .with_allowance(Duration::from_millis(100), Duration::ZERO);
+            let batch = scripts(&o, &["true\n", "true\n"]);
+            let started = Instant::now();
+            let out = o.check(&batch, None).expect("check");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{body}: {:?}",
+                started.elapsed()
+            );
+            assert!(out.is_empty(), "{body}: {out:?}");
+            assert_eq!(o.crashes().len(), 2, "{body}");
+        }
+    }
+
+    /// An oracle that answers nothing for three scripts in a row fails the
+    /// run, so a dead oracle does not take hours to report.
+    #[cfg(unix)]
+    #[test]
+    fn three_hung_scripts_in_a_row_fail_the_run() {
+        let dir = Scratch::new("dead");
+        let o = fake_oracle(dir.path(), "exec sleep 30")
+            .with_allowance(Duration::from_millis(100), Duration::ZERO);
+        let batch = scripts(&o, &["true\n"; 5]);
+        let err = o.check(&batch, None).expect_err("a dead oracle");
+        assert!(err.contains("3 scripts in a row got no answer"), "{err}");
+        assert_eq!(o.crashes().len(), 3);
+    }
+
+    /// Scripts the oracle answers between two that hang reset the count,
+    /// and each hanging script is named.
+    #[cfg(unix)]
+    #[test]
+    fn hung_scripts_between_answers_are_each_recorded() {
+        let dir = Scratch::new("some-hang");
+        let o = fake_oracle(
+            dir.path(),
+            r#"for f; do case $f in --*) ;; *) case $(cat "$f") in *hang*) exec sleep 30 ;; esac ;; esac; done
+echo '{"comments":[]}'"#,
+        )
+        .with_allowance(Duration::from_millis(100), Duration::ZERO);
+        let batch = scripts(&o, &["ok\n", "hang\n", "hang\n", "ok\n", "hang\n", "ok\n"]);
+        let out = o.check(&batch, None).expect("check");
+        assert_eq!(out.len(), 3, "{out:?}");
+        let crashes = o.crashes();
+        assert_eq!(crashes.len(), 3);
+        assert!(
+            crashes.iter().all(|(body, _)| body == "hang\n"),
+            "{crashes:?}"
+        );
+    }
+
+    #[test]
+    fn the_allowance_grows_with_the_scripts_in_a_run() {
+        assert_eq!(Allowance::DEFAULT.for_scripts(1), Duration::from_secs(62));
+        assert_eq!(
+            Allowance::DEFAULT.for_scripts(BATCH),
+            Duration::from_secs(460)
         );
     }
 
