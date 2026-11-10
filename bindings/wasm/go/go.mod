@@ -2,7 +2,7 @@ module github.com/kjanat/shellcheck-rs/bindings/wasm/go
 
 go 1.25.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require github.com/tetratelabs/wazero v1.12.0
 
