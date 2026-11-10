@@ -70,7 +70,7 @@
             ]
           },
           "setup": {
-            "commands": "cargo publish --locked --package 'rshellcheck-core'\ncargo publish --locked --package 'rshellcheck'",
+            "commands": "beepboop publish",
             "credentials": {
               "CARGO_REGISTRY_TOKEN": "crates-io"
             }
