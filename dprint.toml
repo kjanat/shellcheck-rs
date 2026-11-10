@@ -4,7 +4,17 @@
 #:tombi schema.strict = false
 
 extends  = "https://raw.githubusercontent.com/kjanat/kjanat/refs/heads/master/configs/dprint.remote.json"
-excludes = ["shellcheck.1.md", ".github/ISSUE_TEMPLATE/*.md", ".github/beepboop.json"]
+excludes = [
+  "shellcheck.1.md",
+  ".github/ISSUE_TEMPLATE/*.md",
+  ".github/beepboop.json",
+  ".github/workflows/prepare-go.yml",
+  ".github/workflows/prepare-release.yml",
+  ".github/workflows/publish-crates.yml",
+  ".github/workflows/release-go.yml",
+  ".github/workflows/release-rshellcheck.yml",
+  ".github/workflows/start-release.yml",
+]
 
 [exec]
 cwd      = "${configDir}"
