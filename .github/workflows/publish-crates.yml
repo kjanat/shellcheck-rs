@@ -30,41 +30,12 @@ jobs:
         with:
           ref: ${{ fromJSON(steps.beepboop.outputs.context).sourceSha }}
           persist-credentials: false
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      - id: beepboop_credentials
-        uses: kjanat/beepboop/actions/credentials@v1
-        with:
-          execution-id: ${{ steps.beepboop.outputs.execution-id }}
-          aliases: '["crates-io"]'
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b
       - id: beepboop_publish
         name: Publish selected packages
-        run: |-
-          cargo publish --locked --package 'rshellcheck-core'
-          cargo publish --locked --package 'rshellcheck'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ fromJSON(steps.beepboop_credentials.outputs.values)['crates-io'] }}
-      - uses: kjanat/beepboop/actions/report@v1
-        if: ${{ !cancelled() && steps.beepboop.outcome == 'success' }}
+        uses: kjanat/beepboop/actions/publish@v1
         with:
           execution-id: ${{ steps.beepboop.outputs.execution-id }}
-          publications: |
-            [
-              {
-                "id": "pkg:cargo/rshellcheck",
-                "manager": "cargo",
-                "name": "rshellcheck",
-                "version": "${{ fromJSON(steps.beepboop.outputs.context).version }}",
-                "required": true,
-                "outcome": "${{ steps.beepboop_publish.outcome == 'success' && 'succeeded' || 'failed' }}"
-              },
-              {
-                "id": "pkg:cargo/rshellcheck-core",
-                "manager": "cargo",
-                "name": "rshellcheck-core",
-                "version": "${{ fromJSON(steps.beepboop.outputs.context).version }}",
-                "required": true,
-                "outcome": "${{ steps.beepboop_publish.outcome == 'success' && 'succeeded' || 'failed' }}"
-              }
-            ]
+          credentials: '{"CARGO_REGISTRY_TOKEN":"crates-io"}'
     timeout-minutes: 150
 run-name: ${{ inputs.beepboop_title || github.workflow }}
