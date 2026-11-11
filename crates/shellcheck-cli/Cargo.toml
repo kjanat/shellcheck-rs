@@ -13,6 +13,22 @@ keywords               = ["bash", "cli", "lint", "shell", "shellcheck"]
 categories             = ["command-line-utilities", "development-tools"]
 include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/README.md", "/LICENSE"]
 
+# cargo-binstall: release tags are `rshellcheck-v<version>`, which its default
+# URL guesses never try. Archives come from `.github/release/release.py`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.i686-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [[bin]]
 name = "rshellcheck"
 path = "src/bin/shellcheck.rs"
