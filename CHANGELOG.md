@@ -20,6 +20,8 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 - `--list-optional` prints `id:` and `wiki:` for each optional check
 - `rshellcheck_core::checker::shell_from_filename` is public: the shell a file
   name's extension implies, as the checker falls back to it
+- `cargo binstall rshellcheck` downloads the release binary instead of building
+  from source
 
 ### Changed
 
