@@ -13,10 +13,6 @@ keywords               = ["bash", "cli", "lint", "shell", "shellcheck"]
 categories             = ["command-line-utilities", "development-tools"]
 include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/README.md", "/LICENSE"]
 
-[[bin]]
-name = "rshellcheck"
-path = "src/bin/shellcheck.rs"
-
 # cargo-binstall: release tags are `rshellcheck-v<version>`, which its default
 # URL guesses never try. Archives come from `.github/release/release.py`.
 [package.metadata.binstall]
@@ -32,6 +28,10 @@ pkg-fmt = "zip"
 
 [package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
 pkg-fmt = "zip"
+
+[[bin]]
+name = "rshellcheck"
+path = "src/bin/shellcheck.rs"
 
 [dependencies]
 rshellcheck-core.workspace = true
