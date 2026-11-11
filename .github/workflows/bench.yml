@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: bench-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   MISE_YES: "1"
@@ -103,17 +103,17 @@ jobs:
         run: uv run bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"
         env: { CANDIDATE: "${{ matrix.name }}" }
       - name: Save completed binary
-        if: steps.binary.outputs.cache-hit != 'true'
+        if: ${{ steps.binary.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with: *BinaryCache
       - name: Preserve build layers, including recoverable partial builds
-        if: always() && !cancelled() && steps.layers.outcome == 'success' && steps.layers.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.layers.outcome == 'success' && steps.layers.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: *BuildLayers
           key: ${{ steps.layers.outputs.cache-primary-key }}
       - name: Preserve downloaded dependencies
-        if: always() && !cancelled() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: .bench/dependencies/cargo
@@ -167,7 +167,7 @@ jobs:
         run: uv run bench report .bench/results/ci
       - uses: actions/upload-artifact@v7
         id: results
-        if: always() && !cancelled()
+        if: ${{ !cancelled() }}
         with: { name: bench-results, path: .bench/results/ci, include-hidden-files: true, retention-days: 90 }
       - name: Publish summary with evidence download links
         shell: bash
