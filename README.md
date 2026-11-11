@@ -1,13 +1,14 @@
-[![rshellcheck on crates.io](https://img.shields.io/crates/v/rshellcheck?label=rshellcheck&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck]
-[![rshellcheck-core on crates.io](https://img.shields.io/crates/v/rshellcheck-core?label=rshellcheck-core&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck-core]
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](#copyright)
-[![Rust conformance](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml)
-
 # rshellcheck — [ShellCheck](https://github.com/koalaman/shellcheck "koalaman/shellcheck") in Rust
 
 ShellCheck is a GPLv3 tool that gives warnings and suggestions for bash/sh shell scripts:
 
 ![Screenshot of a terminal showing problematic shell script lines highlighted](doc/terminal.png)
+
+[![rshellcheck on crates.io](https://img.shields.io/crates/v/rshellcheck?label=rshellcheck&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck]
+[![rshellcheck-core on crates.io](https://img.shields.io/crates/v/rshellcheck-core?label=rshellcheck-core&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck-core]
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](#copyright)
+[![Rust conformance](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml)
+[![Bench](https://github.com/kjanat/shellcheck-rs/actions/workflows/bench.yml/badge.svg?branch=bench)](https://github.com/kjanat/shellcheck-rs/actions/workflows/bench.yml)
 
 The goals of ShellCheck are
 
