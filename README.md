@@ -1,3 +1,6 @@
+[![rshellcheck on crates.io](https://img.shields.io/crates/v/rshellcheck?label=rshellcheck&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck]
+[![rshellcheck-core on crates.io](https://img.shields.io/crates/v/rshellcheck-core?label=rshellcheck-core&logo=rust&labelColor=B7410E&color=black)][crates-rshellcheck-core]
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](#copyright)
 [![Rust conformance](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kjanat/shellcheck-rs/actions/workflows/rust.yml)
 
 # rshellcheck — [ShellCheck](https://github.com/koalaman/shellcheck "koalaman/shellcheck") in Rust
@@ -583,3 +586,6 @@ Happy ShellChecking!
 
 See [additional diagnostics](docs/diagnostics.md) for default interpreter-path and cleanup-trap warnings,
 and optional clearer parser-error messages beyond upstream ShellCheck.
+
+[crates-rshellcheck]: https://crates.io/crates/rshellcheck
+[crates-rshellcheck-core]: https://crates.io/crates/rshellcheck-core
