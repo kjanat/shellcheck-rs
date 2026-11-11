@@ -45,10 +45,6 @@ import sys
 mutation = pathlib.Path({str(self.root / "mutation")!r})
 if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'setup':
     pathlib.Path('main.rs').write_text('changed by setup')
-if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'postinstall':
-    if os.environ.get('MISE_LOCKED') != '1' or os.environ.get('MISE_TASK_RUN_AUTO_INSTALL') != 'false':
-        with pathlib.Path('mise.lock').open('a') as output:
-            output.write('\\n# nested mise task rewrote the lockfile\\n')
 if sys.argv[1] == 'exec' and '--no-deps' not in sys.argv[:sys.argv.index('--')]:
     print('mise exec prepared the candidate dependencies', file=sys.stderr)
     sys.exit(9)
@@ -437,13 +433,6 @@ tools = ["rust"]
         self.assertIn("main.rs", result.stderr)
         self.assertEqual(self.count(), 0)
         self.assertFalse((self.prepared / "rshellcheck/manifest.json").exists())
-
-    def test_postinstall_inherits_locked_mode_without_unrelated_auto_installs(self):
-        (self.root / "mutation").write_text("postinstall")
-        self.prepare()
-        self.assertEqual(self.count(), 1)
-        self.assertFalse(self.manifest()["dirty"])
-        self.assertIn("binary cache hit", self.prepare().stderr)
 
     def test_build_mutation_rejects_publication_with_changed_paths(self):
         (self.root / "mutation").write_text("build")

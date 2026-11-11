@@ -22,7 +22,7 @@ from bench.schema import CandidatesFile, CandidateSpec, Manifest
 ROOT = Path(__file__).resolve().parents[2]
 STATE = ROOT / ".bench"
 # Bump when the preparation recipe or its artifact contract changes.
-RECIPE = 3
+RECIPE = 4
 
 
 class Build(BaseModel):
@@ -448,9 +448,7 @@ def build_candidate(build: Build, state: Path) -> tuple[Path, Path | None]:
         CARGO_HOME=str(state / "dependencies/cargo"),
         CARGO_BUILD_JOBS=str(build.spec.jobs),
         MISE_EXEC_AUTO_INSTALL="false",
-        # Candidate postinstall tasks must not resolve unrelated tools or rewrite
-        # mise.lock after its contents have been recorded in the build plan.
-        MISE_LOCKED="1",
+        # Candidate postinstall tasks must not resolve unrelated tools.
         MISE_TASK_RUN_AUTO_INSTALL="false",
     )
     # Use the recorded recipe, rather than ambient profile/flag overrides.
@@ -486,10 +484,10 @@ def build_candidate(build: Build, state: Path) -> tuple[Path, Path | None]:
             source_tools = tomllib.load(file).get("tools", {})
     for name in build.spec.tools:
         origin = source if source_tools.get(name) else ROOT
-        run(["mise", "install", "--locked", name], origin)
+        run(["mise", "install", name], origin)
     verify_source(build, "during toolchain setup")
-    # A candidate's own `[deps]` (such as `uv sync`) needs tools its unlocked
-    # mise.toml cannot resolve under MISE_LOCKED, and the build needs none.
+    # A candidate's own `[deps]` (such as `uv sync`) needs tools the build
+    # toolchain lacks, and the build needs none.
     execute = ["mise", "exec", "--no-deps", *pinned, "--"]
     if "cabal" in build.spec.tools:
         cache = subprocess.run(
