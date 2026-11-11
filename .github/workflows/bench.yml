@@ -26,7 +26,7 @@ env:
 jobs:
   resolve:
     name: Resolve exact candidate identities
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs: { candidates: "${{ steps.plan.outputs.candidates }}" }
     steps:
@@ -56,7 +56,7 @@ jobs:
   prepare:
     name: Prepare ${{ matrix.name }}
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -127,7 +127,7 @@ jobs:
   measure:
     name: Measure all candidates together
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
