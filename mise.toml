@@ -13,8 +13,13 @@ min_version.hard = "2026.11.2"
 
 [tools]
 cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
-droast         = { prefix = "1" }
-kprint         = "latest"
+droast         = { prefix = "1", depends = ["cargo-binstall"] }
+kprint         = {
+  version               = "latest",
+  allow_low_downloads   = true,
+  # Staged publish -> trusted publishing switch trips aube's no-downgrade policy.
+  trust_policy_excludes = ["@kprint/*", "@kjanat/*"],
+}
 tombi          = { prefix = "1.10" }                              # Exact version avoids release-age range resolution failures.
 cargo-binstall = { prefix = "1.23" }
 go             = { prefix = "1.27" }
@@ -36,8 +41,8 @@ components = ["rustfmt", "clippy", "rust-src"]
 
 [tool_alias]
 cargo-mutants = "cargo:cargo-mutants"
-droast        = "github:immanuwell/dockerfile-roast"
-kprint        = "github:kjanat/kprint"
+droast        = "cargo:dockerfile-roast"
+kprint        = "npm:@kprint/kprint"
 tombi         = "github:tombi-toml/tombi"
 
 [deps.uv]
