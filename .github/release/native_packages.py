@@ -53,7 +53,16 @@ def pack(stage: Path, dest: Path) -> Package:
         cwd=stage,
         text=True,
     )
-    name = cast(list[dict[str, str]], json.loads(output))[0]["filename"]
+    packed = cast(object, json.loads(output))
+    # npm 12 keys each packed archive by package name; npm 11 prints a list.
+    archives = (
+        list(cast(dict[str, dict[str, str]], packed).values())
+        if isinstance(packed, dict)
+        else cast(list[dict[str, str]], packed)
+    )
+    if len(archives) != 1:
+        raise ValueError("npm pack must write exactly one archive")
+    name = archives[0]["filename"]
     return {
         "file": name,
         "sha256": hashlib.sha256((dest / name).read_bytes()).hexdigest(),

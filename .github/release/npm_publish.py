@@ -14,7 +14,7 @@ from binding_packages import load_record, members
 from binding_packages import verify as verify_bindings
 from native_packages import load_record as load_native_record
 from native_packages import verify as verify_native
-from registry_checks import NotVisibleYet, retry_read
+from registry_checks import NotVisibleYet, npm_view, retry_read
 
 
 def integrity(path: Path) -> str:
@@ -45,7 +45,7 @@ def registry_integrity(spec: str, wait_missing: bool = False) -> str | None:
         except subprocess.TimeoutExpired as error:
             raise NotVisibleYet("npm view timed out") from error
         if result.returncode == 0:
-            value = json.loads(result.stdout)
+            value = npm_view(result.stdout)
             if not isinstance(value, str) or not value:
                 raise NotVisibleYet("integrity not yet visible")
             return value

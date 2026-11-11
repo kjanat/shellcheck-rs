@@ -29,6 +29,18 @@ def retry_read[T](label: str, read: Callable[[float], T], seconds: float = 600) 
             time.sleep(min(10, remaining))
 
 
+def npm_view(text: str) -> object:
+    """Parse the `--json` output of `npm view` for one package version."""
+    value = cast(object, json.loads(text))
+    # npm 12 prints the field of a single matching version inside a list.
+    if not isinstance(value, list):
+        return value
+    items = cast(list[object], value)
+    if len(items) != 1:
+        raise ValueError("npm view matched several package versions")
+    return items[0]
+
+
 class PublishedFile(TypedDict):
     filename: str
     digests: dict[str, str]
