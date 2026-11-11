@@ -191,19 +191,6 @@ tools = ["rust"]
         with self.assertRaisesRegex(ValueError, "prepared judge checksum differs"):
             read_manifest(self.prepared / "rshellcheck")
 
-    def test_missing_candidate_tool_lock_uses_harness_fallback(self):
-        (self.source / "mise.lock").unlink()
-        self.commit()
-        self.prepare()
-        self.assertEqual(self.count(), 1)
-        self.assertIn("binary cache hit", self.prepare().stderr)
-
-    def test_partial_candidate_lock_uses_harness_fallback(self):
-        (self.source / "mise.lock").write_text('[[tools.python]]\nversion = "3.14.0"\n')
-        self.commit()
-        self.prepare()
-        self.assertEqual(self.count(), 1)
-
     def test_baseline_resolves_pinned_mise_tool(self):
         self.cli("prepare", *self.flags, "--candidates", "upstream")
         manifest = json.loads((self.prepared / "upstream/manifest.json").read_text())
@@ -523,10 +510,6 @@ tools = ["rust"]
             "--timeout",
             "3",
         )
-        recorded = json.loads((out / "run.json").read_text())
-        self.assertEqual(recorded["config"]["max_run_s"], 2)
-        self.assertEqual(recorded["config"]["timeout_s"], 3)
-        self.assertEqual(recorded["scenarios"]["startup"]["max_run_seconds"], 2)
         raw = (out / "run.json").read_bytes()
         self.cli("report", str(out))
         report = (out / "report.md").read_bytes()

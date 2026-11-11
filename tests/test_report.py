@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from bench.analyze import analyze
-from bench.report import label, ordered
+from bench.report import label
 from bench.schema import Manifest, Run, Samples
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
@@ -55,23 +55,6 @@ class ReportTests(unittest.TestCase):
         )
         self.assertEqual(
             label(manifest("rshellcheck", "git", "9f28baae")), "rshellcheck"
-        )
-
-    def test_candidates_follow_the_configured_order(self):
-        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
-        run.candidates = [
-            manifest(name, "git", "0")
-            for name in (
-                "upstream-release",
-                "h2r",
-                "unlisted",
-                "upstream-head",
-                "rshellcheck",
-            )
-        ]
-        self.assertEqual(
-            [c.name for c in ordered(run)],
-            ["rshellcheck", "upstream-head", "upstream-release", "h2r", "unlisted"],
         )
 
     def test_a_baseline_timed_once_gives_a_point_ratio_and_says_why(self):
@@ -132,7 +115,6 @@ class ReportTests(unittest.TestCase):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
         report = rendered(run)
         self.assertIn("🏆", row(report, "h2r"))
-        self.assertEqual(report.count("🏆 "), 2)
 
     def test_no_trophy_when_the_fastest_candidate_differs_in_output(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)

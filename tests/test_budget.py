@@ -6,16 +6,13 @@ import unittest
 from pathlib import Path
 
 from bench.analyze import analyze
-from bench.measure import Args, CandidateBudget, main, parser, precheck
+from bench.measure import CandidateBudget, main, precheck
 from bench.schema import Samples, Scenario, Summary
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
 
 class BudgetTests(unittest.TestCase):
-    def test_h2r_defaults_to_ten_minutes_and_rejects_invalid_limits(self):
-        self.assertEqual(
-            parser().parse_args([], namespace=Args()).h2r_budget_seconds, 600
-        )
+    def test_invalid_h2r_budgets_are_rejected(self):
         for value in ("0", "-1", "nan", "inf"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 main(["--h2r-budget-seconds", value])

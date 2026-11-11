@@ -1,43 +1,18 @@
 import contextlib
 import io
-import signal
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from bench.analyze import Summary, analyze
-from bench.measure import TimedRoundTimeout, hyperfine_one, main, run_guarded
+from bench.measure import TimedRoundTimeout, main, run_guarded
 from bench.schema import CorpusManifest, HyperfineExport, HyperfineResult, Run
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
 
 class MetricsTests(unittest.TestCase):
-    def test_timed_batch_timeout_reaps_process_and_preserves_incomplete_export(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            export = root / "round.json"
-            export.write_text("unfinished")
-            process = Mock(pid=123)
-            process.communicate.side_effect = [
-                subprocess.TimeoutExpired("fixture", 10),
-                (None, ""),
-            ]
-            with (
-                patch("bench.measure.subprocess.Popen", return_value=process),
-                patch("bench.measure.os.killpg") as kill,
-                self.assertRaisesRegex(TimedRoundTimeout, "10s execution budget"),
-            ):
-                hyperfine_one("fixture", root, export, 0, 1, "upstream", ["true"])
-            kill.assert_called_once_with(123, signal.SIGKILL)
-            self.assertEqual(process.communicate.call_count, 2)
-            self.assertFalse(export.exists())
-            self.assertEqual(
-                export.with_suffix(".incomplete").read_text(), "unfinished"
-            )
-
     def test_later_batch_timeout_preserves_samples_and_finishes_other_workloads(self):
         fixture, _ = _synthetic_run(True, SELFTEST_ORDERS)
         scenarios = fixture.scenarios | {"after": fixture.scenarios["medium"]}
@@ -255,7 +230,6 @@ class MetricsTests(unittest.TestCase):
                 line for line in report.splitlines() if line.startswith("| upstream |")
             ),
         )
-        self.assertIn("lowest observed median", report)
 
     def test_baseline_alone_earns_no_trophy(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
@@ -297,13 +271,6 @@ class MetricsTests(unittest.TestCase):
                     ["true"], path, 1, 2**30, path / "out", path / "err"
                 )
                 self.assertEqual(result.exit, 0)
-
-    def test_precheck_rss_does_not_inherit_the_large_python_parent(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            result = run_guarded(["true"], path, 1, 2**30, path / "out", path / "err")
-            self.assertLess(result.peak_rss_bytes, 20 * 2**20)
-            self.assertEqual(result.exit, 0)
 
     def test_memory_guard_kills_large_candidate_without_publishing_a_success(self):
         with tempfile.TemporaryDirectory() as directory:

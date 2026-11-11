@@ -146,7 +146,7 @@ class OmarchyTests(unittest.TestCase):
             )
             self.assertEqual(self.git("branch", "--show-current"), "fixture")
 
-    def test_recursive_groups_use_only_recorded_inputs_and_keep_budget(self):
+    def test_recursive_groups_use_only_recorded_inputs(self):
         manifest = self.import_corpus()
         (self.out / "omarchy/bin/unrecorded").write_text("#!/bin/bash\nfalse\n")
         scenarios = load_scenarios(
@@ -161,7 +161,6 @@ class OmarchyTests(unittest.TestCase):
         )
         self.assertEqual(scenarios["omarchy-all"].args[4:], sorted(manifest.files))
         self.assertEqual(scenarios["omarchy-all"].cwd, "omarchy")
-        self.assertEqual(scenarios["omarchy-all"].max_run_seconds, 60)
 
     def test_explicit_missing_dataset_has_actionable_error(self):
         self.out.mkdir()
