@@ -147,6 +147,12 @@ class VisibilityTests(unittest.TestCase):
             self.assertIsNone(registry_integrity("example@0.11.0"))
             self.assertEqual(run.call_count, 1)
 
+    def test_integrity_inside_a_list_is_read(self) -> None:
+        listed = subprocess.CompletedProcess([], 0, json.dumps(["sha512-ok"]), "")
+        with patch("npm_publish.subprocess.run", return_value=listed) as run:
+            self.assertEqual(registry_integrity("example@0.11.0"), "sha512-ok")
+            self.assertEqual(run.call_count, 1)
+
     def test_planner_only_schedules_missing_packages(self) -> None:
         names = [
             "@rshellcheck/rshellcheck-linux-x64",

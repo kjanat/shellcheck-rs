@@ -188,6 +188,24 @@ class AliasTests(unittest.TestCase):
         ):
             aliases.npm_tags("example", 30)
 
+    def test_alias_reads_accept_both_npm_output_shapes(self):
+        tags = {"upstream-0.11.0": "0.11.0", "latest": "1.1.0"}
+        for shape in [tags, [tags]]:
+            with (
+                self.subTest(shape=shape),
+                patch.object(
+                    subprocess, "check_output", return_value=json.dumps(shape)
+                ),
+            ):
+                self.assertEqual(aliases.npm_tags("example", 30), tags)
+        with (
+            patch.object(
+                subprocess, "check_output", return_value=json.dumps([tags, tags])
+            ),
+            self.assertRaises(ValueError),
+        ):
+            _ = aliases.npm_tags("example", 30)
+
     def test_upstream_pin_is_validated(self):
         with (
             tempfile.TemporaryDirectory() as temp,

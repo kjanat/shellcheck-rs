@@ -13,7 +13,7 @@ from binding_packages import load_record, members
 from binding_packages import verify as verify_bindings
 from native_packages import load_record as load_native_record
 from native_packages import verify as verify_native
-from registry_checks import NotVisibleYet, retry_read
+from registry_checks import NotVisibleYet, npm_view, retry_read
 from release import TARGETS, metadata, upstream
 
 
@@ -114,7 +114,7 @@ def npm_tags(name: str, timeout: float) -> dict[str, str]:
         } or (len(code) == 4 and code.startswith("E5") and code[1:].isdigit()):
             raise NotVisibleYet(code) from error
         raise
-    return cast(dict[str, str], json.loads(data))
+    return cast(dict[str, str], npm_view(data))
 
 
 def promote_npm(name: str, version: str, alias: str) -> None:

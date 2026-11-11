@@ -73,6 +73,27 @@ class NativeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 native.verify(dest)
 
+    def test_pack_reads_both_npm_output_shapes(self):
+        entry = {"filename": "example-1.0.0.tgz"}
+        with tempfile.TemporaryDirectory() as temp:
+            dest = Path(temp)
+            _ = (dest / entry["filename"]).write_bytes(b"archive")
+            for shape in [[entry], {"example": entry}]:
+                with (
+                    self.subTest(shape=shape),
+                    patch.object(
+                        subprocess, "check_output", return_value=json.dumps(shape)
+                    ),
+                ):
+                    self.assertEqual(native.pack(dest, dest)["file"], entry["filename"])
+            with (
+                patch.object(
+                    subprocess, "check_output", return_value=json.dumps([entry, entry])
+                ),
+                self.assertRaises(ValueError),
+            ):
+                _ = native.pack(dest, dest)
+
     def test_wrong_source_commit_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
