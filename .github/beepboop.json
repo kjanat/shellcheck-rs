@@ -131,7 +131,8 @@
         {
           "via": "cli"
         }
-      ]
+      ],
+      "companionModules": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"]
     },
     "go": {
       "packages": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"],
