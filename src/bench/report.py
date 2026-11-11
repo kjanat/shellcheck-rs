@@ -231,7 +231,11 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         "",
         "## The results",
         "",
-        "🏆 marks the lowest observed median among at least two candidates with matching output. Noise and statistical significance appear in the status column.",
+        (
+            "🏆 marks the lowest observed median of a table when that candidate's output matches and at least two candidates match. "
+            "A table whose fastest candidate differs in output or was timed once awards no trophy. "
+            "Noise and statistical significance appear in the status column."
+        ),
     ]
     for scenario in run.scenarios:
         lines += [
@@ -255,7 +259,22 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 for flag in summary.flags[scenario][name]
             )
         }
-        winner = min(eligible, key=eligible.__getitem__) if len(eligible) > 1 else None
+        # Only the fastest candidate that ran can earn the trophy, and it
+        # needs a median: a runner-up is a slower tool.
+        ran = {
+            name: value
+            for name in names
+            if (value := observed(scenario, name)) is not None
+            and run.precheck[scenario][name].status in ("ok", "slow")
+        }
+        fastest = min(ran, key=ran.__getitem__) if ran else None
+        winner = (
+            fastest
+            if fastest in eligible
+            and len(eligible) > 1
+            and summary.descriptives[scenario][fastest]
+            else None
+        )
         for name in names:
             check = run.precheck[scenario][name]
             cell = summary.descriptives[scenario][name]
@@ -265,7 +284,11 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             output = {
                 "baseline": "baseline",
                 "identical": "matches",
-                "sanctioned": f"matches up to sanctioned deviations ({', '.join(check.deviations)}; [diff](precheck/{scenario}/{name}.diff))",
+                # The judge compares findings. Equal findings can differ in
+                # bytes: the port's json1 adds a `sources` member.
+                "sanctioned": f"matches up to sanctioned deviations ({', '.join(check.deviations)}; [diff](precheck/{scenario}/{name}.diff))"
+                if check.deviations
+                else f"same findings ([diff](precheck/{scenario}/{name}.diff))",
                 "unknown": "unknown",
                 "differs": f"[diff](precheck/{scenario}/{name}.diff)",
             }[check.parity]
@@ -285,20 +308,27 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                     low, high = pair.speedup_median_ci
                     if low > 0:
                         ratio += f" [{1 / high:.2f}, {1 / low:.2f}]"
-            elif (
-                name != baseline
-                and value is not None
-                and base_value
-                and check.parity in COMPARABLE
-            ):
+            elif name == baseline and base_value:
+                ratio = "1.00×"
+            elif value is not None and base_value:
                 # One side was timed once: a point ratio, never an interval.
                 ratio = f"≈{value / base_value:.2f}× (no CI)"
             rss = cell.peak_rss_median if cell else check.peak_rss_bytes
-            rss_ratio = (
-                f"{rss / base.peak_rss_median:.2f}×"
-                if cell and base and base.peak_rss_median
-                else "-"
+            completed = check.status in ("ok", "slow")
+            base_rss = (
+                base.peak_rss_median
+                if base
+                else base_check.peak_rss_bytes
+                if base_check.status in ("ok", "slow")
+                else 0
             )
+            if cell and base and base_rss:
+                rss_ratio = f"{rss / base_rss:.2f}×"
+            elif (cell or completed) and base_rss:
+                # One side has only its pre-check peak: a point ratio.
+                rss_ratio = f"≈{rss / base_rss:.2f}×"
+            else:
+                rss_ratio = "-"
             unstable = any(
                 flag.startswith(("noisy", "drift", "only ")) for flag in flags
             )
