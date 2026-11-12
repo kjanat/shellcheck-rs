@@ -100,7 +100,7 @@ Preparation resolves refs once and builds the exact revision. Completed binaries
 
 Tool versions come from the candidate's lockfile, with the harness lockfile supplying missing tools (upstream ShellCheck and the handwritten port have no lockfile). `upstream-release` is the mise-installed release binary and needs no build. A `build = "cabal"` candidate builds `<package>:exe:<binary>` with Cabal in the candidate's build directory and publishes the executable Cabal lists. Builds use two Cargo workers by default. Prepared binaries have content-addressed paths, so preparing a new revision preserves binaries referenced by earlier runs.
 
-Candidate toolchain hooks skip unrelated task auto-installs. Preparation checks source identity after toolchain setup, dependency preparation, and compilation; failures identify changed paths and publish no binary.
+Candidate tools install with `mise install --locked` so setup preserves the recorded lockfile. Builds execute with explicit version pins outside locked mode, and toolchain hooks skip unrelated task auto-installs. Preparation checks source identity after toolchain setup, dependency preparation, and compilation; failures identify changed paths and publish no binary.
 
 Compatible intermediate Cargo, h2r extraction, and Cabal state survives between builds at stable paths. Changed inputs may invalidate an entire extraction stage; restoring a cache does not guarantee a cheap rebuild. Failed builds retain their intermediate state and publish no completed binary.
 
