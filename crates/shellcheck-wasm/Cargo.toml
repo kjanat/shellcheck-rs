@@ -8,6 +8,9 @@ license.workspace      = true
 # npm, PyPI and the Go module ship the built `.wasm`.
 publish                = false
 
+[features]
+schema = ["dep:schemars"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -16,9 +19,6 @@ rshellcheck-core.workspace = true
 schemars                   = { workspace = true, optional = true }
 serde.workspace            = true
 serde_json.workspace       = true
-
-[features]
-schema = ["dep:schemars"]
 
 # Export attributes require an unsafe-code lint exception in the ABI module.
 # The core retains its workspace-wide unsafe_code = forbid policy.

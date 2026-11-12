@@ -29,6 +29,9 @@ pkg-fmt = "zip"
 [package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
 pkg-fmt = "zip"
 
+[features]
+schema = ["dep:schemars"]
+
 [[bin]]
 name = "rshellcheck"
 path = "src/bin/shellcheck.rs"
@@ -43,9 +46,6 @@ serde_json.workspace       = true
 schemars             = { workspace = true, optional = true }
 serde.workspace      = true
 serde_json.workspace = true
-
-[features]
-schema = ["dep:schemars"]
 
 [lints]
 workspace = true
