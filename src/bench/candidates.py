@@ -22,7 +22,7 @@ from bench.schema import CandidatesFile, CandidateSpec, Manifest
 ROOT = Path(__file__).resolve().parents[2]
 STATE = ROOT / ".bench"
 # Bump when the preparation recipe or its artifact contract changes.
-RECIPE = 4
+RECIPE = 5
 
 
 class Build(BaseModel):
@@ -484,7 +484,10 @@ def build_candidate(build: Build, state: Path) -> tuple[Path, Path | None]:
             source_tools = tomllib.load(file).get("tools", {})
     for name in build.spec.tools:
         origin = source if source_tools.get(name) else ROOT
-        run(["mise", "install", name], origin)
+        # Install from the lock without refreshing it. Keep locked mode scoped to
+        # installation: explicit version overrides in `mise exec` need not match
+        # the lockfile's configured request (for example `latest`).
+        run(["mise", "install", "--locked", name], origin)
     verify_source(build, "during toolchain setup")
     # A candidate's own `[deps]` (such as `uv sync`) needs tools the build
     # toolchain lacks, and the build needs none.
