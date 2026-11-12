@@ -9,7 +9,7 @@
 	"formatter": [
 		{
 			"external": {
-				"command": "dprint",
+				"command": "kprint",
 				"arguments": ["fmt", "-c=.dprint.jsonc", "--stdin", "{buffer_path}"]
 			}
 		}

@@ -1,16 +1,4 @@
 {
-	"exec": {
-		"cwd": "${configDir}",
-		"cacheKey": "1",
-		"timeout": 30,
-		"commands": [
-			{
-				"command": "mise exec -- tombi format - --stdin-filename {{file_path}}",
-				"exts": ["toml"],
-				"cacheKeyFiles": ["tombi.toml", "mise.toml"],
-			},
-		]
-	},
 	"excludes": [
 		"**/.bench/**",
 		"ports/**",
@@ -49,6 +37,8 @@
 			"unusedImport": false
 		}
 	},
-	"plugins": ["npm:@dprint/exec@0.7.3/plugin.json@704701df449dd7e942a71144773778ac529d68c2e4657bfc236d393b898b9a67"],
+	"toml": {
+		"configFile": "tombi.toml"
+	},
 	"extends": "https://raw.githubusercontent.com/kjanat/kjanat/refs/heads/master/configs/dprint.remote.json",
 }

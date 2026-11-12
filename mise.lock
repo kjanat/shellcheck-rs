@@ -73,51 +73,51 @@ url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-apple-darwin-ghcup-0.
 checksum = "sha256:94da902a2853b1de1df509d04da900a05258480759efdb4f654e66956b6f30db"
 url = "https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-mingw64-ghcup-0.2.6.2.exe"
 
-[[tools."github:kjanat/dprint"]]
+[[tools."github:kjanat/kprint"]]
 version = "0.62.0"
-backend = "github:kjanat/dprint"
+backend = "github:kjanat/kprint"
 specifiers = ["latest"]
 
-[tools."github:kjanat/dprint"."platforms.linux-arm64"]
+[tools."github:kjanat/kprint"."platforms.linux-arm64"]
 checksum = "sha256:626122d02f9bc659a60c93282348738236293e2fb788083d2ed767698ab03e78"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-aarch64-unknown-linux-gnu.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368514"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368514"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.linux-arm64-musl"]
+[tools."github:kjanat/kprint"."platforms.linux-arm64-musl"]
 checksum = "sha256:3229e807004c6896e5d763f5c96bd01ea8c7263979af8db6dd28b416194f79b3"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-aarch64-unknown-linux-musl.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368504"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-aarch64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368504"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.linux-x64"]
+[tools."github:kjanat/kprint"."platforms.linux-x64"]
 checksum = "sha256:88fc3788f12742d7781765c77afd78114fb8ab2138324b42707f1a4c3fd97f22"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-x86_64-unknown-linux-gnu.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368663"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368663"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.linux-x64-musl"]
+[tools."github:kjanat/kprint"."platforms.linux-x64-musl"]
 checksum = "sha256:329f3f925018fff0a0a00cf94c693f7853a5fb65166f64837988bd42cb211890"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-x86_64-unknown-linux-musl.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368723"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-x86_64-unknown-linux-musl.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368723"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.macos-arm64"]
+[tools."github:kjanat/kprint"."platforms.macos-arm64"]
 checksum = "sha256:1fd25648fa29e2a354158a06ef15a8acd74d55b74911ba69bccbdc868d9c5be1"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-aarch64-apple-darwin.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368516"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368516"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.macos-x64"]
+[tools."github:kjanat/kprint"."platforms.macos-x64"]
 checksum = "sha256:f5929feb7c15d61c9d85c37051d38f7972a402b5035528086b896100db3879b3"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-x86_64-apple-darwin.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368657"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368657"
 provenance = "github-attestations"
 
-[tools."github:kjanat/dprint"."platforms.windows-x64"]
+[tools."github:kjanat/kprint"."platforms.windows-x64"]
 checksum = "sha256:dce101ae5c63d478d5ae94cf240cf379865e03f33235b16f508458a75900d1cf"
-url = "https://github.com/kjanat/dprint/releases/download/0.62.0/dprint-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/kjanat/dprint/releases/assets/740368662"
+url = "https://github.com/kjanat/kprint/releases/download/0.62.0/kprint-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/kjanat/kprint/releases/assets/740368662"
 provenance = "github-attestations"
 
 [[tools."github:kjanat/runner"]]

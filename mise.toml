@@ -13,7 +13,7 @@ ruff                         = "latest"
 rust                         = "latest"
 uv                           = "0.13.8"
 "github:kjanat/runner"       = "latest"
-"github:kjanat/dprint"       = "latest"
+"github:kjanat/kprint"       = "latest"
 "github:koalaman/shellcheck" = "latest"
 
 [tool_alias]
@@ -72,4 +72,4 @@ run         = ["uv run ruff check src tests", "uv run --all-extras ty check"]
 [tasks.check]
 description = "Check Python, configuration, and CI"
 depends     = ["check-py"]
-run         = ["actionlint .github/workflows/bench.yml", "dprint check"]
+run         = ["actionlint .github/workflows/bench.yml", "kprint check"]

@@ -113,7 +113,7 @@ uv run python -m unittest discover -s tests -v
 uv run ruff check src tests
 uv run ty check
 actionlint .github/workflows/bench.yml
-dprint check
+kprint check
 ```
 
 See [the architecture decisions](docs/design.md) for artifact contracts and cache boundaries.

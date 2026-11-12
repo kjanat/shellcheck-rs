@@ -132,7 +132,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv hyperfine github:kjanat/dprint" }
+        with: { install_args: "python uv hyperfine github:kjanat/kprint" }
       - name: Install measurement runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
       - uses: actions/download-artifact@v8
@@ -172,4 +172,4 @@ jobs:
       - name: Publish summary with evidence download links
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
-        run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | dprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+        run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
