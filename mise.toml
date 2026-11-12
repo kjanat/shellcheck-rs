@@ -82,9 +82,9 @@ run = [
 
 [tasks.check-py]
 run = [
-  "ruff check",
-  "ty check",
-  "basedpyright",
+  "uv-ruff check",
+  "uv-ty check",
+  "uv-basedpyright",
 ]
 
 # Whether the tests would catch a behaviour change at all. Scope it to the file
@@ -96,25 +96,25 @@ run = "cargo mutants"
 description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
 run         = "python tools/oracle.py"
 
-[wrappers.ruff]
+[wrappers.uv-ruff]
 command = "uv"
 args    = ["run", "ruff"]
 
-[wrappers.ty]
+[wrappers.uv-ty]
 command = "uv"
 args    = ["run", "ty"]
 
-[wrappers.basedpyright]
+[wrappers.uv-basedpyright]
 command = "uv"
 args    = ["run", "basedpyright"]
 
-[wrappers."rshellcheck"]
+[wrappers."rshellcheck-dev"]
 command = "cargo"
 args    = ["rshellcheck"]
 
 [wrappers."dprint"]
 command = "kprint"
 
-[wrappers."shellcheck"]
+[wrappers."shellcheck-dev"]
 command = "cargo"
 args    = ["rshellcheck"]
