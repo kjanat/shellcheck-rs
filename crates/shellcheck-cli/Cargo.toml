@@ -11,7 +11,7 @@ repository.workspace   = true
 license.workspace      = true
 keywords               = ["bash", "cli", "lint", "shell", "shellcheck"]
 categories             = ["command-line-utilities", "development-tools"]
-include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/completions/*", "/README.md", "/LICENSE"]
+include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/README.md", "/LICENSE"]
 
 # cargo-binstall: release tags are `rshellcheck-v<version>`, which its default
 # URL guesses never try. Archives come from `.github/release/release.py`.
@@ -30,8 +30,9 @@ pkg-fmt = "zip"
 pkg-fmt = "zip"
 
 [features]
-# The generator behind `cargo completions`; the binary embeds its output.
-completions = ["dep:fujo-complete", "dep:fujo-core"]
+default     = ["completions"]
+# `--generate-completions`: the build script generates the scripts with fujo.
+completions = ["dep:fujo-complete", "dep:fujo-core", "dep:rshellcheck-core"]
 schema      = ["dep:schemars"]
 
 [[bin]]
@@ -39,14 +40,20 @@ name = "rshellcheck"
 path = "src/bin/shellcheck.rs"
 
 [dependencies]
-fujo-complete              = { workspace = true, optional = true }
-fujo-core                  = { workspace = true, optional = true }
 rshellcheck-core.workspace = true
 schemars                   = { workspace = true, optional = true }
 serde.workspace            = true
 serde_json.workspace       = true
 
+# The generator's unit tests compile it into the library.
+[dev-dependencies]
+fujo-complete.workspace = true
+fujo-core.workspace     = true
+
 [build-dependencies]
+fujo-complete        = { workspace = true, optional = true }
+fujo-core            = { workspace = true, optional = true }
+rshellcheck-core     = { workspace = true, optional = true }
 schemars             = { workspace = true, optional = true }
 serde.workspace      = true
 serde_json.workspace = true

@@ -24,7 +24,6 @@
 //! Exit codes: 0 = agreement, 1 = at least one divergence, 2 = harness error.
 
 mod bench;
-mod completions;
 mod corpus;
 mod delta;
 mod deviations;
@@ -537,8 +536,6 @@ pub enum Command {
     Validity,
     /// Write the JSON Schemas of the files and messages the crates own.
     Schemas,
-    /// Write the shell completion scripts the CLI embeds.
-    Completions,
     /// Classify files named on standard input: identical, sanctioned or differs.
     Judge,
 }
@@ -744,7 +741,6 @@ fn main() -> ExitCode {
         Command::Bench => bench::run(&args),
         Command::Validity => validity::run(args.step, &args.validity),
         Command::Schemas => schemas::run(),
-        Command::Completions => completions::run(),
         Command::Judge => judge::run(&args),
         Command::Extract => {
             let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
@@ -868,11 +864,6 @@ mod tests {
     #[test]
     fn schemas_is_a_command() {
         assert!(parse(&["schemas"]).cmd == Command::Schemas);
-    }
-
-    #[test]
-    fn completions_is_a_command() {
-        assert!(parse(&["completions"]).cmd == Command::Completions);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Loads the script `--generate-completions` prints into each shell and asks
 //! that shell to complete `rshellcheck` command lines.
-#![cfg(unix)]
+#![cfg(all(unix, feature = "completions"))]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

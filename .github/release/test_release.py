@@ -75,6 +75,9 @@ def executable(
     return bytes(data)
 
 
+SCRIPTS = {name: f"# {name}\n".encode() for name in release.COMPLETIONS.values()}
+
+
 class ReleaseTests(unittest.TestCase):
     def test_smoke_preserves_lf_input_on_windows(self):
         def invoke(
@@ -310,7 +313,28 @@ class ReleaseTests(unittest.TestCase):
             "rshellcheck.exe" if "windows" in target else "rshellcheck"
         )
         _ = binary.write_bytes(executable(target))
-        return release.pack(target, label, binary, directory / "dist")
+        with patch.object(release, "completions", return_value=SCRIPTS):
+            return release.pack(target, label, binary, directory / "dist")
+
+    def test_completions_come_from_a_host_build_for_each_shell(self):
+        def host(*args: str, **_: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"# {args[-1]}\n")
+
+        with patch.object(release, "run", side_effect=host) as run:
+            scripts = release.completions()
+        self.assertEqual(
+            scripts,
+            {
+                "rshellcheck.bash": b"# bash\n",
+                "_rshellcheck": b"# zsh\n",
+                "rshellcheck.fish": b"# fish\n",
+                "rshellcheck.ps1": b"# powershell\n",
+            },
+        )
+        for call in run.call_args_list:
+            self.assertEqual(call.args[:2], ("cargo", "run"))
+            self.assertNotIn("--target", call.args)
+            self.assertEqual(call.args[-2], "--generate-completions")
 
     def test_archives_reproducible_and_executable(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -327,9 +351,7 @@ class ReleaseTests(unittest.TestCase):
                             contents.read(
                                 f"rshellcheck-test-{target}/completions/rshellcheck.ps1"
                             ),
-                            (
-                                release.ROOT / release.COMPLETIONS / "rshellcheck.ps1"
-                            ).read_bytes(),
+                            SCRIPTS["rshellcheck.ps1"],
                         )
                         binary = next(
                             x
@@ -351,9 +373,7 @@ class ReleaseTests(unittest.TestCase):
                             self.assertEqual(member.mode, 0o644)
                             self.assertEqual(
                                 release.read_member(contents, member.name),
-                                (
-                                    release.ROOT / release.COMPLETIONS / script
-                                ).read_bytes(),
+                                SCRIPTS[script],
                             )
                         self.assertEqual(
                             contents.getmember(

@@ -26,6 +26,9 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   or powershell, registered for `rshellcheck`. It completes options, the values
   of `--format`, `--shell`, `--severity`, `--enable` and `--extended-analysis`,
   and file paths. Release archives carry the scripts in `completions/`
+- `rshellcheck` has a default `completions` feature. Its build script generates
+  the scripts with `fujo-complete`; `--no-default-features` builds without the
+  option and without fujo
 
 ### Changed
 

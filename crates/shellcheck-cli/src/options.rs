@@ -34,15 +34,10 @@ use std::path::{Path, PathBuf};
 use rshellcheck_core::interface::{CheckSpec, ColorOption, Severity, Shell};
 use rshellcheck_core::{Dialect, optional_checks};
 
+#[cfg(feature = "completions")]
 use crate::completions;
-
-/// Formats the port implements. `getOpt`'s format validation lists exactly
-/// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
-pub const SUPPORTED_FORMATS: &[&str] =
-    &["checkstyle", "diff", "gcc", "json", "json1", "quiet", "tty"];
-
-/// The `-S`/`--severity` values, most severe first.
-pub(crate) const SEVERITIES: [&str; 4] = ["error", "warning", "info", "style"];
+pub use crate::option_table::SUPPORTED_FORMATS;
+use crate::option_table::{ArgKind, OPTS, OptDef, SEVERITIES};
 
 /// What the caller should do after parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +52,7 @@ pub enum Outcome {
     /// Print the (currently empty) optional-check listing to stdout and exit 0.
     ListOptional,
     /// Print the completion script for this shell to stdout and exit 0.
+    #[cfg(feature = "completions")]
     Completions(completions::Shell),
     /// Print `message` to stderr and exit with `code` (3 or 4).
     Error {
@@ -94,194 +90,6 @@ pub struct RunConfig {
     /// Allows reading sourced files not included in `inputs` (`-x`/`--external-sources`).
     pub external_sources: bool,
 }
-
-/// Argument kind for a recognised option, following the Haskell `ArgDescr`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArgKind {
-    /// Takes no argument (`NoArg`).
-    None,
-    /// Requires an argument (`ReqArg`): `--opt=v`, `--opt v`, `-ov`, `-o v`.
-    Required,
-    /// Optional argument (`OptArg`): only `--opt=v` / `-ov` supply one; a
-    /// following word is NOT consumed (matches `getOpt`).
-    Optional,
-}
-
-/// One `Option` of the Haskell `options` list: its letter, long name, the
-/// `Flag` key it produces, how it takes an argument, the argument's
-/// placeholder, and its help text.
-pub(crate) struct OptDef {
-    pub(crate) short: Option<char>,
-    pub(crate) long: &'static str,
-    pub(crate) key: &'static str,
-    pub(crate) kind: ArgKind,
-    pub(crate) arg: &'static str,
-    pub(crate) help: &'static str,
-}
-
-/// The recognised option table (mirrors `options` in shellcheck.hs).
-pub(crate) const OPTS: &[OptDef] = &[
-    OptDef {
-        short: Some('a'),
-        long: "check-sourced",
-        key: "sourced",
-        kind: ArgKind::None,
-        arg: "",
-        help: "Include warnings from sourced files",
-    },
-    OptDef {
-        short: Some('C'),
-        long: "color",
-        key: "color",
-        kind: ArgKind::Optional,
-        arg: "WHEN",
-        help: "Use color (auto, always, never)",
-    },
-    OptDef {
-        short: Some('i'),
-        long: "include",
-        key: "include",
-        kind: ArgKind::Required,
-        arg: "CODE1,CODE2..",
-        help: "Consider only given types of warnings",
-    },
-    OptDef {
-        short: Some('e'),
-        long: "exclude",
-        key: "exclude",
-        kind: ArgKind::Required,
-        arg: "CODE1,CODE2..",
-        help: "Exclude types of warnings",
-    },
-    OptDef {
-        short: None,
-        long: "extended-analysis",
-        key: "extended-analysis",
-        kind: ArgKind::Required,
-        arg: "bool",
-        help: "Perform dataflow analysis (default true)",
-    },
-    OptDef {
-        short: Some('f'),
-        long: "format",
-        key: "format",
-        kind: ArgKind::Required,
-        arg: "FORMAT",
-        help: "Output format (checkstyle, diff, gcc, json, json1, quiet, tty)",
-    },
-    OptDef {
-        short: Some('j'),
-        long: "jobs",
-        key: "jobs",
-        kind: ArgKind::Required,
-        arg: "N",
-        help: "Analyze files with N workers (default: up to 4 CPUs; quiet stays sequential)",
-    },
-    OptDef {
-        short: None,
-        long: "list-optional",
-        key: "list-optional",
-        kind: ArgKind::None,
-        arg: "",
-        help: "List checks disabled by default",
-    },
-    OptDef {
-        short: None,
-        long: "norc",
-        key: "norc",
-        kind: ArgKind::None,
-        arg: "",
-        help: "Don't look for .shellcheckrc and .editorconfig files",
-    },
-    OptDef {
-        short: None,
-        long: "rcfile",
-        key: "rcfile",
-        kind: ArgKind::Required,
-        arg: "RCFILE",
-        help: "Prefer the specified configuration file over searching for one",
-    },
-    OptDef {
-        short: Some('o'),
-        long: "enable",
-        key: "enable",
-        kind: ArgKind::Required,
-        arg: "check1,check2..",
-        help: "List of optional checks to enable (or 'all')",
-    },
-    OptDef {
-        short: Some('P'),
-        long: "source-path",
-        key: "source-path",
-        kind: ArgKind::Required,
-        arg: "SOURCEPATHS",
-        help: "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)",
-    },
-    OptDef {
-        short: Some('s'),
-        long: "shell",
-        key: "shell",
-        kind: ArgKind::Required,
-        arg: "SHELLNAME",
-        help: "Specify dialect (sh, bash, dash, ksh, busybox, zsh, mksh, oksh, loksh, yash, posh, bosh, osh, brush, freebsd-sh, netbsd-sh)",
-    },
-    OptDef {
-        short: Some('S'),
-        long: "severity",
-        key: "severity",
-        kind: ArgKind::Required,
-        arg: "SEVERITY",
-        help: "Minimum severity of errors to consider (error, warning, info, style)",
-    },
-    OptDef {
-        short: Some('V'),
-        long: "version",
-        key: "version",
-        kind: ArgKind::None,
-        arg: "",
-        help: "Print version information",
-    },
-    OptDef {
-        short: Some('W'),
-        long: "wiki-link-count",
-        key: "wiki-link-count",
-        kind: ArgKind::Required,
-        arg: "NUM",
-        help: "The number of wiki links to show, when applicable",
-    },
-    OptDef {
-        short: Some('x'),
-        long: "external-sources",
-        key: "externals",
-        kind: ArgKind::None,
-        arg: "",
-        help: "Allow 'source' outside of FILES",
-    },
-    OptDef {
-        short: None,
-        long: "help",
-        key: "help",
-        kind: ArgKind::None,
-        arg: "",
-        help: "Show this usage summary and exit",
-    },
-    OptDef {
-        short: None,
-        long: "files-from",
-        key: "files-from",
-        kind: ArgKind::Required,
-        arg: "FILE",
-        help: "Read input files from FILE (one per line, or '-' for stdin)",
-    },
-    OptDef {
-        short: None,
-        long: "generate-completions",
-        key: "completions",
-        kind: ArgKind::Required,
-        arg: "SHELL",
-        help: "Print a completion script (bash, zsh, fish, powershell)",
-    },
-];
 
 fn find_short(c: char) -> Option<&'static OptDef> {
     OPTS.iter().find(|o| o.short == Some(c))
@@ -695,8 +503,9 @@ fn parse_worker_count(value: &str) -> ControlFlow<Outcome, usize> {
 
 /// The script `--generate-completions` asks for; an unknown shell is a
 /// `SupportFailure` (exit 4).
-fn completions_outcome(shell: &str) -> Outcome {
-    completions::Shell::from_name(shell).map_or_else(
+#[cfg(feature = "completions")]
+fn completions_outcome(flag: &Flag) -> Outcome {
+    completions::from_name(flag.value.as_deref().unwrap_or("")).map_or_else(
         || {
             support_error(
                 "generate-completions",
@@ -714,9 +523,8 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         "version" => return ControlFlow::Break(Outcome::PrintVersion),
         "help" => return ControlFlow::Break(Outcome::PrintHelp),
         "list-optional" => return ControlFlow::Break(Outcome::ListOptional),
-        "completions" => {
-            return ControlFlow::Break(completions_outcome(flag.value.as_deref().unwrap_or("")));
-        }
+        #[cfg(feature = "completions")]
+        "completions" => return ControlFlow::Break(completions_outcome(flag)),
 
         // Wired into CheckSpec (effective in the analysis core).
         "shell" => {
@@ -990,6 +798,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "completions")]
     fn generate_completions_names_one_of_the_four_shells() {
         for shell in completions::Shell::ALL {
             for argv in [
@@ -1011,6 +820,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "completions"))]
+    fn generate_completions_is_unrecognized_without_the_feature() {
+        match parse(&args(&["--generate-completions", "bash"])) {
+            Outcome::Error { message, code } => {
+                assert_eq!(code, 3);
+                assert!(
+                    message.starts_with("unrecognized option `--generate-completions'\n"),
+                    "{message}"
+                );
+                assert!(!message.contains("--generate-completions="), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "completions")]
     fn generate_completions_leaves_the_upstream_abbreviations_unique() {
         assert_eq!(
             run(&["--co=never", "script.sh"]).color,
@@ -1023,9 +849,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "completions")]
     fn every_script_offers_every_option() {
         for shell in completions::Shell::ALL {
-            let script = shell.script();
+            let script = completions::script(shell);
             for def in OPTS {
                 let long = if shell == completions::Shell::Fish {
                     format!("-l '{}'", def.long)
