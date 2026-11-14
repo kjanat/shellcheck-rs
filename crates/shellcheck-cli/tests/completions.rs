@@ -231,6 +231,22 @@ fn bash_completes_lists_and_names_after_the_separator() {
     );
 }
 
+/// Readline's default word breaks split `--format=j` into three words. The
+/// probe has no bash-completion, so the script joins them itself.
+#[test]
+fn bash_completes_a_value_readline_split_at_the_equals_sign() {
+    if !installed("bash") {
+        return;
+    }
+    let fixture = Fixture::new();
+    let probe = format!(
+        "{}\nCOMP_WORDS=(rshellcheck --format = j); COMP_CWORD=3; COMPREPLY=(); _rshellcheck_complete; printf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
+        script("bash")
+    );
+    let output = run(&fixture.0, "bash", &["--noprofile", "--norc"], &probe);
+    assert_eq!(candidates(&output), ["json", "json1"]);
+}
+
 #[test]
 fn fish_completes_options_values_and_files() {
     if !installed("fish") {
