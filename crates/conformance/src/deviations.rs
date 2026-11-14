@@ -797,7 +797,7 @@ mod tests {
                 &port,
                 &unrelated
             ));
-            let mut shifted = port.clone();
+            let mut shifted = port;
             shifted
                 .iter_mut()
                 .filter(|k| k.code == 2164)
