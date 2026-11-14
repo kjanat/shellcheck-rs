@@ -29,7 +29,7 @@ uv             = { prefix = "0.13" }
 npm            = "12.2.2"
 
 [tools."http:actionlint"]
-version          = "343"
+version          = "master"
 url              = 'https://pkg.pr.new/kjanat/actionlint/@kjanat-actionlint/actionlint-{{ os(macos="darwin", windows="win32") }}-{{ arch() }}@{{ version }}'
 format           = "tar.gz"
 strip_components = 1
@@ -44,6 +44,33 @@ cargo-mutants = "cargo:cargo-mutants"
 droast        = "cargo:dockerfile-roast"
 kprint        = "npm:@kprint/kprint"
 tombi         = "github:tombi-toml/tombi"
+
+[wrappers.actionlint]
+command = "mise"
+args    = ["exec", "http:actionlint", "--", "actionlint"]
+
+[wrappers.uv-ruff]
+command = "uv"
+args    = ["run", "ruff"]
+
+[wrappers.uv-ty]
+command = "uv"
+args    = ["run", "ty"]
+
+[wrappers.uv-basedpyright]
+command = "uv"
+args    = ["run", "basedpyright"]
+
+[wrappers."rshellcheck-dev"]
+command = "cargo"
+args    = ["rshellcheck"]
+
+[wrappers."dprint"]
+command = "kprint"
+
+[wrappers."shellcheck-dev"]
+command = "cargo"
+args    = ["rshellcheck"]
 
 [deps.uv]
 auto = true
@@ -95,26 +122,3 @@ run = "cargo mutants"
 [tasks.oracle]
 description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
 run         = "python tools/oracle.py"
-
-[wrappers.uv-ruff]
-command = "uv"
-args    = ["run", "ruff"]
-
-[wrappers.uv-ty]
-command = "uv"
-args    = ["run", "ty"]
-
-[wrappers.uv-basedpyright]
-command = "uv"
-args    = ["run", "basedpyright"]
-
-[wrappers."rshellcheck-dev"]
-command = "cargo"
-args    = ["rshellcheck"]
-
-[wrappers."dprint"]
-command = "kprint"
-
-[wrappers."shellcheck-dev"]
-command = "cargo"
-args    = ["rshellcheck"]
