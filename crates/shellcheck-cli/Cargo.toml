@@ -11,7 +11,7 @@ repository.workspace   = true
 license.workspace      = true
 keywords               = ["bash", "cli", "lint", "shell", "shellcheck"]
 categories             = ["command-line-utilities", "development-tools"]
-include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/README.md", "/LICENSE"]
+include                = ["/src/**/*.rs", "/tests/**/*.rs", "/build.rs", "/upstream.json", "/completions/*", "/README.md", "/LICENSE"]
 
 # cargo-binstall: release tags are `rshellcheck-v<version>`, which its default
 # URL guesses never try. Archives come from `.github/release/release.py`.
@@ -30,13 +30,17 @@ pkg-fmt = "zip"
 pkg-fmt = "zip"
 
 [features]
-schema = ["dep:schemars"]
+# The generator behind `cargo completions`; the binary embeds its output.
+completions = ["dep:fujo-complete", "dep:fujo-core"]
+schema      = ["dep:schemars"]
 
 [[bin]]
 name = "rshellcheck"
 path = "src/bin/shellcheck.rs"
 
 [dependencies]
+fujo-complete              = { workspace = true, optional = true }
+fujo-core                  = { workspace = true, optional = true }
 rshellcheck-core.workspace = true
 schemars                   = { workspace = true, optional = true }
 serde.workspace            = true

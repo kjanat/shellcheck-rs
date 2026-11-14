@@ -8,6 +8,7 @@
 # "no such command: cargo".
 [alias]
 bwa                  = "build --workspace --all-targets"
+completions          = "run -q -p conformance -- completions"
 conformance-audit    = "run -q -p conformance -- audit"
 conformance-fuzz     = "run --release -p conformance -- fuzz --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck"
 conformance-gate     = "run --release -p conformance -- gate --oracle .cache/shellcheck-oracle --repo .cache/upstream-shellcheck"

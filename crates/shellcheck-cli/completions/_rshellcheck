@@ -1,0 +1,263 @@
+#compdef rshellcheck
+# Completion for rshellcheck
+_rshellcheck_complete() {
+  local cur="$words[CURRENT]" prev="$words[CURRENT-1]" path='' token i skip=0 pos=0 literal=0 files=0
+  local pending='' short_flag short_tail short_prefix short_char delimiter
+  local -a candidates extra
+  for ((i=2; i<CURRENT; i++)); do
+    token="${words[i]}"
+    (( skip )) && { skip=0; pending=''; continue; }
+    (( literal )) && { pos=$((pos+1)); continue; }
+    [[ $token == -- ]] && { literal=1; continue; }
+    short_flag=''; short_tail=''; short_prefix=''
+    if [[ $token == -?* && $token != --* ]]; then
+      short_tail="${token#-}"; short_prefix='-'
+      while [[ -n $short_tail ]]; do
+        short_char="${short_tail%"${short_tail#?}"}"; short_tail="${short_tail#?}"; short_prefix+="$short_char"
+        case "$path:$short_char" in
+          ':C') : ;;
+          ':P') short_flag="-$short_char"; break ;;
+          ':S') short_flag="-$short_char"; break ;;
+          ':V') : ;;
+          ':W') short_flag="-$short_char"; break ;;
+          ':a') : ;;
+          ':e') short_flag="-$short_char"; break ;;
+          ':f') short_flag="-$short_char"; break ;;
+          ':i') short_flag="-$short_char"; break ;;
+          ':j') short_flag="-$short_char"; break ;;
+          ':o') short_flag="-$short_char"; break ;;
+          ':s') short_flag="-$short_char"; break ;;
+          ':x') : ;;
+          *) break ;;
+        esac
+      done
+    fi
+    if [[ -n $short_flag ]]; then [[ -z $short_tail ]] && { skip=1; pending="$short_flag"; }; continue; fi
+    case "$path:$token" in
+      ':--P') skip=1; pending="$token"; continue ;;
+      ':-P') skip=1; pending="$token"; continue ;;
+      ':--S') skip=1; pending="$token"; continue ;;
+      ':-S') skip=1; pending="$token"; continue ;;
+      ':--W') skip=1; pending="$token"; continue ;;
+      ':-W') skip=1; pending="$token"; continue ;;
+      ':--e') skip=1; pending="$token"; continue ;;
+      ':-e') skip=1; pending="$token"; continue ;;
+      ':--enable') skip=1; pending="$token"; continue ;;
+      ':--exclude') skip=1; pending="$token"; continue ;;
+      ':--extended-analysis') skip=1; pending="$token"; continue ;;
+      ':--f') skip=1; pending="$token"; continue ;;
+      ':-f') skip=1; pending="$token"; continue ;;
+      ':--files-from') skip=1; pending="$token"; continue ;;
+      ':--format') skip=1; pending="$token"; continue ;;
+      ':--generate-completions') skip=1; pending="$token"; continue ;;
+      ':--i') skip=1; pending="$token"; continue ;;
+      ':-i') skip=1; pending="$token"; continue ;;
+      ':--include') skip=1; pending="$token"; continue ;;
+      ':--j') skip=1; pending="$token"; continue ;;
+      ':-j') skip=1; pending="$token"; continue ;;
+      ':--jobs') skip=1; pending="$token"; continue ;;
+      ':--o') skip=1; pending="$token"; continue ;;
+      ':-o') skip=1; pending="$token"; continue ;;
+      ':--rcfile') skip=1; pending="$token"; continue ;;
+      ':--s') skip=1; pending="$token"; continue ;;
+      ':-s') skip=1; pending="$token"; continue ;;
+      ':--severity') skip=1; pending="$token"; continue ;;
+      ':--shell') skip=1; pending="$token"; continue ;;
+      ':--source-path') skip=1; pending="$token"; continue ;;
+      ':--wiki-link-count') skip=1; pending="$token"; continue ;;
+      *) [[ $token == -?* ]] || pos=$((pos+1)) ;;
+    esac
+  done
+  local value_cur="$cur" prefix='' value_flag="$pending"
+  if [[ $cur == --*=* ]]; then value_flag="${cur%%=*}"; value_cur="${cur#*=}"; prefix="${cur%%=*}="; fi
+  token="$cur"
+    short_flag=''; short_tail=''; short_prefix=''
+    if [[ $token == -?* && $token != --* ]]; then
+      short_tail="${token#-}"; short_prefix='-'
+      while [[ -n $short_tail ]]; do
+        short_char="${short_tail%"${short_tail#?}"}"; short_tail="${short_tail#?}"; short_prefix+="$short_char"
+        case "$path:$short_char" in
+          ':C') : ;;
+          ':P') short_flag="-$short_char"; break ;;
+          ':S') short_flag="-$short_char"; break ;;
+          ':V') : ;;
+          ':W') short_flag="-$short_char"; break ;;
+          ':a') : ;;
+          ':e') short_flag="-$short_char"; break ;;
+          ':f') short_flag="-$short_char"; break ;;
+          ':i') short_flag="-$short_char"; break ;;
+          ':j') short_flag="-$short_char"; break ;;
+          ':o') short_flag="-$short_char"; break ;;
+          ':s') short_flag="-$short_char"; break ;;
+          ':x') : ;;
+          *) break ;;
+        esac
+      done
+    fi
+  if [[ -n $short_flag && -n $short_tail ]]; then value_flag="$short_flag"; value_cur="$short_tail"; prefix="$short_prefix"; fi
+  if (( ! literal )); then
+  case "$path:$value_flag" in
+    ':--P')
+      delimiter=':'
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+      ;;
+    ':-P')
+      delimiter=':'
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+      ;;
+    ':--S')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('error' 'warning' 'info' 'style')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':-S')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('error' 'warning' 'info' 'style')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--W')
+      return 1
+      ;;
+    ':-W')
+      return 1
+      ;;
+    ':--e')
+      return 1
+      ;;
+    ':-e')
+      return 1
+      ;;
+    ':--enable')
+      delimiter=','
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('all' 'clarify-parse-errors' 'add-default-case' 'avoid-negated-conditions' 'avoid-nullary-conditions' 'check-extra-masked-returns' 'check-set-e-suppressed' 'check-unassigned-uppercase' 'deprecate-which' 'quote-safe-variables' 'require-double-brackets' 'require-double-equals' 'require-variable-braces' 'useless-use-of-cat')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--exclude')
+      return 1
+      ;;
+    ':--extended-analysis')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('true' 'false')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--f')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('checkstyle' 'diff' 'gcc' 'json' 'json1' 'quiet' 'tty')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':-f')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('checkstyle' 'diff' 'gcc' 'json' 'json1' 'quiet' 'tty')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--files-from')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+      ;;
+    ':--format')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('checkstyle' 'diff' 'gcc' 'json' 'json1' 'quiet' 'tty')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--generate-completions')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('bash' 'zsh' 'fish' 'powershell')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--i')
+      return 1
+      ;;
+    ':-i')
+      return 1
+      ;;
+    ':--include')
+      return 1
+      ;;
+    ':--j')
+      return 1
+      ;;
+    ':-j')
+      return 1
+      ;;
+    ':--jobs')
+      return 1
+      ;;
+    ':--o')
+      delimiter=','
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('all' 'clarify-parse-errors' 'add-default-case' 'avoid-negated-conditions' 'avoid-nullary-conditions' 'check-extra-masked-returns' 'check-set-e-suppressed' 'check-unassigned-uppercase' 'deprecate-which' 'quote-safe-variables' 'require-double-brackets' 'require-double-equals' 'require-variable-braces' 'useless-use-of-cat')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':-o')
+      delimiter=','
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('all' 'clarify-parse-errors' 'add-default-case' 'avoid-negated-conditions' 'avoid-nullary-conditions' 'check-extra-masked-returns' 'check-set-e-suppressed' 'check-unassigned-uppercase' 'deprecate-which' 'quote-safe-variables' 'require-double-brackets' 'require-double-equals' 'require-variable-braces' 'useless-use-of-cat')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--rcfile')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+      ;;
+    ':--s')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('sh' 'bash' 'dash' 'ksh' 'busybox' 'zsh' 'mksh' 'oksh' 'loksh' 'yash' 'posh' 'bosh' 'osh' 'brush' 'freebsd-sh' 'netbsd-sh')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':-s')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('sh' 'bash' 'dash' 'ksh' 'busybox' 'zsh' 'mksh' 'oksh' 'loksh' 'yash' 'posh' 'bosh' 'osh' 'brush' 'freebsd-sh' 'netbsd-sh')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--severity')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('error' 'warning' 'info' 'style')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--shell')
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      candidates=('sh' 'bash' 'dash' 'ksh' 'busybox' 'zsh' 'mksh' 'oksh' 'loksh' 'yash' 'posh' 'bosh' 'osh' 'brush' 'freebsd-sh' 'netbsd-sh')
+      compadd -- "${candidates[@]}"; return
+      ;;
+    ':--source-path')
+      delimiter=':'
+      while [[ $value_cur == *"$delimiter"* ]]; do prefix+="${value_cur%%"$delimiter"*}$delimiter"; value_cur="${value_cur#*"$delimiter"}"; done
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+      ;;
+    ':--wiki-link-count')
+      return 1
+      ;;
+  esac
+  fi
+  if (( literal )) || [[ $cur != -* ]]; then
+    :
+    if [[ $path == '' ]] && (( pos >= 0 )); then
+      value_cur="$cur"; prefix=''
+      [[ -n $prefix ]] && compset -P "${(b)prefix}"
+      _files; return
+    fi
+  fi
+  if (( ! literal )); then
+  case "$path" in
+    '') candidates=('--check-sourced' '-a' '--color' '-C' '--include' '-i' '--exclude' '-e' '--extended-analysis' '--format' '-f' '--jobs' '-j' '--list-optional' '--norc' '--rcfile' '--enable' '-o' '--source-path' '-P' '--shell' '-s' '--severity' '-S' '--version' '-V' '--wiki-link-count' '-W' '--external-sources' '-x' '--help' '--files-from' '--generate-completions') ;;
+  esac
+  fi
+  candidates+=("${extra[@]}")
+  compadd -- "${candidates[@]}"
+  (( files )) && _files
+  return 0
+}
+if [[ ${zsh_eval_context[-1]} == loadautofunc ]]; then
+  eval "${funcstack[1]}() { _rshellcheck_complete \"\$@\"; }"
+  _rshellcheck_complete "$@"
+else
+  compdef _rshellcheck_complete 'rshellcheck'
+fi

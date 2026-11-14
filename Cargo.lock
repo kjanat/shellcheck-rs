@@ -174,6 +174,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fujo-complete"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d26c40fa87772c28902da3bb9add51e18d47b3a5f35f5adb728916d4b9562e49"
+dependencies = [
+ "fujo-core",
+]
+
+[[package]]
+name = "fujo-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "227d265db36497e894edd84fbdbfbce2ed695bedb2523f4605343af63323f3ad"
+dependencies = [
+ "fujo-error",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fujo-error"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "963b8df0f354104d2018ada6111c1a2efcaac87109220a98dcde7b67df8d4845"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -346,6 +376,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "rshellcheck"
 version = "1.1.0"
 dependencies = [
+ "fujo-complete",
+ "fujo-core",
  "rshellcheck-core",
  "schemars",
  "serde",

@@ -322,7 +322,15 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(first, archive.read_bytes())
                 if archive.suffix == ".zip":
                     with zipfile.ZipFile(archive) as contents:
-                        self.assertEqual(len(contents.namelist()), 4)
+                        self.assertEqual(len(contents.namelist()), 8)
+                        self.assertEqual(
+                            contents.read(
+                                f"rshellcheck-test-{target}/completions/rshellcheck.ps1"
+                            ),
+                            (
+                                release.ROOT / release.COMPLETIONS / "rshellcheck.ps1"
+                            ).read_bytes(),
+                        )
                         binary = next(
                             x
                             for x in contents.infolist()
@@ -331,7 +339,22 @@ class ReleaseTests(unittest.TestCase):
                         self.assertEqual((binary.external_attr >> 16) & 0o777, 0o755)
                 else:
                     with tarfile.open(archive) as contents:
-                        self.assertEqual(len(contents.getmembers()), 4)
+                        self.assertEqual(len(contents.getmembers()), 8)
+                        for script in (
+                            "_rshellcheck",
+                            "rshellcheck.bash",
+                            "rshellcheck.fish",
+                        ):
+                            member = contents.getmember(
+                                f"rshellcheck-test-{target}/completions/{script}"
+                            )
+                            self.assertEqual(member.mode, 0o644)
+                            self.assertEqual(
+                                release.read_member(contents, member.name),
+                                (
+                                    release.ROOT / release.COMPLETIONS / script
+                                ).read_bytes(),
+                            )
                         self.assertEqual(
                             contents.getmember(
                                 f"rshellcheck-test-{target}/rshellcheck"

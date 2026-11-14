@@ -34,10 +34,15 @@ use std::path::{Path, PathBuf};
 use rshellcheck_core::interface::{CheckSpec, ColorOption, Severity, Shell};
 use rshellcheck_core::{Dialect, optional_checks};
 
+use crate::completions;
+
 /// Formats the port implements. `getOpt`'s format validation lists exactly
 /// these, sorted (mirroring `Map.keys` of the Haskell `formats` map).
 pub const SUPPORTED_FORMATS: &[&str] =
     &["checkstyle", "diff", "gcc", "json", "json1", "quiet", "tty"];
+
+/// The `-S`/`--severity` values, most severe first.
+pub(crate) const SEVERITIES: [&str; 4] = ["error", "warning", "info", "style"];
 
 /// What the caller should do after parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +56,8 @@ pub enum Outcome {
     PrintHelp,
     /// Print the (currently empty) optional-check listing to stdout and exit 0.
     ListOptional,
+    /// Print the completion script for this shell to stdout and exit 0.
+    Completions(completions::Shell),
     /// Print `message` to stderr and exit with `code` (3 or 4).
     Error {
         /// What to print.
@@ -90,7 +97,7 @@ pub struct RunConfig {
 
 /// Argument kind for a recognised option, following the Haskell `ArgDescr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArgKind {
+pub(crate) enum ArgKind {
     /// Takes no argument (`NoArg`).
     None,
     /// Requires an argument (`ReqArg`): `--opt=v`, `--opt v`, `-ov`, `-o v`.
@@ -103,17 +110,17 @@ enum ArgKind {
 /// One `Option` of the Haskell `options` list: its letter, long name, the
 /// `Flag` key it produces, how it takes an argument, the argument's
 /// placeholder, and its help text.
-struct OptDef {
-    short: Option<char>,
-    long: &'static str,
-    key: &'static str,
-    kind: ArgKind,
-    arg: &'static str,
-    help: &'static str,
+pub(crate) struct OptDef {
+    pub(crate) short: Option<char>,
+    pub(crate) long: &'static str,
+    pub(crate) key: &'static str,
+    pub(crate) kind: ArgKind,
+    pub(crate) arg: &'static str,
+    pub(crate) help: &'static str,
 }
 
 /// The recognised option table (mirrors `options` in shellcheck.hs).
-const OPTS: &[OptDef] = &[
+pub(crate) const OPTS: &[OptDef] = &[
     OptDef {
         short: Some('a'),
         long: "check-sourced",
@@ -265,6 +272,14 @@ const OPTS: &[OptDef] = &[
         kind: ArgKind::Required,
         arg: "FILE",
         help: "Read input files from FILE (one per line, or '-' for stdin)",
+    },
+    OptDef {
+        short: None,
+        long: "generate-completions",
+        key: "completions",
+        kind: ArgKind::Required,
+        arg: "SHELL",
+        help: "Print a completion script (bash, zsh, fish, powershell)",
     },
 ];
 
@@ -678,6 +693,20 @@ fn parse_worker_count(value: &str) -> ControlFlow<Outcome, usize> {
     }
 }
 
+/// The script `--generate-completions` asks for; an unknown shell is a
+/// `SupportFailure` (exit 4).
+fn completions_outcome(shell: &str) -> Outcome {
+    completions::Shell::from_name(shell).map_or_else(
+        || {
+            support_error(
+                "generate-completions",
+                &completions::Shell::ALL.map(completions::Shell::name),
+            )
+        },
+        Outcome::Completions,
+    )
+}
+
 /// `parseOption` for one flag. `Break` ends the parse with that outcome.
 fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
     match flag.key {
@@ -685,6 +714,9 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         "version" => return ControlFlow::Break(Outcome::PrintVersion),
         "help" => return ControlFlow::Break(Outcome::PrintHelp),
         "list-optional" => return ControlFlow::Break(Outcome::ListOptional),
+        "completions" => {
+            return ControlFlow::Break(completions_outcome(flag.value.as_deref().unwrap_or("")));
+        }
 
         // Wired into CheckSpec (effective in the analysis core).
         "shell" => {
@@ -701,8 +733,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
         }
         "severity" => {
             let Some(sev) = parse_severity(flag.value.as_deref().unwrap_or("")) else {
-                let valid = ["error", "warning", "info", "style"];
-                return ControlFlow::Break(support_error("severity", &valid));
+                return ControlFlow::Break(support_error("severity", &SEVERITIES));
             };
             o.spec.min_severity = sev;
         }
@@ -956,6 +987,62 @@ mod tests {
     /// `parse` in a directory with no files in it.
     fn parse(argv: &[String]) -> Outcome {
         super::parse(argv, &|_| false)
+    }
+
+    #[test]
+    fn generate_completions_names_one_of_the_four_shells() {
+        for shell in completions::Shell::ALL {
+            for argv in [
+                vec!["--generate-completions", shell.name()],
+                vec![&*format!("--generate-completions={}", shell.name())],
+            ] {
+                assert_eq!(parse(&args(&argv)), Outcome::Completions(shell));
+            }
+        }
+        for value in ["pwsh", "Bash", ""] {
+            assert_eq!(
+                parse(&args(&["--generate-completions", value])),
+                Outcome::Error {
+                    message: "Unknown value for --generate-completions. Valid options are: bash, zsh, fish, powershell".to_string(),
+                    code: 4,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn generate_completions_leaves_the_upstream_abbreviations_unique() {
+        assert_eq!(
+            run(&["--co=never", "script.sh"]).color,
+            ColorOption::ColorNever
+        );
+        assert_eq!(
+            parse(&args(&["--g", "fish"])),
+            Outcome::Completions(completions::Shell::Fish)
+        );
+    }
+
+    #[test]
+    fn every_script_offers_every_option() {
+        for shell in completions::Shell::ALL {
+            let script = shell.script();
+            for def in OPTS {
+                let long = if shell == completions::Shell::Fish {
+                    format!("-l '{}'", def.long)
+                } else {
+                    format!("'--{}'", def.long)
+                };
+                assert!(script.contains(&long), "{}: {long}", shell.name());
+                if let Some(short) = def.short {
+                    let short = if shell == completions::Shell::Fish {
+                        format!("-s '{short}'")
+                    } else {
+                        format!("'-{short}'")
+                    };
+                    assert!(script.contains(&short), "{}: {short}", shell.name());
+                }
+            }
+        }
     }
 
     #[test]

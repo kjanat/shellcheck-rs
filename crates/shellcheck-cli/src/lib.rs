@@ -5,6 +5,7 @@
     html_favicon_url = "https://cdn.jsdelivr.net/gh/kjanat/shellcheck-rs@f666e756494d37a132ae6a37c44dc6b3fe01a57e/doc/shellcheck_logo.svg"
 )]
 
+pub mod completions;
 pub mod formatter;
 pub mod options;
 pub mod oracle;

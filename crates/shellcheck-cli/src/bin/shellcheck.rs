@@ -54,6 +54,10 @@ fn main() -> ExitCode {
             print!("{}", options::list_optional_text());
             return ExitCode::SUCCESS;
         }
+        Outcome::Completions(shell) => {
+            print!("{}", shell.script());
+            return ExitCode::SUCCESS;
+        }
         Outcome::Error { message, code } => {
             eprintln!("{message}");
             return ExitCode::from(code);

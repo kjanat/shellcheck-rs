@@ -13,7 +13,7 @@ path = "src/main.rs"
 actions-rs.workspace       = true
 clap.workspace             = true
 json-schema-sort.workspace = true
-rshellcheck                = { workspace = true, features = ["schema"] }
+rshellcheck                = { workspace = true, features = ["completions", "schema"] }
 rshellcheck-core.workspace = true
 schemars.workspace         = true
 serde.workspace            = true
