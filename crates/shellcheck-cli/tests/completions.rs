@@ -121,8 +121,21 @@ const CASES: &[(&[&str], &[&str])] = &[
 /// completes file names for these, so only Bash and Fish are asked.
 const FREE_TEXT: &[(&[&str], &[&str])] = &[(&["-j", ""], &[]), (&["--include", ""], &[])];
 
-fn with_free_text() -> Vec<(&'static [&'static str], &'static [&'static str])> {
-    CASES.iter().chain(FREE_TEXT).copied().collect()
+/// Abbreviated long options. Fish is told each long option by its full name,
+/// so it reads the word after `--for` as a file.
+const ABBREVIATED: &[(&[&str], &[&str])] = &[
+    (&["--for", "j"], &["json", "json1"]),
+    (&["--sh=z"], &["--sh=zsh"]),
+];
+
+type Case = (&'static [&'static str], &'static [&'static str]);
+
+fn cases_with(more: &[&[Case]]) -> Vec<Case> {
+    CASES
+        .iter()
+        .chain(more.iter().copied().flatten())
+        .copied()
+        .collect()
 }
 
 /// One candidate per line, without a description column, quoting, `./` or a
@@ -173,7 +186,7 @@ fn bash_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let script = script("bash");
-    let cases = with_free_text();
+    let cases = cases_with(&[FREE_TEXT, ABBREVIATED]);
     let words: Vec<&[&str]> = cases.iter().map(|(words, _)| *words).collect();
     let output = run(
         &fixture.0,
@@ -225,7 +238,7 @@ fn fish_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let mut probe = script("fish");
-    let cases = with_free_text();
+    let cases = cases_with(&[FREE_TEXT]);
     for (words, _) in &cases {
         let line = format!("rshellcheck {}", words.join(" "));
         let _ = std::fmt::Write::write_fmt(
@@ -237,7 +250,8 @@ fn fish_completes_options_values_and_files() {
     let sections: Vec<&str> = output.split("==CASE\n").skip(1).collect();
     assert_eq!(sections.len(), cases.len(), "fish: {output}");
     for ((words, expected), section) in cases.iter().zip(sections) {
-        // Fish 4.2 also lists `--files-from` for `--fo`.
+        // Fish 4.2.1 lists `--files-from` for `--fo` for any command that
+        // declares both options, so only prefix matches are compared.
         let word = words.last().copied().unwrap_or_default();
         let mut found = candidates(section);
         found.retain(|candidate| candidate.starts_with(word));
@@ -283,7 +297,8 @@ fn powershell_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let mut probe = format!("$ErrorActionPreference = 'Stop'\n{}", script("powershell"));
-    for (words, _) in CASES {
+    let cases = cases_with(&[ABBREVIATED]);
+    for (words, _) in &cases {
         let line = format!("rshellcheck {}", words.join(" ")).replace('\'', "''");
         let _ = std::fmt::Write::write_fmt(
             &mut probe,
@@ -306,7 +321,7 @@ fn powershell_completes_options_values_and_files() {
         ],
         "",
     );
-    assert_cases("powershell", CASES, &output);
+    assert_cases("powershell", &cases, &output);
 }
 
 /// Zsh's completion widgets need a terminal, so `compadd`, `compset` and
@@ -325,6 +340,10 @@ fn zsh_asks_for_options_values_and_files() {
             "<checkstyle> <diff> <gcc> <json> <json1> <quiet> <tty> \n",
         ),
         (&["--format=g"], "compset -P --format=\n<checkstyle>"),
+        (
+            &["--for", "j"],
+            "<checkstyle> <diff> <gcc> <json> <json1> <quiet> <tty> \n",
+        ),
         (&["-fj"], "compset -P -f\n<checkstyle>"),
         (&["-xs", "z"], "<sh> <bash> <dash> <ksh> <busybox> <zsh>"),
         (

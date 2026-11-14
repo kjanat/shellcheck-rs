@@ -22,8 +22,24 @@ fn choices<const N: usize>(
         .map_err(|_| format!("--{option}: expected {N} choices, found {found}"))
 }
 
+/// The abbreviations of `def.long` that the option parser resolves to it.
+/// fujo reads a one-letter name as a short option, so `--g` has none.
+fn abbreviations(def: &OptDef) -> impl Iterator<Item = &'static str> {
+    let long = def.long;
+    (2..long.len())
+        .map(move |len| &long[..len])
+        .filter(|prefix| OPTS.iter().filter(|o| o.long.starts_with(prefix)).count() == 1)
+}
+
 fn finish<T, P>(input: Flag<T, P>, def: &OptDef) -> InputSchema {
     let input = input.describe(def.help);
+    // An abbreviated option takes the same values. The scripts do not offer
+    // the abbreviations themselves.
+    let input = if def.kind == ArgKind::Required {
+        abbreviations(def).fold(input, Flag::hidden_alias)
+    } else {
+        input
+    };
     match def.short {
         Some(short) => input.alias(short.to_string()),
         None => input,
@@ -154,6 +170,33 @@ mod tests {
         );
         assert!(declare(&option("probe", ArgKind::None)).is_ok());
         assert!(declare(&option("probe", ArgKind::Optional)).is_ok());
+    }
+
+    #[test]
+    fn an_abbreviation_is_a_prefix_no_other_option_shares() {
+        let named = |long: &str| {
+            OPTS.iter()
+                .find(|def| def.long == long)
+                .map(|def| abbreviations(def).collect::<Vec<_>>())
+        };
+        assert_eq!(named("format"), Some(vec!["fo", "for", "form", "forma"]));
+        assert_eq!(named("shell"), Some(vec!["sh", "she", "shel"]));
+        assert_eq!(
+            named("source-path").and_then(|a| a.first().copied()),
+            Some("so")
+        );
+        let schema = OPTS
+            .iter()
+            .find(|def| def.long == "format")
+            .map_or_else(|| panic!("--format"), declare)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let hidden: Vec<&str> = schema
+            .aliases
+            .iter()
+            .filter(|alias| alias.hidden)
+            .map(|alias| alias.name.as_str())
+            .collect();
+        assert_eq!(hidden, ["fo", "for", "form", "forma"]);
     }
 
     #[test]
