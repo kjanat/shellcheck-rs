@@ -80,8 +80,14 @@ rshellcheck --generate-completions zsh > ~/.zfunc/_rshellcheck
 
 mkdir -p ~/.config/fish/completions
 rshellcheck --generate-completions fish > ~/.config/fish/completions/rshellcheck.fish
+```
 
-rshellcheck --generate-completions powershell >> "$PROFILE"
+```powershell
+$dir = Split-Path $PROFILE
+New-Item -ItemType Directory -Force $dir | Out-Null
+rshellcheck --generate-completions powershell |
+  Set-Content -Encoding utf8 (Join-Path $dir rshellcheck.ps1)
+Add-Content $PROFILE '. (Join-Path $PSScriptRoot rshellcheck.ps1)'
 ```
 
 Zsh loads `~/.zfunc/_rshellcheck` when `~/.zshrc` has `fpath=(~/.zfunc $fpath)`
