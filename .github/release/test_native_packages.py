@@ -12,7 +12,7 @@ import native_packages as native
 import npm_publish
 import release
 from binding_packages import members
-from test_release import executable
+from test_release import built, executable
 
 
 class NativeTests(unittest.TestCase):
@@ -20,10 +20,7 @@ class NativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
             for target, _, _ in release.TARGETS:
-                binary = dest / (
-                    "rshellcheck.exe" if "windows" in target else "rshellcheck"
-                )
-                _ = binary.write_bytes(executable(target))
+                binary = built(dest, target, executable(target))
                 _ = release.pack(target, "test", binary, dest)
             native.build(dest, "test")
             record = native.load_record(dest)
@@ -98,8 +95,7 @@ class NativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
             target = next(iter(native.platforms().values()))
-            binary = dest / "rshellcheck.exe"
-            _ = binary.write_bytes(executable(target))
+            binary = built(dest, target, executable(target))
             with patch.object(
                 release,
                 "metadata",

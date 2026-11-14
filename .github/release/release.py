@@ -503,27 +503,18 @@ def emulated(target: Triple, binary: Path, entrypoint: str, *args: str) -> list[
     ]
 
 
-def completions() -> dict[str, bytes]:
-    """The scripts are the same for every target, and a cross-built binary
-    cannot print them on its build host, so a host build does."""
-    return {
-        name: run(
-            "cargo",
-            "run",
-            "--release",
-            "--locked",
-            "--quiet",
-            "-p",
-            "rshellcheck",
-            "--bin",
-            "rshellcheck",
-            "--",
-            "--generate-completions",
-            shell,
-            capture_output=True,
-        ).stdout.encode()
-        for shell, name in COMPLETIONS.items()
-    }
+def completions(binary: Path, data: bytes) -> dict[str, bytes]:
+    """The build script writes the scripts into its output directory beside
+    the binary, and the binary embeds them. Cargo leaves the directories of
+    earlier builds in place, so the one whose scripts the binary holds is the
+    one this build wrote."""
+    for out in sorted((binary.parent / "build").glob("rshellcheck-*/out")):
+        paths = [out / name for name in COMPLETIONS.values()]
+        if all(path.is_file() for path in paths):
+            scripts = {path.name: path.read_bytes() for path in paths}
+            if all(script in data for script in scripts.values()):
+                return scripts
+    raise ValueError(f"No build output holds the completion scripts in {binary}")
 
 
 def pack(
@@ -564,7 +555,7 @@ def pack(
             0o644,
         ),
     }
-    for name, script in completions().items():
+    for name, script in completions(binary, data).items():
         files[f"completions/{name}"] = (script, 0o644)
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / archive_name(label, target)

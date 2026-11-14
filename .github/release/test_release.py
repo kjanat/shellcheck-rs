@@ -76,6 +76,24 @@ def executable(
 
 
 SCRIPTS = {name: f"# {name}\n".encode() for name in release.COMPLETIONS.values()}
+STALE_SCRIPTS = {name: b"# stale " + script for name, script in SCRIPTS.items()}
+
+
+def build_output(directory: Path, unit: str, scripts: dict[str, bytes]) -> None:
+    out = directory / "build" / unit / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    for name, script in scripts.items():
+        _ = (out / name).write_bytes(script)
+
+
+def built(directory: Path, target: release.Triple, data: bytes) -> Path:
+    """A binary that embeds the scripts, beside a stale and a current build
+    output."""
+    binary = directory / ("rshellcheck.exe" if "windows" in target else "rshellcheck")
+    _ = binary.write_bytes(data + b"".join(SCRIPTS.values()))
+    build_output(directory, "rshellcheck-0", STALE_SCRIPTS)
+    build_output(directory, "rshellcheck-1", SCRIPTS)
+    return binary
 
 
 class ReleaseTests(unittest.TestCase):
@@ -309,32 +327,20 @@ class ReleaseTests(unittest.TestCase):
     def pack(
         self, directory: Path, target: release.Triple, label: str = "test"
     ) -> Path:
-        binary = directory / (
-            "rshellcheck.exe" if "windows" in target else "rshellcheck"
-        )
-        _ = binary.write_bytes(executable(target))
-        with patch.object(release, "completions", return_value=SCRIPTS):
-            return release.pack(target, label, binary, directory / "dist")
+        binary = built(directory, target, executable(target))
+        return release.pack(target, label, binary, directory / "dist")
 
-    def test_completions_come_from_a_host_build_for_each_shell(self):
-        def host(*args: str, **_: object) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(args, 0, stdout=f"# {args[-1]}\n")
-
-        with patch.object(release, "run", side_effect=host) as run:
-            scripts = release.completions()
-        self.assertEqual(
-            scripts,
-            {
-                "rshellcheck.bash": b"# bash\n",
-                "_rshellcheck": b"# zsh\n",
-                "rshellcheck.fish": b"# fish\n",
-                "rshellcheck.ps1": b"# powershell\n",
-            },
-        )
-        for call in run.call_args_list:
-            self.assertEqual(call.args[:2], ("cargo", "run"))
-            self.assertNotIn("--target", call.args)
-            self.assertEqual(call.args[-2], "--generate-completions")
+    def test_completions_are_the_scripts_the_binary_embeds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            binary = directory / "rshellcheck"
+            build_output(directory, "rshellcheck-0", STALE_SCRIPTS)
+            build_output(directory, "rshellcheck-1", SCRIPTS)
+            (directory / "build" / "rshellcheck-2" / "out").mkdir(parents=True)
+            data = b"\x7fELF" + b"".join(SCRIPTS.values())
+            self.assertEqual(release.completions(binary, data), SCRIPTS)
+            with self.assertRaisesRegex(ValueError, "No build output"):
+                _ = release.completions(binary, b"\x7fELF")
 
     def test_archives_reproducible_and_executable(self):
         with tempfile.TemporaryDirectory() as temp:

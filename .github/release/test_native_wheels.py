@@ -11,7 +11,7 @@ from unittest.mock import patch
 import native_wheels as wheels
 import release
 from binding_packages import members
-from test_release import executable
+from test_release import built, executable
 
 
 class NativeWheelTests(unittest.TestCase):
@@ -25,10 +25,7 @@ class NativeWheelTests(unittest.TestCase):
                     struct.pack_into("<I", macho, 16, 1)
                     struct.pack_into("<IIIIII", macho, 32, 0x32, 24, 1, 11 << 16, 0, 0)
                     data = bytes(macho)
-                binary = dest / (
-                    "rshellcheck.exe" if "windows" in target else "rshellcheck"
-                )
-                _ = binary.write_bytes(data)
+                binary = built(dest, target, data)
                 _ = release.pack(target, "test", binary, dest)
             wheels.build(dest, "test")
             first = wheels.load_record(dest)
@@ -88,10 +85,7 @@ class NativeWheelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
             target = next(iter(wheels.TARGETS))
-            binary = dest / (
-                "rshellcheck.exe" if "windows" in target else "rshellcheck"
-            )
-            _ = binary.write_bytes(executable(target))
+            binary = built(dest, target, executable(target))
             with patch.object(
                 release,
                 "metadata",
