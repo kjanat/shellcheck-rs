@@ -72,11 +72,21 @@ remain serial. Diagnostics retain input order. More workers can increase peak me
 `bash`, `zsh`, `fish` or `powershell`:
 
 ```sh
+mkdir -p ~/.local/share/bash-completion/completions
 rshellcheck --generate-completions bash > ~/.local/share/bash-completion/completions/rshellcheck
-rshellcheck --generate-completions zsh > "${fpath[1]}/_rshellcheck"
+
+mkdir -p ~/.zfunc
+rshellcheck --generate-completions zsh > ~/.zfunc/_rshellcheck
+
+mkdir -p ~/.config/fish/completions
 rshellcheck --generate-completions fish > ~/.config/fish/completions/rshellcheck.fish
+
 rshellcheck --generate-completions powershell >> "$PROFILE"
 ```
+
+Zsh loads `~/.zfunc/_rshellcheck` when `~/.zshrc` has `fpath=(~/.zfunc $fpath)`
+before `compinit`. The Bash script needs Bash 4 or later, which the `bash` that
+ships with macOS predates.
 
 ### In your editor
 
