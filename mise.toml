@@ -47,7 +47,7 @@ tombi         = "github:tombi-toml/tombi"
 
 [wrappers.actionlint]
 command = "mise"
-args    = ["exec", "http:actionlint", "--", "actionlint"]
+args    = ["exec", "--no-deps", "http:actionlint", "--", "actionlint"]
 
 [wrappers.uv-ruff]
 command = "uv"
