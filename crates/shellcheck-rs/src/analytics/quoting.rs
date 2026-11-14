@@ -232,7 +232,7 @@ pub(super) fn check_single_quoted_variables(params: &Parameters, t: &Token, out:
 
     let command_name: String = closest
         .and_then(|cmd| get_command_basename(cmd).map(|name| (cmd, name)))
-        .map(|(cmd, name)| {
+        .map_or_default(|(cmd, name)| {
             if name == "find" {
                 get_find_command(cmd)
             } else if name == "git" {
@@ -242,8 +242,7 @@ pub(super) fn check_single_quoted_variables(params: &Parameters, t: &Token, out:
             } else {
                 name
             }
-        })
-        .unwrap_or_default();
+        });
 
     let show = |out: &mut Out| {
         info(

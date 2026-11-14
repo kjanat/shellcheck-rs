@@ -261,9 +261,8 @@ pub fn run(args: &Args) -> Result<bool, String> {
     // The same inputs the fuzzer uses: upstream's property scripts, plus
     // generated and mutated shell.
     let src = std::path::Path::new(&args.repo).join("src/ShellCheck");
-    let seeds: Vec<String> = corpus::extract(&src)
-        .map(|e| e.into_iter().map(|x| x.script).collect())
-        .unwrap_or_default();
+    let seeds: Vec<String> =
+        corpus::extract(&src).map_or_default(|e| e.into_iter().map(|x| x.script).collect());
     let mut rng = Rng::new(args.fuzzing.seed.wrapping_add(7));
     let mut scripts: Vec<String> = seeds.clone();
     for _ in 0..args.fuzzing.iterations {

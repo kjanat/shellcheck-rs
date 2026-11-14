@@ -2423,8 +2423,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
             let children: Vec<Node> = g
                 .succ
                 .get(&node)
-                .map(|v| v.iter().map(|(to, _)| *to).collect())
-                .unwrap_or_default();
+                .map_or_default(|v| v.iter().map(|(to, _)| *to).collect());
             if idx < children.len() {
                 stack.push((node, idx + 1));
                 let c = children[idx];
@@ -2471,8 +2470,7 @@ fn dom(g: &MutGraph, root: Node) -> (Vec<Option<Node>>, Vec<bool>) {
             let preds: Vec<Node> = g
                 .pred
                 .get(&n)
-                .map(|v| v.iter().map(|(from, _)| *from).collect())
-                .unwrap_or_default();
+                .map_or_default(|v| v.iter().map(|(from, _)| *from).collect());
             let mut new_idom: Option<Node> = None;
             for &p in &preds {
                 if number[p].is_none() {

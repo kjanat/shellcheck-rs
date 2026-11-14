@@ -450,8 +450,7 @@ pub fn coverage(src_dir: &Path) -> Result<Coverage, String> {
         let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
         let name = f
             .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|s| s.to_string_lossy().into_owned());
         // `src/ShellCheck/...` as the repository spells it, so an annotation
         // can name a file GitHub can find. `src_dir` is the tree's
         // `src/ShellCheck`, which is the prefix to restore.
