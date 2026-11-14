@@ -6,6 +6,10 @@
 `completions/` holds the completion scripts for Bash (`rshellcheck.bash`), Zsh
 (`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
 `rshellcheck --generate-completions SHELL` prints the same scripts.
+`build.rs` writes those scripts into both `OUT_DIR` for embedding and
+`rshellcheck.assets/completions/` beside the target binary for packaging.
+The packager includes the staged asset tree without locating Cargo build outputs
+or inspecting the binary for completion contents.
 
 The binary is GPL-3.0-or-later; see `LICENSE.txt`. `BUILD.json` records the source
 commit, Cargo version, Rust toolchain and binary SHA-256. Each GitHub release

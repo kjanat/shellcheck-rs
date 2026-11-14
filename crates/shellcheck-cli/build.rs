@@ -25,17 +25,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         "cargo:rustc-env=RSHELLCHECK_UPSTREAM_REVISION={}",
         pin.revision
     );
+    let out = PathBuf::from(std::env::var("OUT_DIR")?);
+    let profile = out
+        .ancestors()
+        .find(|directory| directory.file_name().is_some_and(|name| name == "build"))
+        .and_then(std::path::Path::parent)
+        .ok_or("OUT_DIR has no build profile directory")?;
+    let assets = profile.join("rshellcheck.assets");
+    #[cfg(not(feature = "completions"))]
+    {
+        if assets.is_dir() {
+            std::fs::remove_dir_all(&assets)?;
+        }
+        println!("cargo:rerun-if-changed={}", assets.display());
+    }
     #[cfg(feature = "completions")]
     {
-        let out = PathBuf::from(std::env::var("OUT_DIR")?);
+        let assets = assets.join("completions");
         for source in ["src/completion_generator.rs", "src/option_table.rs"] {
             println!("cargo:rerun-if-changed={source}");
         }
+        std::fs::create_dir_all(&assets)?;
         for shell in option_table::Shell::ALL {
-            std::fs::write(
-                out.join(shell.file_name()),
-                completion_generator::generate(shell)?,
-            )?;
+            let script = completion_generator::generate(shell)?;
+            std::fs::write(out.join(shell.file_name()), &script)?;
+            let staged = assets.join(shell.file_name());
+            std::fs::write(&staged, script)?;
+            // Restore staged artifacts if a cache cleanup deletes or replaces them.
+            println!("cargo:rerun-if-changed={}", staged.display());
         }
     }
     Ok(())

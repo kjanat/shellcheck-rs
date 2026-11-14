@@ -75,24 +75,25 @@ def executable(
     return bytes(data)
 
 
-SCRIPTS = {name: f"# {name}\n".encode() for name in release.COMPLETIONS.values()}
-STALE_SCRIPTS = {name: b"# stale " + script for name, script in SCRIPTS.items()}
-
-
-def build_output(directory: Path, unit: str, scripts: dict[str, bytes]) -> None:
-    out = directory / "build" / unit / "out"
-    out.mkdir(parents=True, exist_ok=True)
-    for name, script in scripts.items():
-        _ = (out / name).write_bytes(script)
+SCRIPTS = {
+    name: f"# {name}\n".encode()
+    for name in (
+        "rshellcheck.bash",
+        "_rshellcheck",
+        "rshellcheck.fish",
+        "rshellcheck.ps1",
+    )
+}
 
 
 def built(directory: Path, target: release.Triple, data: bytes) -> Path:
-    """A binary that embeds the scripts, beside a stale and a current build
-    output."""
+    """A target binary beside the assets staged by its build."""
     binary = directory / ("rshellcheck.exe" if "windows" in target else "rshellcheck")
-    _ = binary.write_bytes(data + b"".join(SCRIPTS.values()))
-    build_output(directory, "rshellcheck-0", STALE_SCRIPTS)
-    build_output(directory, "rshellcheck-1", SCRIPTS)
+    _ = binary.write_bytes(data)
+    assets = binary.with_suffix(".assets") / "completions"
+    assets.mkdir(parents=True, exist_ok=True)
+    for name, script in SCRIPTS.items():
+        _ = (assets / name).write_bytes(script)
     return binary
 
 
@@ -330,17 +331,15 @@ class ReleaseTests(unittest.TestCase):
         binary = built(directory, target, executable(target))
         return release.pack(target, label, binary, directory / "dist")
 
-    def test_completions_are_the_scripts_the_binary_embeds(self):
+    def test_pack_requires_staged_assets(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             binary = directory / "rshellcheck"
-            build_output(directory, "rshellcheck-0", STALE_SCRIPTS)
-            build_output(directory, "rshellcheck-1", SCRIPTS)
-            (directory / "build" / "rshellcheck-2" / "out").mkdir(parents=True)
-            data = b"\x7fELF" + b"".join(SCRIPTS.values())
-            self.assertEqual(release.completions(binary, data), SCRIPTS)
-            with self.assertRaisesRegex(ValueError, "No build output"):
-                _ = release.completions(binary, b"\x7fELF")
+            _ = binary.write_bytes(executable("x86_64-unknown-linux-musl"))
+            with self.assertRaisesRegex(ValueError, "Missing build assets"):
+                _ = release.pack(
+                    "x86_64-unknown-linux-musl", "test", binary, directory / "dist"
+                )
 
     def test_archives_reproducible_and_executable(self):
         with tempfile.TemporaryDirectory() as temp:

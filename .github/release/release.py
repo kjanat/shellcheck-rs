@@ -62,13 +62,6 @@ GO_PREFIX = "go/v"
 CROSS_VERSION = "0.2.5"
 NDK_VERSION = "30.0.16248370"
 ANDROID_API = 23
-# `--generate-completions` value and the file name each shell loads.
-COMPLETIONS = {
-    "bash": "rshellcheck.bash",
-    "zsh": "_rshellcheck",
-    "fish": "rshellcheck.fish",
-    "powershell": "rshellcheck.ps1",
-}
 DYNAMIC_CRT = re.compile(
     r"((vcruntime|msvcp|msvcr)\w*|ucrtbased?|api-ms-win-crt-[\w-]+)\.dll",
     re.IGNORECASE,
@@ -503,20 +496,6 @@ def emulated(target: Triple, binary: Path, entrypoint: str, *args: str) -> list[
     ]
 
 
-def completions(binary: Path, data: bytes) -> dict[str, bytes]:
-    """The build script writes the scripts into its output directory beside
-    the binary, and the binary embeds them. Cargo leaves the directories of
-    earlier builds in place, so the one whose scripts the binary holds is the
-    one this build wrote."""
-    for out in sorted((binary.parent / "build").glob("rshellcheck-*/out")):
-        paths = [out / name for name in COMPLETIONS.values()]
-        if all(path.is_file() for path in paths):
-            scripts = {path.name: path.read_bytes() for path in paths}
-            if all(script in data for script in scripts.values()):
-                return scripts
-    raise ValueError(f"No build output holds the completion scripts in {binary}")
-
-
 def pack(
     target: Triple, label: str, binary: Path | None = None, dest: Path | None = None
 ) -> Path:
@@ -555,8 +534,15 @@ def pack(
             0o644,
         ),
     }
-    for name, script in completions(binary, data).items():
-        files[f"completions/{name}"] = (script, 0o644)
+    assets = binary.with_suffix(".assets")
+    if not assets.is_dir():
+        raise ValueError(f"Missing build assets: {assets}")
+    for path in sorted(assets.rglob("*")):
+        if path.is_file():
+            name = path.relative_to(assets).as_posix()
+            if name in files:
+                raise ValueError(f"Build asset conflicts with archive member: {name}")
+            files[name] = (path.read_bytes(), 0o644)
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / archive_name(label, target)
     epoch = int(git("show", "-s", "--format=%ct", "HEAD"))
