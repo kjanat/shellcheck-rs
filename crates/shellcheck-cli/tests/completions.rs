@@ -115,9 +115,15 @@ const CASES: &[(&[&str], &[&str])] = &[
     (&["--rcfile", "my"], &["my script.sh"]),
     (&["--files-from=oth"], &["--files-from=other.sh"]),
     (&["--", "oth"], &["other.sh"]),
-    (&["-j", ""], &[]),
-    (&["--include", ""], &[]),
 ];
+
+/// Values without a candidate list. PowerShell 7.6 rejects an empty result and
+/// completes file names for these, so only Bash and Fish are asked.
+const FREE_TEXT: &[(&[&str], &[&str])] = &[(&["-j", ""], &[]), (&["--include", ""], &[])];
+
+fn with_free_text() -> Vec<(&'static [&'static str], &'static [&'static str])> {
+    CASES.iter().chain(FREE_TEXT).copied().collect()
+}
 
 /// One candidate per line, without a description column, quoting, `./` or a
 /// directory's trailing slash.
@@ -136,10 +142,10 @@ fn candidates(section: &str) -> Vec<String> {
     found
 }
 
-fn assert_cases(shell: &str, output: &str) {
+fn assert_cases(shell: &str, cases: &[(&[&str], &[&str])], output: &str) {
     let sections: Vec<&str> = output.split("==CASE\n").skip(1).collect();
-    assert_eq!(sections.len(), CASES.len(), "{shell}: {output}");
-    for ((words, expected), section) in CASES.iter().zip(sections) {
+    assert_eq!(sections.len(), cases.len(), "{shell}: {output}");
+    for ((words, expected), section) in cases.iter().zip(sections) {
         assert_eq!(candidates(section), *expected, "{shell} {words:?}");
     }
 }
@@ -167,14 +173,15 @@ fn bash_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let script = script("bash");
-    let cases: Vec<&[&str]> = CASES.iter().map(|(words, _)| *words).collect();
+    let cases = with_free_text();
+    let words: Vec<&[&str]> = cases.iter().map(|(words, _)| *words).collect();
     let output = run(
         &fixture.0,
         "bash",
         &["--noprofile", "--norc"],
-        &bash_probe(&script, &cases),
+        &bash_probe(&script, &words),
     );
-    assert_cases("bash", &output);
+    assert_cases("bash", &cases, &output);
 }
 
 #[test]
@@ -218,7 +225,8 @@ fn fish_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let mut probe = script("fish");
-    for (words, _) in CASES {
+    let cases = with_free_text();
+    for (words, _) in &cases {
         let line = format!("rshellcheck {}", words.join(" "));
         let _ = std::fmt::Write::write_fmt(
             &mut probe,
@@ -226,7 +234,15 @@ fn fish_completes_options_values_and_files() {
         );
     }
     let output = run(&fixture.0, "fish", &["--no-config"], &probe);
-    assert_cases("fish", &output);
+    let sections: Vec<&str> = output.split("==CASE\n").skip(1).collect();
+    assert_eq!(sections.len(), cases.len(), "fish: {output}");
+    for ((words, expected), section) in cases.iter().zip(sections) {
+        // Fish 4.2 also lists `--files-from` for `--fo`.
+        let word = words.last().copied().unwrap_or_default();
+        let mut found = candidates(section);
+        found.retain(|candidate| candidate.starts_with(word));
+        assert_eq!(found, *expected, "fish {words:?}");
+    }
 }
 
 #[test]
@@ -290,7 +306,7 @@ fn powershell_completes_options_values_and_files() {
         ],
         "",
     );
-    assert_cases("powershell", &output);
+    assert_cases("powershell", CASES, &output);
 }
 
 /// Zsh's completion widgets need a terminal, so `compadd`, `compset` and
