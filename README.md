@@ -68,6 +68,16 @@ by default. Set `-j N` (or `--jobs N`) to choose the worker count; `-j 1`
 forces serial analysis. Quiet mode and invocations containing non-regular inputs
 remain serial. Diagnostics retain input order. More workers can increase peak memory.
 
+`rshellcheck --generate-completions SHELL` prints a completion script for
+`bash`, `zsh`, `fish` or `powershell`:
+
+```sh
+rshellcheck --generate-completions bash > ~/.local/share/bash-completion/completions/rshellcheck
+rshellcheck --generate-completions zsh > "${fpath[1]}/_rshellcheck"
+rshellcheck --generate-completions fish > ~/.config/fish/completions/rshellcheck.fish
+rshellcheck --generate-completions powershell >> "$PROFILE"
+```
+
 ### In your editor
 
 You can see ShellCheck suggestions directly in a variety of editors.

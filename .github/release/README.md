@@ -3,6 +3,10 @@
 `rshellcheck` is the Rust ShellCheck port. Extract the archive, put `rshellcheck`
 (or `rshellcheck.exe`) on your PATH, and run `rshellcheck --version`.
 
+`completions/` holds the completion scripts for Bash (`rshellcheck.bash`), Zsh
+(`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
+`rshellcheck --generate-completions SHELL` prints the same scripts.
+
 The binary is GPL-3.0-or-later; see `LICENSE.txt`. `BUILD.json` records the source
 commit, Cargo version, Rust toolchain and binary SHA-256. Each GitHub release
 also includes the corresponding source archive, `source.spdx.json`,

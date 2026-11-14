@@ -62,6 +62,13 @@ GO_PREFIX = "go/v"
 CROSS_VERSION = "0.2.5"
 NDK_VERSION = "30.0.16248370"
 ANDROID_API = 23
+# `--generate-completions` value and the file name each shell loads.
+COMPLETIONS = {
+    "bash": "rshellcheck.bash",
+    "zsh": "_rshellcheck",
+    "fish": "rshellcheck.fish",
+    "powershell": "rshellcheck.ps1",
+}
 DYNAMIC_CRT = re.compile(
     r"((vcruntime|msvcp|msvcr)\w*|ucrtbased?|api-ms-win-crt-[\w-]+)\.dll",
     re.IGNORECASE,
@@ -496,6 +503,29 @@ def emulated(target: Triple, binary: Path, entrypoint: str, *args: str) -> list[
     ]
 
 
+def completions() -> dict[str, bytes]:
+    """The scripts are the same for every target, and a cross-built binary
+    cannot print them on its build host, so a host build does."""
+    return {
+        name: run(
+            "cargo",
+            "run",
+            "--release",
+            "--locked",
+            "--quiet",
+            "-p",
+            "rshellcheck",
+            "--bin",
+            "rshellcheck",
+            "--",
+            "--generate-completions",
+            shell,
+            capture_output=True,
+        ).stdout.encode()
+        for shell, name in COMPLETIONS.items()
+    }
+
+
 def pack(
     target: Triple, label: str, binary: Path | None = None, dest: Path | None = None
 ) -> Path:
@@ -534,6 +564,8 @@ def pack(
             0o644,
         ),
     }
+    for name, script in completions().items():
+        files[f"completions/{name}"] = (script, 0o644)
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / archive_name(label, target)
     epoch = int(git("show", "-s", "--format=%ct", "HEAD"))

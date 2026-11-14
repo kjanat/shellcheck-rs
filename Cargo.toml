@@ -18,6 +18,8 @@ shellcheck-wasm  = { path = "crates/shellcheck-wasm" }
 
 # own shit
 actions-rs       = "0.1.2"
+fujo-complete    = "0.1.0"
+fujo-core        = { version = "0.1.0", default-features = false }
 json-schema-sort = { version = "0.1", default-features = false }
 
 # external

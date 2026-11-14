@@ -22,6 +22,13 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   name's extension implies, as the checker falls back to it
 - `cargo binstall rshellcheck` downloads the release binary instead of building
   from source
+- `--generate-completions SHELL` prints a completion script for bash, zsh, fish
+  or powershell, registered for `rshellcheck`. It completes options, the values
+  of `--format`, `--shell`, `--severity`, `--enable` and `--extended-analysis`,
+  and file paths. Release archives carry the scripts in `completions/`
+- `rshellcheck` has a default `completions` feature. Its build script generates
+  the scripts with `fujo-complete`; `--no-default-features` builds without the
+  option and without fujo
 
 ### Changed
 

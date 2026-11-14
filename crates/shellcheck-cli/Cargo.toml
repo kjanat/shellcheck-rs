@@ -30,7 +30,10 @@ pkg-fmt = "zip"
 pkg-fmt = "zip"
 
 [features]
-schema = ["dep:schemars"]
+default     = ["completions"]
+# `--generate-completions`: the build script generates the scripts with fujo.
+completions = ["dep:fujo-complete", "dep:fujo-core", "dep:rshellcheck-core"]
+schema      = ["dep:schemars"]
 
 [[bin]]
 name = "rshellcheck"
@@ -42,7 +45,15 @@ schemars                   = { workspace = true, optional = true }
 serde.workspace            = true
 serde_json.workspace       = true
 
+# The generator's unit tests compile it into the library.
+[dev-dependencies]
+fujo-complete.workspace = true
+fujo-core.workspace     = true
+
 [build-dependencies]
+fujo-complete        = { workspace = true, optional = true }
+fujo-core            = { workspace = true, optional = true }
+rshellcheck-core     = { workspace = true, optional = true }
 schemars             = { workspace = true, optional = true }
 serde.workspace      = true
 serde_json.workspace = true
