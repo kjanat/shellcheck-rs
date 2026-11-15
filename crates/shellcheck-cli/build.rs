@@ -46,7 +46,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     #[cfg(feature = "completions")]
     {
-        let assets = assets.join("completions");
+        let tree = assets;
+        let assets = tree.join("completions");
         let mut staged_names = String::new();
         for source in ["src/completion_generator.rs", "src/option_table.rs"] {
             println!("cargo:rerun-if-changed={source}");
@@ -63,6 +64,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             staged_names.push_str(shell.file_name());
             staged_names.push('\n');
         }
+        // A cached `target` may hold files an earlier revision staged.
+        prune(&tree, &["completions"])?;
+        prune(
+            &assets,
+            &option_table::Shell::ALL.map(option_table::Shell::file_name),
+        )?;
+        for directory in [&tree, &assets] {
+            println!("cargo:rerun-if-changed={}", directory.display());
+        }
         stage(&manifest, &staged_names)?;
         println!("cargo:rerun-if-changed={}", manifest.display());
     }
@@ -77,4 +87,21 @@ fn stage(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
         return Ok(());
     }
     std::fs::write(path, contents)
+}
+
+/// Removes every entry of `directory` whose name is not in `keep`.
+#[cfg(feature = "completions")]
+fn prune(directory: &std::path::Path, keep: &[&str]) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        if keep.iter().any(|name| entry.file_name() == *name) {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
