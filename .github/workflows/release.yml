@@ -689,9 +689,7 @@ jobs:
       - *co0
       - uses: *node
         with: { node-version: "26", registry-url: "https://registry.npmjs.org" }
-      - run: |
-          version="$(yq '.tools.npm' mise.toml)"
-          npm install --global "npm@${version}"
+      - run: npm install --global npm@latest
       - *py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: *dockerLogin
