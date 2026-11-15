@@ -388,7 +388,7 @@ Conformance against upstream is optional locally and required in CI. With GHC,
 Cabal and authenticated `gh` available, run:
 
 ```sh
-python tools/oracle.py
+tools/oracle.sh
 cargo conformance-gate
 cargo conformance-fuzz
 ```

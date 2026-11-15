@@ -1,8 +1,12 @@
 name: WASM core
 
 on:
-  pull_request:
-    paths: &PATHS [
+  # Every pull request: the `master` ruleset requires this job, and a job
+  # that a path filter skips never reports.
+  pull_request: null
+  push:
+    branches: [master]
+    paths: [
       "crates/**",
       "rust/**",
       "Cargo.*",
@@ -15,9 +19,6 @@ on:
       "uv.lock",
       ".github/workflows/wasm.yml",
     ]
-  push:
-    branches: [master]
-    paths: *PATHS
   workflow_dispatch:
 
 permissions: { contents: read }

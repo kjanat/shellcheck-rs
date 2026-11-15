@@ -7,7 +7,7 @@ Haskell reference source is fetched into an ignored cache; do not vendor it.
 - Unit tests: `cargo test --workspace --locked --lib --bins`.
 - Behavior snapshots: `cargo conformance-snapshot` (offline, no oracle).
 - Formatting: `dprint fmt`; lint: `cargo lint`.
-- Oracle: `python tools/oracle.py` (requires GHC, Cabal and gh).
+- Oracle: `tools/oracle.sh` (requires GHC, Cabal and gh).
 - Conformance: `cargo conformance-gate` and `cargo conformance-fuzz`.
 
 See UPSTREAM.md for the exact upstream revision, frozen corpus provenance and
@@ -122,7 +122,7 @@ We never diverge on:
    `crates/rshellcheck/upstream.json`, and add one table row per imported
    commit.
 2. Port each commit with its `prop_` tests in the matching Rust module.
-3. Rebuild the oracle with `python tools/oracle.py`.
+3. Rebuild the oracle with `tools/oracle.sh`.
 4. Run `cargo conformance-snapshot`, review the diff, commit it with the port.
 5. Run `cargo conformance-gate` and `cargo conformance-fuzz`.
 6. Preserve every Rust-only regression test and the SC2164 correction.

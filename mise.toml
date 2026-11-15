@@ -121,4 +121,4 @@ run = "cargo mutants"
 
 [tasks.oracle]
 description = "Fetch and build the pinned upstream conformance oracle (requires GHC/Cabal)"
-run         = "python tools/oracle.py"
+run         = "tools/oracle.sh"

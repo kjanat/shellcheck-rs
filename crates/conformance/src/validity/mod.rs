@@ -1,6 +1,7 @@
 //! The validity matrix: each diagnostic's reproducer and its fix run in real
 //! shells, one container per shell and version. See `docs/validity.md`.
 
+mod affected;
 pub mod docker;
 pub mod matrix;
 pub mod outcomes;
@@ -38,6 +39,8 @@ pub enum Step {
     Build,
     /// Print the cell ids as a JSON array.
     Cells,
+    /// Print the ids of the cells whose image must be built as a JSON array.
+    Affected,
     /// Write the added dialects' outcomes to `dialect_rules.rs`.
     Rules,
 }
@@ -61,6 +64,11 @@ pub struct ValidityArgs {
     /// Only these cells, as `shell` or `shell:version`. Repeatable.
     #[arg(long, help_heading = "Validity")]
     pub cell: Vec<String>,
+
+    /// The commit to compare for changed build inputs (affected only).
+    /// Without it, the cells without a pushed image are affected.
+    #[arg(long, value_name = "COMMIT", help_heading = "Validity")]
+    pub base: Option<String>,
 
     /// Only these diagnostic codes. Repeatable.
     #[arg(long, help_heading = "Validity")]
@@ -111,6 +119,14 @@ pub fn run(step: Step, args: &ValidityArgs) -> Result<bool, String> {
         Step::Cells => {
             let matrix = matrix::load()?;
             let ids: Vec<String> = matrix.cells(&args.cell).map(matrix::Cell::id).collect();
+            println!(
+                "{}",
+                serde_json::to_string(&ids).map_err(|e| e.to_string())?
+            );
+            Ok(true)
+        }
+        Step::Affected => {
+            let ids = affected::affected(args.base.as_deref(), Path::new("."))?;
             println!(
                 "{}",
                 serde_json::to_string(&ids).map_err(|e| e.to_string())?
