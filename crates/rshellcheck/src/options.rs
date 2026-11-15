@@ -51,9 +51,10 @@ pub enum Outcome {
     PrintHelp,
     /// Print the (currently empty) optional-check listing to stdout and exit 0.
     ListOptional,
-    /// Print the completion script for this shell to stdout and exit 0.
+    /// Print the completion script for this shell, or for the detected one
+    /// when `None`, to stdout and exit 0.
     #[cfg(feature = "completions")]
-    Completions(completions::Shell),
+    Completions(Option<completions::Shell>),
     /// Print `message` to stderr and exit with `code` (3 or 4).
     Error {
         /// What to print.
@@ -349,7 +350,7 @@ fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, OsString>) -> OptResult 
         (ArgKind::None, Some(_)) => {
             return OptResult::Error(format!("option `--{name}' doesn't allow an argument\n"));
         }
-        (ArgKind::Required, Some(v)) => Some(v.to_string()),
+        (ArgKind::Required | ArgKind::Optional, Some(v)) => Some(v.to_string()),
         (ArgKind::Required, None) => match rest.next() {
             Some(v) => Some(v.to_string_lossy().into_owned()),
             None => {
@@ -359,12 +360,30 @@ fn long_opt(long: &str, rest: &mut std::slice::Iter<'_, OsString>) -> OptResult 
                 ));
             }
         },
-        (ArgKind::Optional, v) => v.map(str::to_string),
+        (ArgKind::Optional, None) => separate_shell(def, rest),
     };
     OptResult::Opt(Flag {
         key: def.key,
         value,
     })
+}
+
+/// The word after a bare `--completions` when it names a shell, consumed.
+/// Every other optional value attaches with `=`, as in `getOpt`.
+#[cfg(feature = "completions")]
+fn separate_shell(def: &OptDef, rest: &mut std::slice::Iter<'_, OsString>) -> Option<String> {
+    if def.key != "completions" {
+        return None;
+    }
+    let next = rest.clone().next()?.to_str()?;
+    completions::from_name(next)?;
+    rest.next();
+    Some(next.to_string())
+}
+
+#[cfg(not(feature = "completions"))]
+const fn separate_shell(_: &OptDef, _: &mut std::slice::Iter<'_, OsString>) -> Option<String> {
+    None
 }
 
 /// A recognised option with a value that the option accepts. `parseOption`
@@ -501,18 +520,21 @@ fn parse_worker_count(value: &str) -> ControlFlow<Outcome, usize> {
     }
 }
 
-/// The script `--generate-completions` asks for; an unknown shell is a
-/// `SupportFailure` (exit 4).
+/// The script `--completions` asks for; without a value the caller detects
+/// the shell, and an unknown shell is a `SupportFailure` (exit 4).
 #[cfg(feature = "completions")]
 fn completions_outcome(flag: &Flag) -> Outcome {
-    completions::from_name(flag.value.as_deref().unwrap_or("")).map_or_else(
+    let Some(value) = flag.value.as_deref() else {
+        return Outcome::Completions(None);
+    };
+    completions::from_name(value).map_or_else(
         || {
             support_error(
-                "generate-completions",
+                "completions",
                 &completions::Shell::ALL.map(completions::Shell::name),
             )
         },
-        Outcome::Completions,
+        |shell| Outcome::Completions(Some(shell)),
     )
 }
 
@@ -796,20 +818,32 @@ mod tests {
 
     #[test]
     #[cfg(feature = "completions")]
-    fn generate_completions_names_one_of_the_four_shells() {
+    fn completions_names_a_shell_or_leaves_it_to_detection() {
         for shell in completions::Shell::ALL {
             for argv in [
-                vec!["--generate-completions", shell.name()],
-                vec![&*format!("--generate-completions={}", shell.name())],
+                vec!["--completions", shell.name()],
+                vec![&*format!("--completions={}", shell.name())],
+                vec!["--comp", shell.name()],
             ] {
-                assert_eq!(parse(&args(&argv)), Outcome::Completions(shell));
+                assert_eq!(parse(&args(&argv)), Outcome::Completions(Some(shell)));
             }
         }
-        for value in ["pwsh", "Bash", ""] {
+        assert_eq!(
+            parse(&args(&["--completions=/usr/bin/pwsh"])),
+            Outcome::Completions(Some(completions::Shell::Powershell))
+        );
+        for argv in [
+            vec!["--completions"],
+            vec!["--completions", "script.sh"],
+            vec!["--completions", "--", "zsh"],
+        ] {
+            assert_eq!(parse(&args(&argv)), Outcome::Completions(None), "{argv:?}");
+        }
+        for value in ["Bash", "sh", ""] {
             assert_eq!(
-                parse(&args(&["--generate-completions", value])),
+                parse(&args(&[&*format!("--completions={value}")])),
                 Outcome::Error {
-                    message: "Unknown value for --generate-completions. Valid options are: bash, zsh, fish, powershell".to_string(),
+                    message: "Unknown value for --completions. Valid options are: bash, zsh, fish, powershell".to_string(),
                     code: 4,
                 }
             );
@@ -818,30 +852,40 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "completions"))]
-    fn generate_completions_is_unrecognized_without_the_feature() {
-        match parse(&args(&["--generate-completions", "bash"])) {
+    fn completions_is_unrecognized_without_the_feature() {
+        match parse(&args(&["--completions", "bash"])) {
             Outcome::Error { message, code } => {
                 assert_eq!(code, 3);
                 assert!(
-                    message.starts_with("unrecognized option `--generate-completions'\n"),
+                    message.starts_with("unrecognized option `--completions'\n"),
                     "{message}"
                 );
-                assert!(!message.contains("--generate-completions="), "{message}");
+                assert!(!message.contains("--completions["), "{message}");
             }
             other => panic!("{other:?}"),
         }
     }
 
+    /// `--co` was upstream's abbreviation of `--color`; it now also prefixes
+    /// `--completions`.
     #[test]
     #[cfg(feature = "completions")]
-    fn generate_completions_leaves_the_upstream_abbreviations_unique() {
+    fn co_is_ambiguous_and_col_is_color() {
+        match parse(&args(&["--co=never", "script.sh"])) {
+            Outcome::Error { message, code } => {
+                assert_eq!(code, 3);
+                assert!(
+                    message.starts_with("option `--co' is ambiguous; could be one of:\n"),
+                    "{message}"
+                );
+                assert!(message.contains("--color[=WHEN]"), "{message}");
+                assert!(message.contains("--completions[=SHELL]"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
         assert_eq!(
-            run(&["--co=never", "script.sh"]).color,
+            run(&["--col=never", "script.sh"]).color,
             ColorOption::ColorNever
-        );
-        assert_eq!(
-            parse(&args(&["--g", "fish"])),
-            Outcome::Completions(completions::Shell::Fish)
         );
     }
 

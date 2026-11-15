@@ -145,11 +145,13 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     read the list from standard input. This option is processed in addition to
     any files specified on the command line.
 
-**--generate-completions** *SHELL*
+**--completions**[=*SHELL*]
 
 :   Print the completion script for *SHELL* (*bash*, *zsh*, *fish* or
-    *powershell*) and exit. Release archives carry the same scripts in
-    `completions/`.
+    *powershell*) and exit. *SHELL* may also follow as the next word. Without
+    it, print the script for the shell `$SHELL` names, or for *powershell*
+    when `$SHELL` names none and `$PSModulePath` is set. Release archives carry
+    the same scripts in `completions/`.
 
 
 # FORMATS

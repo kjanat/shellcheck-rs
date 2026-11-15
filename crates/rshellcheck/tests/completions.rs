@@ -1,4 +1,4 @@
-//! Loads the script `--generate-completions` prints into each shell and asks
+//! Loads the script `--completions` prints into each shell and asks
 //! that shell to complete `rshellcheck` command lines.
 #![cfg(all(unix, feature = "completions"))]
 
@@ -59,7 +59,7 @@ fn script(shell: &str) -> String {
     let output = bounded(
         Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
             .env_remove("SHELLCHECK_OPTS")
-            .args(["--generate-completions", shell]),
+            .args(["--completions", shell]),
         "",
         Duration::from_secs(30),
     )
@@ -67,6 +67,49 @@ fn script(shell: &str) -> String {
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     String::from_utf8(output.stdout).unwrap_or_else(|e| panic!("{shell} script: {e}"))
+}
+
+/// A bare `--completions` under `env` alone.
+fn detected(env: &[(&str, &str)]) -> Output {
+    bounded(
+        Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
+            .env_clear()
+            .envs(env.iter().copied())
+            .arg("--completions"),
+        "",
+        Duration::from_secs(30),
+    )
+    .unwrap_or_else(|e| panic!("run CLI: {e}"))
+}
+
+#[test]
+fn a_bare_flag_writes_the_script_of_the_detected_shell() {
+    for (env, shell) in [
+        (&[("SHELL", "/usr/bin/zsh")][..], "zsh"),
+        (
+            &[("SHELL", "/bin/bash"), ("PSModulePath", "/m")][..],
+            "bash",
+        ),
+        (
+            &[("SHELL", "/bin/dash"), ("PSModulePath", "/m")][..],
+            "powershell",
+        ),
+    ] {
+        let output = detected(env);
+        assert!(output.status.success(), "{env:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            script(shell),
+            "{env:?}"
+        );
+    }
+    let output = detected(&[("SHELL", "/bin/dash")]);
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "Could not detect your shell from $SHELL or $PSModulePath. Pass one: --completions=bash|zsh|fish|powershell\n"
+    );
 }
 
 /// Files avoid pipe backpressure (including stdin) while the parent enforces
@@ -182,15 +225,20 @@ fn quote(word: &str) -> String {
 /// candidates every shell offers for it, sorted.
 const CASES: &[(&[&str], &[&str])] = &[
     (&["--fo"], &["--format"]),
-    (&["--generate"], &["--generate-completions"]),
+    (&["--files-"], &["--files-from"]),
     (&["--format", "j"], &["json", "json1"]),
     (&["--format=g"], &["--format=gcc"]),
     (&["-fj"], &["-fjson", "-fjson1"]),
     (&["-xs", "z"], &["zsh"]),
     (&["-S", ""], &["error", "info", "style", "warning"]),
     (
-        &["--generate-completions", ""],
-        &["bash", "fish", "powershell", "zsh"],
+        &["--completions="],
+        &[
+            "--completions=bash",
+            "--completions=fish",
+            "--completions=powershell",
+            "--completions=zsh",
+        ],
     ),
     (&["--extended-analysis", ""], &["false", "true"]),
     (&["my"], &["my script.sh"]),
@@ -199,7 +247,7 @@ const CASES: &[(&[&str], &[&str])] = &[
     (&["-Cal"], &["-Calways"]),
     (&["--for", "j"], &["json", "json1"]),
     (&["--sh=z"], &["--sh=zsh"]),
-    (&["--g", "b"], &["bash"]),
+    (&["--completions=b"], &["--completions=bash"]),
     (&["-x", "--norc", "oth"], &["other.sh"]),
     (&["--rcfile", "my"], &["my script.sh"]),
     (&["--files-from=oth"], &["--files-from=other.sh"]),
@@ -442,7 +490,7 @@ fn zsh_asks_for_options_values_and_files() {
             &["--for", "j"],
             "<checkstyle> <diff> <gcc> <json> <json1> <quiet> <tty> \n",
         ),
-        (&["--g", "b"], "<bash> <zsh> <fish> <powershell> \n"),
+        (&["--comp=b"], "<bash> <zsh> <fish> <powershell> \n"),
         (&["-fj"], "compset -P -f\n<checkstyle>"),
         (&["-xs", "z"], "<sh> <bash> <dash> <ksh> <busybox> <zsh>"),
         (

@@ -62,6 +62,13 @@ fn main() -> ExitCode {
         }
         #[cfg(feature = "completions")]
         Outcome::Completions(shell) => {
+            let detected = || rshellcheck::completions::detect(&|key| std::env::var_os(key));
+            let Some(shell) = shell.or_else(detected) else {
+                eprintln!(
+                    "Could not detect your shell from $SHELL or $PSModulePath. Pass one: --completions=bash|zsh|fish|powershell"
+                );
+                return ExitCode::from(4);
+            };
             print!("{}", rshellcheck::completions::script(shell));
             return ExitCode::SUCCESS;
         }

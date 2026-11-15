@@ -21,7 +21,7 @@ fn staged_completions_match_the_binary() {
     for (shell, name) in shells {
         let output = Command::new(binary)
             .env_remove("SHELLCHECK_OPTS")
-            .args(["--generate-completions", shell])
+            .args(["--completions", shell])
             .output()
             .unwrap_or_else(|error| panic!("run {shell}: {error}"));
         assert!(output.status.success(), "{shell}: {:?}", output.stderr);

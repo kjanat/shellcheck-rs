@@ -31,7 +31,7 @@ pkg-fmt = "zip"
 
 [features]
 default     = ["completions"]
-# `--generate-completions`: the build script generates the scripts with fujo.
+# `--completions`: the build script generates the scripts with fujo.
 completions = ["dep:fujo-complete", "dep:fujo-core", "dep:rshellcheck-core"]
 schema      = ["dep:schemars"]
 

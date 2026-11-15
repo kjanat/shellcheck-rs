@@ -39,8 +39,12 @@ fn declare(def: &OptDef) -> Result<InputSchema, String> {
         ),
         "severity" => finish(flag::enumeration(def.long, SEVERITIES), def),
         "extended-analysis" => finish(flag::enumeration(def.long, ["true", "false"]), def),
+        // A bare `--completions` detects the shell at run time. fujo wants
+        // one of the choices as the value of the flag alone; only its own
+        // parser reads it, and rshellcheck parses its arguments itself.
         "completions" => finish(
-            flag::enumeration(def.long, Shell::ALL.map(Shell::name)),
+            flag::enumeration(def.long, Shell::ALL.map(Shell::name))
+                .optional_value(Shell::Bash.name().to_string()),
             def,
         ),
         "enable" => {
