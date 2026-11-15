@@ -15,6 +15,3 @@ ghc = "mise-ghcup:ghc"
 
 [plugins]
 "vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
-
-[settings]
-lockfile = true
