@@ -229,7 +229,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fbbb12848e585121de68b893d63c18d7581ec0093bdae49f18f1d98008e7428"
 dependencies = [
- "fujo-core",
+ "fujo-core 0.2.0",
 ]
 
 [[package]]
@@ -238,7 +238,18 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd7bd4022b964176d00350f4264da472695683056b0413f6702d932bc5113975"
 dependencies = [
- "fujo-error",
+ "fujo-error 0.2.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fujo-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21d78a1d19f407e2923107d0f77f09956738fa7f75cab3ec5477e0bf7483fd95"
+dependencies = [
+ "fujo-error 0.3.0",
  "serde",
  "serde_json",
 ]
@@ -248,6 +259,16 @@ name = "fujo-error"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f71a73e53b86254247528b80ad432153fee710324559fe73cb3b9bdd4dce5af8"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fujo-error"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb8e9c83ad57239d488de5c449ef688853ff177963cea2e0687cfde6049a6b9a"
 dependencies = [
  "serde",
  "serde_json",
@@ -436,7 +457,7 @@ name = "rshellcheck"
 version = "1.2.0"
 dependencies = [
  "fujo-complete",
- "fujo-core",
+ "fujo-core 0.3.0",
  "rshellcheck-core",
  "schemars",
  "serde",
