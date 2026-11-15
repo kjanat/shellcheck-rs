@@ -1,4 +1,4 @@
-name: Publish packages
+name: Publish rshellcheck release
 on:
   workflow_dispatch:
     inputs:
