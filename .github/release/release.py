@@ -535,14 +535,24 @@ def pack(
         ),
     }
     assets = binary.with_suffix(".assets")
-    if not assets.is_dir():
-        raise ValueError(f"Missing build assets: {assets}")
-    for path in sorted(assets.rglob("*")):
-        if path.is_file():
-            name = path.relative_to(assets).as_posix()
-            if name in files:
-                raise ValueError(f"Build asset conflicts with archive member: {name}")
-            files[name] = (path.read_bytes(), 0o644)
+    manifest = assets.with_name(f"{assets.name}.manifest")
+    if not manifest.is_file():
+        raise ValueError(f"Missing build assets manifest: {manifest}")
+    listed = set(manifest.read_text().splitlines())
+    staged = {
+        path.relative_to(assets).as_posix()
+        for path in assets.rglob("*")
+        if path.is_file()
+    }
+    if staged != listed:
+        raise ValueError(
+            f"Build assets differ from {manifest.name}: "
+            f"missing {sorted(listed - staged)}, unlisted {sorted(staged - listed)}"
+        )
+    for name in sorted(staged):
+        if name in files:
+            raise ValueError(f"Build asset conflicts with archive member: {name}")
+        files[name] = ((assets / name).read_bytes(), 0o644)
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / archive_name(label, target)
     epoch = int(git("show", "-s", "--format=%ct", "HEAD"))

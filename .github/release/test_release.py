@@ -94,6 +94,9 @@ def built(directory: Path, target: release.Triple, data: bytes) -> Path:
     assets.mkdir(parents=True, exist_ok=True)
     for name, script in SCRIPTS.items():
         _ = (assets / name).write_bytes(script)
+    _ = (binary.parent / "rshellcheck.assets.manifest").write_text(
+        "".join(f"completions/{name}\n" for name in SCRIPTS)
+    )
     return binary
 
 
@@ -340,6 +343,28 @@ class ReleaseTests(unittest.TestCase):
                 _ = release.pack(
                     "x86_64-unknown-linux-musl", "test", binary, directory / "dist"
                 )
+
+    def test_pack_requires_exactly_the_listed_assets(self):
+        target = "x86_64-unknown-linux-musl"
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            binary = built(directory, target, executable(target))
+            completions = binary.with_suffix(".assets") / "completions"
+            (completions / "rshellcheck.fish").unlink()
+            with self.assertRaisesRegex(
+                ValueError, r"missing \['completions/rshellcheck.fish'\], unlisted \[\]"
+            ):
+                _ = release.pack(target, "test", binary, directory / "dist")
+            for script in completions.iterdir():
+                script.unlink()
+            with self.assertRaisesRegex(ValueError, "Build assets differ"):
+                _ = release.pack(target, "test", binary, directory / "dist")
+            binary = built(directory, target, executable(target))
+            _ = (completions / "stale").write_bytes(b"")
+            with self.assertRaisesRegex(
+                ValueError, r"missing \[\], unlisted \['completions/stale'\]"
+            ):
+                _ = release.pack(target, "test", binary, directory / "dist")
 
     def test_archives_reproducible_and_executable(self):
         with tempfile.TemporaryDirectory() as temp:

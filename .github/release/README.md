@@ -7,7 +7,9 @@
 (`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
 `rshellcheck --generate-completions SHELL` prints the same scripts.
 `build.rs` writes those scripts into both `OUT_DIR` for embedding and
-`rshellcheck.assets/completions/` beside the target binary for packaging.
+`rshellcheck.assets/completions/` beside the target binary for packaging, and
+lists the staged files in `rshellcheck.assets.manifest` as its last step.
+The packager rejects a tree that differs from that list.
 The packager includes the staged asset tree without locating Cargo build outputs
 or inspecting the binary for completion contents.
 

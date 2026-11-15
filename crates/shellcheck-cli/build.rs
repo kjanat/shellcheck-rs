@@ -32,8 +32,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .and_then(std::path::Path::parent)
         .ok_or("OUT_DIR has no build profile directory")?;
     let assets = profile.join("rshellcheck.assets");
+    // The packager archives exactly the files this manifest lists.
+    let manifest = profile.join("rshellcheck.assets.manifest");
     #[cfg(not(feature = "completions"))]
     {
+        if manifest.is_file() {
+            std::fs::remove_file(&manifest)?;
+        }
         if assets.is_dir() {
             std::fs::remove_dir_all(&assets)?;
         }
@@ -42,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "completions")]
     {
         let assets = assets.join("completions");
+        let mut staged_names = String::new();
         for source in ["src/completion_generator.rs", "src/option_table.rs"] {
             println!("cargo:rerun-if-changed={source}");
         }
@@ -50,10 +56,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             let script = completion_generator::generate(shell)?;
             std::fs::write(out.join(shell.file_name()), &script)?;
             let staged = assets.join(shell.file_name());
-            std::fs::write(&staged, script)?;
+            stage(&staged, &script)?;
             // Restore staged artifacts if a cache cleanup deletes or replaces them.
             println!("cargo:rerun-if-changed={}", staged.display());
+            staged_names.push_str("completions/");
+            staged_names.push_str(shell.file_name());
+            staged_names.push('\n');
         }
+        stage(&manifest, &staged_names)?;
+        println!("cargo:rerun-if-changed={}", manifest.display());
     }
     Ok(())
+}
+
+/// Writes `contents` to `path` unless the file already holds them. Cargo
+/// reruns this script while a watched file is newer than the last run.
+#[cfg(feature = "completions")]
+fn stage(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    if std::fs::read(path).is_ok_and(|current| current == contents.as_bytes()) {
+        return Ok(());
+    }
+    std::fs::write(path, contents)
 }
