@@ -4,23 +4,9 @@ run-name: ${{ inputs.publish_existing && format('Publish {0} to {1}', inputs.pub
 on:
   push:
     tags: ["rshellcheck-v*"]
-  pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - ".github/release/**"
-      - ".cargo/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "tools/oracle.json"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "bindings/**"
-      - "docker/cli/**"
-      - "docker/binaries/**"
-      - "package.json"
-      - "package-lock.json"
-      - "crates/**"
-      - "rust/**"
+  # Every pull request: the `master` ruleset requires these jobs, and a job
+  # that a path filter skips never reports.
+  pull_request: null
   workflow_dispatch:
     inputs:
       publish_existing:
