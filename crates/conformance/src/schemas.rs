@@ -45,8 +45,8 @@ const ENTRIES: [Entry; 7] = [
     },
     Entry {
         name: "wasm-request",
-        title: "shellcheck-wasm request",
-        schema: input::<shellcheck_wasm::Request>,
+        title: "rshellcheck-wasm request",
+        schema: input::<rshellcheck_wasm::Request>,
     },
     Entry {
         name: "json1-output",

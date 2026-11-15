@@ -54,6 +54,11 @@ fn main() -> ExitCode {
             print!("{}", options::list_optional_text());
             return ExitCode::SUCCESS;
         }
+        #[cfg(feature = "completions")]
+        Outcome::Completions(shell) => {
+            print!("{}", rshellcheck::completions::script(shell));
+            return ExitCode::SUCCESS;
+        }
         Outcome::Error { message, code } => {
             eprintln!("{message}");
             return ExitCode::from(code);

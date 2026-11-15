@@ -3,6 +3,16 @@
 `rshellcheck` is the Rust ShellCheck port. Extract the archive, put `rshellcheck`
 (or `rshellcheck.exe`) on your PATH, and run `rshellcheck --version`.
 
+`completions/` holds the completion scripts for Bash (`rshellcheck.bash`), Zsh
+(`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
+`rshellcheck --generate-completions SHELL` prints the same scripts.
+`build.rs` writes those scripts into both `OUT_DIR` for embedding and
+`rshellcheck.assets/completions/` beside the target binary for packaging, and
+lists the staged files in `rshellcheck.assets.manifest` as its last step.
+The packager rejects a tree that differs from that list.
+The packager includes the staged asset tree without locating Cargo build outputs
+or inspecting the binary for completion contents.
+
 The binary is GPL-3.0-or-later; see `LICENSE.txt`. `BUILD.json` records the source
 commit, Cargo version, Rust toolchain and binary SHA-256. Each GitHub release
 also includes the corresponding source archive, `source.spdx.json`,
@@ -41,7 +51,7 @@ on its `upstream:` line, and the `upstream-<version>` aliases below map that
 version to the newest port release.
 
 1. Set the same version in the `rshellcheck`, `rshellcheck-core` and
-   `shellcheck-wasm` manifests, in the `rshellcheck` and `rshellcheck-core`
+   `rshellcheck-wasm` manifests, in the `rshellcheck` and `rshellcheck-core`
    entries of `[workspace.dependencies]`, and in the four binding manifests
    under `bindings/`. Refresh `Cargo.lock` with `cargo check -p rshellcheck` and
    `package-lock.json` with `npm install --package-lock-only`, and include

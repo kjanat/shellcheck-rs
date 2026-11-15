@@ -138,10 +138,10 @@ dependencies = [
  "json-schema-sort",
  "rshellcheck",
  "rshellcheck-core",
+ "rshellcheck-wasm",
  "schemars",
  "serde",
  "serde_json",
- "shellcheck-wasm",
  "toml",
 ]
 
@@ -172,6 +172,36 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "fujo-complete"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fbbb12848e585121de68b893d63c18d7581ec0093bdae49f18f1d98008e7428"
+dependencies = [
+ "fujo-core",
+]
+
+[[package]]
+name = "fujo-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd7bd4022b964176d00350f4264da472695683056b0413f6702d932bc5113975"
+dependencies = [
+ "fujo-error",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fujo-error"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f71a73e53b86254247528b80ad432153fee710324559fe73cb3b9bdd4dce5af8"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "hashbrown"
@@ -346,6 +376,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "rshellcheck"
 version = "1.1.0"
 dependencies = [
+ "fujo-complete",
+ "fujo-core",
  "rshellcheck-core",
  "schemars",
  "serde",
@@ -359,6 +391,16 @@ dependencies = [
  "im-rc",
  "reblessive",
  "regex",
+]
+
+[[package]]
+name = "rshellcheck-wasm"
+version = "1.0.0"
+dependencies = [
+ "rshellcheck-core",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -462,16 +504,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "shellcheck-wasm"
-version = "1.0.0"
-dependencies = [
- "rshellcheck-core",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]

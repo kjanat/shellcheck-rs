@@ -187,7 +187,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with: { toolchain: "${{ needs.plan.outputs.rust }}", targets: wasm32-unknown-unknown }
       - name: Build portable core
-        run: cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
+        run: cargo build --release --locked -p rshellcheck-wasm --target wasm32-unknown-unknown
       - name: Test native package platform selection
         run: npm run test:native
       - name: Build installable distributions

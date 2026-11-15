@@ -1509,8 +1509,7 @@ impl Ctx {
         let calls = self
             .stack
             .last()
-            .map(|s| s.calls.clone())
-            .unwrap_or_default()
+            .map_or_default(|s| s.calls.clone())
             .push(call_site);
         let entry = StackEntry {
             entry_point: node,
@@ -1563,11 +1562,7 @@ impl Ctx {
         deps: &BTreeSet<StateDependency>,
     ) {
         let current = self.node;
-        let calls = self
-            .stack
-            .last()
-            .map(|s| s.calls.clone())
-            .unwrap_or_default();
+        let calls = self.stack.last().map_or_default(|s| s.calls.clone());
         self.invocations
             .insert((entry, current, calls), (deps.clone(), states));
     }

@@ -75,6 +75,31 @@ def executable(
     return bytes(data)
 
 
+SCRIPTS = {
+    name: f"# {name}\n".encode()
+    for name in (
+        "rshellcheck.bash",
+        "_rshellcheck",
+        "rshellcheck.fish",
+        "rshellcheck.ps1",
+    )
+}
+
+
+def built(directory: Path, target: release.Triple, data: bytes) -> Path:
+    """A target binary beside the assets staged by its build."""
+    binary = directory / ("rshellcheck.exe" if "windows" in target else "rshellcheck")
+    _ = binary.write_bytes(data)
+    assets = binary.with_suffix(".assets") / "completions"
+    assets.mkdir(parents=True, exist_ok=True)
+    for name, script in SCRIPTS.items():
+        _ = (assets / name).write_bytes(script)
+    _ = (binary.parent / "rshellcheck.assets.manifest").write_text(
+        "".join(f"completions/{name}\n" for name in SCRIPTS)
+    )
+    return binary
+
+
 class ReleaseTests(unittest.TestCase):
     def test_smoke_preserves_lf_input_on_windows(self):
         def invoke(
@@ -306,11 +331,40 @@ class ReleaseTests(unittest.TestCase):
     def pack(
         self, directory: Path, target: release.Triple, label: str = "test"
     ) -> Path:
-        binary = directory / (
-            "rshellcheck.exe" if "windows" in target else "rshellcheck"
-        )
-        _ = binary.write_bytes(executable(target))
+        binary = built(directory, target, executable(target))
         return release.pack(target, label, binary, directory / "dist")
+
+    def test_pack_requires_staged_assets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            binary = directory / "rshellcheck"
+            _ = binary.write_bytes(executable("x86_64-unknown-linux-musl"))
+            with self.assertRaisesRegex(ValueError, "Missing build assets"):
+                _ = release.pack(
+                    "x86_64-unknown-linux-musl", "test", binary, directory / "dist"
+                )
+
+    def test_pack_requires_exactly_the_listed_assets(self):
+        target = "x86_64-unknown-linux-musl"
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            binary = built(directory, target, executable(target))
+            completions = binary.with_suffix(".assets") / "completions"
+            (completions / "rshellcheck.fish").unlink()
+            with self.assertRaisesRegex(
+                ValueError, r"missing \['completions/rshellcheck.fish'\], unlisted \[\]"
+            ):
+                _ = release.pack(target, "test", binary, directory / "dist")
+            for script in completions.iterdir():
+                script.unlink()
+            with self.assertRaisesRegex(ValueError, "Build assets differ"):
+                _ = release.pack(target, "test", binary, directory / "dist")
+            binary = built(directory, target, executable(target))
+            _ = (completions / "stale").write_bytes(b"")
+            with self.assertRaisesRegex(
+                ValueError, r"missing \[\], unlisted \['completions/stale'\]"
+            ):
+                _ = release.pack(target, "test", binary, directory / "dist")
 
     def test_archives_reproducible_and_executable(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -322,7 +376,13 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(first, archive.read_bytes())
                 if archive.suffix == ".zip":
                     with zipfile.ZipFile(archive) as contents:
-                        self.assertEqual(len(contents.namelist()), 4)
+                        self.assertEqual(len(contents.namelist()), 8)
+                        self.assertEqual(
+                            contents.read(
+                                f"rshellcheck-test-{target}/completions/rshellcheck.ps1"
+                            ),
+                            SCRIPTS["rshellcheck.ps1"],
+                        )
                         binary = next(
                             x
                             for x in contents.infolist()
@@ -331,7 +391,20 @@ class ReleaseTests(unittest.TestCase):
                         self.assertEqual((binary.external_attr >> 16) & 0o777, 0o755)
                 else:
                     with tarfile.open(archive) as contents:
-                        self.assertEqual(len(contents.getmembers()), 4)
+                        self.assertEqual(len(contents.getmembers()), 8)
+                        for script in (
+                            "_rshellcheck",
+                            "rshellcheck.bash",
+                            "rshellcheck.fish",
+                        ):
+                            member = contents.getmember(
+                                f"rshellcheck-test-{target}/completions/{script}"
+                            )
+                            self.assertEqual(member.mode, 0o644)
+                            self.assertEqual(
+                                release.read_member(contents, member.name),
+                                SCRIPTS[script],
+                            )
                         self.assertEqual(
                             contents.getmember(
                                 f"rshellcheck-test-{target}/rshellcheck"

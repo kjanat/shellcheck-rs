@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createChecker } from './shellcheck.mjs';
 
 const bytes = readFileSync(
-	new URL('../../../target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm', import.meta.url),
+	new URL('../../../target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm', import.meta.url),
 );
 const fixtures = JSON.parse(readFileSync(new URL('../../../.cache/wasm-parity.json', import.meta.url), 'utf8'));
 const module = await WebAssembly.compile(bytes);

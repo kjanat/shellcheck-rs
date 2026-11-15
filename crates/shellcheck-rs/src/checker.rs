@@ -44,11 +44,7 @@ pub fn check_script_as(
         shell_hint: dialect
             .map(Dialect::floor)
             .or_else(|| shell_from_filename(&spec.filename)),
-        rc_annotations: spec
-            .rc
-            .as_ref()
-            .map(|rc| rc.annotations.clone())
-            .unwrap_or_default(),
+        rc_annotations: spec.rc.as_ref().map_or_default(|rc| rc.annotations.clone()),
         sys,
     });
 

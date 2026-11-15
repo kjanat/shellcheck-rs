@@ -33,7 +33,7 @@ class Checker:
         if wasm is None:
             wasm = (
                 files("rshellcheck_wasm_data")
-                .joinpath("shellcheck_wasm.wasm")
+                .joinpath("rshellcheck_wasm.wasm")
                 .read_bytes()
             )
         config = wasmtime.Config()

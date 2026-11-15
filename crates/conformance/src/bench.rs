@@ -225,9 +225,8 @@ pub fn run(args: &Args) -> Result<bool, String> {
         )
     } else {
         let src = Path::new(&args.repo).join("src/ShellCheck");
-        let seeds: Vec<String> = corpus::extract(&src)
-            .map(|e| e.into_iter().map(|x| x.script).collect())
-            .unwrap_or_default();
+        let seeds: Vec<String> =
+            corpus::extract(&src).map_or_default(|e| e.into_iter().map(|x| x.script).collect());
         (
             generate_input(&seeds, args.fuzzing.seed, args.bench.lines),
             format!(

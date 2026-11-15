@@ -8,7 +8,7 @@ import wasmtime
 from rshellcheck_wasm import JSON, Checker
 
 ROOT = Path(__file__).resolve().parents[3]
-WASM = ROOT / "target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm"
+WASM = ROOT / "target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm"
 
 
 def load_fixtures() -> list[tuple[dict[str, JSON], dict[str, JSON]]]:

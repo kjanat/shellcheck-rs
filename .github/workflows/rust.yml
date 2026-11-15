@@ -126,6 +126,9 @@ jobs:
       - name: Test rshellcheck-core
         run: cargo test -p rshellcheck-core
 
+      - name: Install the shells the completion tests load
+        run: sudo apt-get install -y --no-install-recommends zsh fish
+
       - name: Test rshellcheck
         run: cargo test -p rshellcheck
 
