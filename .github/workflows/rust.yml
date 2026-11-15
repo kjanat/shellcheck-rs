@@ -12,7 +12,6 @@ on:
       - "crates/**"
       - "rust/**"
       - "tools/oracle*"
-      - "tools/test_oracle.py"
       - "validity/**"
   pull_request: { paths: *PATHS }
 
@@ -82,12 +81,9 @@ jobs:
             ${{ format('{0}-{1}-', env.CACHE_PREFIX, hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**')) }}
             ${{ format('{0}-',     env.CACHE_PREFIX) }}
 
-      - name: Test oracle cache validation
-        run: python3 -m unittest discover -s tools -v
-
       - name: Fetch pinned upstream source
         env: { GH_TOKEN: "${{ github.token }}" }
-        run: python3 tools/oracle.py --fetch-only
+        run: tools/oracle.sh --fetch-only
 
       - name: Cache Haskell oracle
         id: oracle
@@ -96,7 +92,7 @@ jobs:
           path: |
             .cache/shellcheck-oracle
             .cache/shellcheck-oracle.json
-          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('tools/oracle.json', 'tools/oracle.py')) }}
+          key: ${{ format('{0}-{1}-oracle-ghc{2}-{3}', runner.os, runner.arch, env.ghc-version, hashFiles('tools/oracle.json', 'tools/oracle.sh')) }}
 
       - name: Setup Haskell
         if: &NoCacheHit steps.oracle.outputs.cache-hit != 'true'
@@ -111,14 +107,14 @@ jobs:
           path: |
             ${{ steps.haskell.outputs.cabal-store }}
             .cache/upstream-shellcheck/dist-newstyle
-          key: ${{ runner.os }}-${{ runner.arch }}-oracle-build-${{ env.ghc-version }}-${{ hashFiles('tools/oracle.json', 'tools/oracle.py') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-oracle-build-${{ env.ghc-version }}-${{ hashFiles('tools/oracle.json', 'tools/oracle.sh') }}
 
       - name: Build Haskell oracle
         if: *NoCacheHit
-        run: python3 tools/oracle.py
+        run: tools/oracle.sh
 
       - name: Verify cached oracle identity
-        run: python3 tools/oracle.py --verify-only
+        run: tools/oracle.sh --verify-only
 
       - name: Build Rust port (release)
         run: cargo build --release

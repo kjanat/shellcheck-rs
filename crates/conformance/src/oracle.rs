@@ -113,7 +113,7 @@ fn resolve(spec: &str) -> Result<PathBuf, String> {
     Err(format!(
         "oracle {spec}: not found on PATH. Pass --oracle with a path, or put \
          shellcheck on PATH, or build the pinned upstream oracle:\n    \
-         python tools/oracle.py"
+         tools/oracle.sh"
     ))
 }
 
@@ -568,7 +568,7 @@ pub fn verify(oracle: &Oracle, repo: &str, allow_mismatch: bool) -> Result<Strin
         return Err(format!(
             "oracle is version {actual}, but {} says {expected}.\n  \
              Build the pinned upstream oracle:\n    \
-             python tools/oracle.py\n  \
+             tools/oracle.sh\n  \
              To compare against this binary anyway, pass --any-oracle-version.",
             cabal_path.display()
         ));
@@ -640,7 +640,7 @@ pub fn test_oracle() -> Option<Oracle> {
     });
     Oracle::new(&spec)
         .inspect_err(|e| {
-            println!("skipped: no oracle at {spec}: {e} (build one: python tools/oracle.py)");
+            println!("skipped: no oracle at {spec}: {e} (build one: tools/oracle.sh)");
         })
         .ok()
 }

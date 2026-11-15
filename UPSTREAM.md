@@ -76,7 +76,7 @@ or disabled at runtime.
 
 `tools/oracle.json` pins the external oracle source, and
 `crates/rshellcheck/upstream.json` carries the same pin into the published
-`rshellcheck` package. A conformance test fails when the two differ. Run `python tools/oracle.py`
+`rshellcheck` package. A conformance test fails when the two differ. Run `tools/oracle.sh`
 with GHC, Cabal and `gh` installed to fetch and build it. The helper refuses a
 modified or differently pinned checkout, and records the source revision and
 binary SHA-256. `--verify-only` checks that record without rebuilding.
