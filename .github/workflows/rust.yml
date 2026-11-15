@@ -3,7 +3,7 @@ name: Rust port conformance
 on:
   push:
     branches: [master]
-    paths: &PATHS
+    paths:
       - "mise.toml"
       - ".github/workflows/rust.yml"
       - "**/Cargo.*"
@@ -13,7 +13,9 @@ on:
       - "rust/**"
       - "tools/oracle*"
       - "validity/**"
-  pull_request: { paths: *PATHS }
+  # Every pull request: the `master` ruleset requires these jobs, and a job
+  # that a path filter skips never reports.
+  pull_request: null
 
 concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
 permissions: { contents: read }
