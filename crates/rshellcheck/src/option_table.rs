@@ -175,7 +175,7 @@ pub const OPTS: &[OptDef] = &[
         help: "Allow 'source' outside of FILES",
     },
     OptDef {
-        short: None,
+        short: Some('h'),
         long: "help",
         key: "help",
         kind: ArgKind::None,

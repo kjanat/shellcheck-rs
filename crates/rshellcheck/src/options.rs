@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn an_unknown_dash_argument_is_a_file_only_when_the_file_exists() {
-        let names = ["-.sh", "-nope.sh", "--bogus", "-h"];
+        let names = ["-.sh", "-nope.sh", "--bogus", "-y"];
         let exists = |name: &str| names.contains(&name);
         match super::parse(&args(&names), &exists) {
             Outcome::Run(c) => {
@@ -894,14 +894,15 @@ mod tests {
             }
             other => panic!("expected Run, got {other:?}"),
         }
-        match parse(&args(&["-h"])) {
+        match parse(&args(&["-y"])) {
             Outcome::Error { code, message } => {
                 assert_eq!(code, 3);
-                assert!(message.starts_with("unrecognized option `-h'\n\nUsage:"));
+                assert!(message.starts_with("unrecognized option `-y'\n\nUsage:"));
             }
             other => panic!("expected Error(3), got {other:?}"),
         }
         assert_eq!(run(&["--", "-h"]).inputs, [PathBuf::from("-h")]);
+        assert_eq!(parse(&args(&["-h"])), Outcome::PrintHelp);
     }
 
     #[test]

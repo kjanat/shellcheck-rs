@@ -18,6 +18,7 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 - SC2114 covers `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys` and
   more of `/usr`, and globs such as `rm -rf /boot/*`
 - `--list-optional` prints `id:` and `wiki:` for each optional check
+- `-h` is `--help`
 - `rshellcheck_core::checker::shell_from_filename` is public: the shell a file
   name's extension implies, as the checker falls back to it
 - `cargo binstall rshellcheck` downloads the release binary instead of building

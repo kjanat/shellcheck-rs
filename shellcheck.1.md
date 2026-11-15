@@ -69,7 +69,7 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     standard output. Subsequent **-f** options are ignored, see **FORMATS**
     below for more information.
 
-**--help**
+**-h**,\ **--help**
 
 :   Show a usage summary and exit.
 
