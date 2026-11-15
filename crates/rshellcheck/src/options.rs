@@ -376,6 +376,9 @@ fn separate_shell(def: &OptDef, rest: &mut std::slice::Iter<'_, OsString>) -> Op
         return None;
     }
     let next = rest.clone().next()?.to_str()?;
+    if next.starts_with('-') {
+        return None;
+    }
     completions::from_name(next)?;
     rest.next();
     Some(next.to_string())
@@ -838,6 +841,16 @@ mod tests {
             vec!["--completions", "--", "zsh"],
         ] {
             assert_eq!(parse(&args(&argv)), Outcome::Completions(None), "{argv:?}");
+        }
+        match parse(&args(&["--completions", "--bogus=/bin/zsh"])) {
+            Outcome::Error { message, code } => {
+                assert_eq!(code, 3);
+                assert!(
+                    message.starts_with("unrecognized option `--bogus=/bin/zsh'\n"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected an option error, got {other:?}"),
         }
         for value in ["Bash", "sh", ""] {
             assert_eq!(
