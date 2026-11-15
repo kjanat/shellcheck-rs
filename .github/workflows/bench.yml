@@ -1,0 +1,175 @@
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds: { description: Shuffled rounds, default: "4" }
+      runs: { description: Timed runs per round, default: "5" }
+      warmup: { description: Warm-ups per round, default: "1" }
+      max_run_seconds: { description: Repeat only workloads below this many seconds; slower workloads retain a complete sweep, default: "2" }
+      scenarios: { description: Comma-separated workload subset, default: "" }
+  push:
+    branches: [bench]
+    paths: [src/**, tests/**, pyproject.toml, uv.lock, mise.toml, mise.lock, .github/workflows/bench.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_YES: "1"
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
+jobs:
+  resolve:
+    name: Resolve exact candidate identities
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    outputs: { candidates: "${{ steps.plan.outputs.candidates }}" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv github:koalaman/shellcheck" }
+      - name: Prepare bench plan
+        run: uv run bench prepare --resolve-only --plan .bench/plan.json
+      - name: Resolve once
+        id: plan
+        shell: "uv run python {0}"
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          plan = json.loads(Path('.bench/plan.json').read_text())
+          matrix = [
+              {key: item[key] for key in ('name', 'key', 'layers_key')}
+              | {'build': item['spec']['build'] if item['source'] else 'binary', 'cabal': 'cabal' in item['spec']['tools']}
+              for item in plan['builds']
+          ]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('candidates=' + json.dumps(matrix, separators=(',', ':')) + '\n')
+      - uses: actions/upload-artifact@v7
+        with: { name: candidate-plan, path: .bench/plan.json, include-hidden-files: true }
+
+  prepare:
+    name: Prepare ${{ matrix.name }}
+    needs: resolve
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.candidates) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv github:koalaman/shellcheck" }
+      - uses: actions/download-artifact@v8
+        with: { name: candidate-plan, path: .bench }
+      - name: Restore completed binary and provenance
+        id: binary
+        uses: actions/cache/restore@v6
+        with: &BinaryCache
+          path: .bench/cache/${{ matrix.name }}/${{ matrix.key }}
+          key: bench-binary-${{ matrix.name }}-${{ matrix.key }}
+      - name: Restore compatible build layers
+        id: layers
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.build != 'binary'
+        uses: actions/cache/restore@v6
+        with:
+          path: &BuildLayers |
+            .bench/build/${{ matrix.name }}
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            ~/.local/share/mise/installs
+            ~/.local/share/mise/plugins
+            ~/.rustup/toolchains
+          key: bench-layers-${{ matrix.name }}-${{ matrix.layers_key }}-${{ matrix.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bench-layers-${{ matrix.name }}-${{ matrix.layers_key }}-
+      - name: Restore Rust dependency downloads
+        id: dependencies
+        if: steps.binary.outputs.cache-hit != 'true' && matrix.build == 'cargo'
+        uses: actions/cache/restore@v6
+        with:
+          path: .bench/dependencies/cargo
+          key: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bench-dependencies-${{ matrix.name }}-${{ matrix.layers_key }}-
+      - name: Install GHC system libraries
+        if: matrix.cabal
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
+      - name: Prepare or verify cached binary
+        run: uv run bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"
+        env: { CANDIDATE: "${{ matrix.name }}" }
+      - name: Save completed binary
+        if: ${{ steps.binary.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with: *BinaryCache
+      - name: Preserve build layers, including recoverable partial builds
+        if: ${{ !cancelled() && steps.layers.outcome == 'success' && steps.layers.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: *BuildLayers
+          key: ${{ steps.layers.outputs.cache-primary-key }}
+      - name: Preserve downloaded dependencies
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: .bench/dependencies/cargo
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prepared-${{ matrix.name }}
+          path: .bench/prepared/${{ matrix.name }}
+          include-hidden-files: true
+
+  measure:
+    name: Measure all candidates together
+    needs: prepare
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv hyperfine github:kjanat/dprint" }
+      - name: Install measurement runtime dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
+      - uses: actions/download-artifact@v8
+        with: { name: candidate-plan, path: .bench }
+      - uses: actions/download-artifact@v8
+        with: { pattern: prepared-*, path: .bench/artifacts }
+      - name: Assemble and verify prepared artifacts
+        run: |
+          mkdir -p .bench/prepared
+          for directory in .bench/artifacts/prepared-*; do mv "${directory}" ".bench/prepared/${directory##*/prepared-}"; done
+          # Artifacts drop the executable bit of every published binary, the judge included.
+          find .bench/prepared -mindepth 3 -maxdepth 3 -type f \( -name rshellcheck -o -name judge \) -exec chmod +x {} +
+          uv run bench prepare --verify --plan .bench/plan.json
+      - name: Restore pinned Omarchy source
+        uses: actions/cache@v6
+        with:
+          path: .bench/corpora/omarchy-source
+          key: bench-corpus-omarchy-${{ runner.os }}-${{ hashFiles('src/bench/corpora.toml') }}
+      - name: Generate synthetic and pinned Omarchy workloads
+        run: uv run bench corpus --omarchy --out .bench/corpus
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - name: Measure
+        env:
+          ROUNDS: ${{ inputs.rounds || '4' }}
+          RUNS: ${{ inputs.runs || '5' }}
+          WARMUP: ${{ inputs.warmup || '1' }}
+          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '2' }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: uv run bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
+          ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
+      - name: Report
+        run: uv run bench report .bench/results/ci
+      - uses: actions/upload-artifact@v7
+        id: results
+        if: ${{ !cancelled() }}
+        with: { name: bench-results, path: .bench/results/ci, include-hidden-files: true, retention-days: 90 }
+      - name: Publish summary with evidence download links
+        shell: bash
+        env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
+        run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | dprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
