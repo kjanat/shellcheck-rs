@@ -68,24 +68,26 @@ by default. Set `-j N` (or `--jobs N`) to choose the worker count; `-j 1`
 forces serial analysis. Quiet mode and invocations containing non-regular inputs
 remain serial. Diagnostics retain input order. More workers can increase peak memory.
 
-`rshellcheck --generate-completions SHELL` prints a completion script for
-`bash`, `zsh`, `fish` or `powershell`:
+`rshellcheck --completions` prints the completion script for the shell `$SHELL`
+names, or for PowerShell when `$SHELL` names none and `$PSModulePath` is set.
+`--completions=SHELL` (or `--completions SHELL`) picks `bash`, `zsh`, `fish` or
+`powershell`:
 
 ```sh
 mkdir -p ~/.local/share/bash-completion/completions
-rshellcheck --generate-completions bash > ~/.local/share/bash-completion/completions/rshellcheck
+rshellcheck --completions bash > ~/.local/share/bash-completion/completions/rshellcheck
 
 mkdir -p ~/.zfunc
-rshellcheck --generate-completions zsh > ~/.zfunc/_rshellcheck
+rshellcheck --completions zsh > ~/.zfunc/_rshellcheck
 
 mkdir -p ~/.config/fish/completions
-rshellcheck --generate-completions fish > ~/.config/fish/completions/rshellcheck.fish
+rshellcheck --completions fish > ~/.config/fish/completions/rshellcheck.fish
 ```
 
 ```powershell
 $dir = Split-Path $PROFILE
 New-Item -ItemType Directory -Force $dir | Out-Null
-rshellcheck --generate-completions powershell |
+rshellcheck --completions powershell |
   Set-Content -Encoding utf8 (Join-Path $dir rshellcheck.ps1)
 Add-Content $PROFILE '. (Join-Path $PSScriptRoot rshellcheck.ps1)'
 ```

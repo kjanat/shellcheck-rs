@@ -1,6 +1,43 @@
 # rshellcheck
 
-## Unreleased
+## [Unreleased]
+
+### Added
+
+- `-h` is `--help`
+
+### Changed
+
+- `--generate-completions SHELL` is `--completions[=SHELL]`. Without a value it
+  writes the script for the shell `$SHELL` names, or for PowerShell when
+  `$PSModulePath` is set. `--co` no longer abbreviates `--color`, since it also
+  prefixes `--completions`
+- Zsh completion lists the spellings of one option on one line with its
+  description, and offers options only after `-`
+
+## [1.2.0] - 2026-11-15
+
+Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
+
+### Added
+
+- `cargo binstall rshellcheck` downloads the release binary instead of building
+  from source
+- `--generate-completions SHELL` prints a completion script for bash, zsh, fish
+  or powershell, registered for `rshellcheck`. It completes options, the values
+  of `--format`, `--shell`, `--severity`, `--enable` and `--extended-analysis`,
+  and file paths. Release archives carry the scripts in `completions/`
+- `rshellcheck` has a default `completions` feature. Its build script generates
+  the scripts with `fujo-complete`; `--no-default-features` builds without the
+  option and without fujo
+
+### Changed
+
+- The WASM crate `shellcheck-wasm` is `rshellcheck-wasm`, and the module in the
+  npm and PyPI packages is `rshellcheck_wasm.wasm`. The npm export
+  `@kjanat/rshellcheck-wasm/wasm` resolves to it
+
+## [1.1.0] - 2026-11-10
 
 Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 
@@ -20,15 +57,6 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 - `--list-optional` prints `id:` and `wiki:` for each optional check
 - `rshellcheck_core::checker::shell_from_filename` is public: the shell a file
   name's extension implies, as the checker falls back to it
-- `cargo binstall rshellcheck` downloads the release binary instead of building
-  from source
-- `--generate-completions SHELL` prints a completion script for bash, zsh, fish
-  or powershell, registered for `rshellcheck`. It completes options, the values
-  of `--format`, `--shell`, `--severity`, `--enable` and `--extended-analysis`,
-  and file paths. Release archives carry the scripts in `completions/`
-- `rshellcheck` has a default `completions` feature. Its build script generates
-  the scripts with `fujo-complete`; `--no-default-features` builds without the
-  option and without fujo
 
 ### Changed
 
@@ -40,14 +68,11 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   `rshellcheck` and the analysis library `shellcheck-rs` is `rshellcheck-core`,
   imported as `rshellcheck` and `rshellcheck_core`. Each carries a README and
   crates.io metadata. Installs from git name `rshellcheck`
-- The WASM crate `shellcheck-wasm` is `rshellcheck-wasm`, and the module in the
-  npm and PyPI packages is `rshellcheck_wasm.wasm`. The npm export
-  `@kjanat/rshellcheck-wasm/wasm` resolves to it
 
 ### Fixed
 
 - The SC2292 fix adds no second `]` when the test was closed with `]]`
-  (upstream #3558)
+  ([upstream #3558](https://github.com/koalaman/shellcheck/pull/3558))
 - SC2030/SC2031 check a function body apart from the subshells around its
   definition
 - SC2218 accepts a Bats test that calls a function defined later outside tests
@@ -73,7 +98,7 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   script checks 5% faster than before the nesting fixes, which cost nothing on
   shorter scripts
 
-## v1.0.0 - 2026-10-15
+## [1.0.0] - 2026-10-15
 
 Upstream: ShellCheck 0.11.0 at `98deabe126a2`.
 
@@ -93,7 +118,7 @@ Upstream: ShellCheck 0.11.0 at `98deabe126a2`.
   for breaking CLI or API changes. The `upstream-<version>` aliases on npm,
   ghcr.io and git name the newest port release of an upstream version.
 
-## v0.11.0 - 2026-10-12
+## [0.11.0] - 2026-10-12
 
 Upstream: ShellCheck 0.11.0 at `98deabe126a2`, including these changes after
 the upstream 0.11.0 release:
@@ -113,6 +138,12 @@ the upstream 0.11.0 release:
 ### Removed
 
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024
+
+[Unreleased]: https://github.com/kjanat/shellcheck-rs/compare/rshellcheck-v1.2.0...HEAD
+[1.2.0]: https://github.com/kjanat/shellcheck-rs/compare/rshellcheck-v1.1.0...rshellcheck-v1.2.0
+[1.1.0]: https://github.com/kjanat/shellcheck-rs/compare/rshellcheck-v1.0.0...rshellcheck-v1.1.0
+[1.0.0]: https://github.com/kjanat/shellcheck-rs/compare/rshellcheck-v0.11.0...rshellcheck-v1.0.0
+[0.11.0]: https://github.com/kjanat/shellcheck-rs/releases/tag/rshellcheck-v0.11.0
 
 # ShellCheck
 

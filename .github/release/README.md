@@ -5,7 +5,7 @@
 
 `completions/` holds the completion scripts for Bash (`rshellcheck.bash`), Zsh
 (`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
-`rshellcheck --generate-completions SHELL` prints the same scripts.
+`rshellcheck --completions=SHELL` prints the same scripts.
 `build.rs` writes scripts and a generic asset bundle only into its Cargo-owned
 `OUT_DIR`. After the final binary build, the release builder explicitly exports
 that build's bundle using Cargo's artifact messages, including on cached builds.

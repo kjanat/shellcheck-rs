@@ -88,7 +88,7 @@ class AssetLifecycleTests(unittest.TestCase):
                         ("powershell", "rshellcheck.ps1"),
                     ):
                         output = subprocess.check_output(
-                            [str(binary), "--generate-completions", shell],
+                            [str(binary), "--completions", shell],
                             env={**env, "SHELLCHECK_OPTS": ""},
                             timeout=10,
                         )
@@ -97,7 +97,7 @@ class AssetLifecycleTests(unittest.TestCase):
                         )
                 else:
                     result = subprocess.run(
-                        [str(binary), "--generate-completions", "bash"],
+                        [str(binary), "--completions", "bash"],
                         capture_output=True,
                         check=False,
                         timeout=10,

@@ -175,7 +175,7 @@ pub const OPTS: &[OptDef] = &[
         help: "Allow 'source' outside of FILES",
     },
     OptDef {
-        short: None,
+        short: Some('h'),
         long: "help",
         key: "help",
         kind: ArgKind::None,
@@ -193,15 +193,15 @@ pub const OPTS: &[OptDef] = &[
     #[cfg(feature = "completions")]
     OptDef {
         short: None,
-        long: "generate-completions",
+        long: "completions",
         key: "completions",
-        kind: ArgKind::Required,
+        kind: ArgKind::Optional,
         arg: "SHELL",
-        help: "Print a completion script (bash, zsh, fish, powershell)",
+        help: "Print a completion script (bash, zsh, fish, powershell; default: $SHELL)",
     },
 ];
 
-/// A shell `--generate-completions` writes a script for.
+/// A shell `--completions` writes a script for.
 #[cfg(feature = "completions")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -220,7 +220,7 @@ impl Shell {
     /// Every shell with a completion script.
     pub const ALL: [Self; 4] = [Self::Bash, Self::Zsh, Self::Fish, Self::Powershell];
 
-    /// The `--generate-completions` value naming this shell.
+    /// The `--completions` value naming this shell.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {

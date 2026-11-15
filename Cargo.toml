@@ -18,8 +18,8 @@ rshellcheck-wasm = { path = "crates/rshellcheck-wasm" }
 
 # own shit
 actions-rs       = "0.1.2"
-fujo-complete    = "0.2"
-fujo-core        = { version = "0.2", default-features = false }
+fujo-complete    = "0.3"
+fujo-core        = { version = "0.3", default-features = false }
 json-schema-sort = { version = "0.1", default-features = false }
 
 # external
