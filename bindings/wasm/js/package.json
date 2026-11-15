@@ -12,12 +12,12 @@
 	"exports": {
 		".": "./shellcheck.mjs",
 		"./worker": "./worker.mjs",
-		"./wasm": "./shellcheck_wasm.wasm"
+		"./wasm": "./rshellcheck_wasm.wasm"
 	},
 	"files": [
 		"shellcheck.mjs",
 		"worker.mjs",
-		"shellcheck_wasm.wasm",
+		"rshellcheck_wasm.wasm",
 		"LICENSE",
 		"README.md"
 	],

@@ -63,12 +63,12 @@ def prepare(dest: Path) -> None:
         binding_packages.verify(original)
         npm = next(p for p in record["packages"] if p["kind"] == "npm")
         contents = binding_packages.members(original / npm["name"])
-        wasm = original / "shellcheck_wasm.wasm"
+        wasm = original / "rshellcheck_wasm.wasm"
         _ = wasm.write_bytes(
             next(
                 data
                 for name, data in contents.items()
-                if name.endswith("/shellcheck_wasm.wasm")
+                if name.endswith("/rshellcheck_wasm.wasm")
             )
         )
         binding_packages.build(dest, wasm)

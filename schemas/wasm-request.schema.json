@@ -40,7 +40,7 @@
       ]
     }
   },
-  "title": "shellcheck-wasm request",
+  "title": "rshellcheck-wasm request",
   "description": "The JSON request that `check_json` analyzes.",
   "type": "object",
   "required": [

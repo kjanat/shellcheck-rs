@@ -9,7 +9,7 @@ import (
 )
 
 func TestNativeParity(t *testing.T) {
-	wasm, err := os.ReadFile("../../../target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm")
+	wasm, err := os.ReadFile("../../../target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm")
 	if err != nil {
 		t.Fatal(err)
 	}

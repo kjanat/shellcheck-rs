@@ -49,7 +49,7 @@ on its `upstream:` line, and the `upstream-<version>` aliases below map that
 version to the newest port release.
 
 1. Set the same version in the `rshellcheck`, `rshellcheck-core` and
-   `shellcheck-wasm` manifests, in the `rshellcheck` and `rshellcheck-core`
+   `rshellcheck-wasm` manifests, in the `rshellcheck` and `rshellcheck-core`
    entries of `[workspace.dependencies]`, and in the four binding manifests
    under `bindings/`. Refresh `Cargo.lock` with `cargo check -p rshellcheck` and
    `package-lock.json` with `npm install --package-lock-only`, and include

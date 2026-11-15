@@ -1,6 +1,6 @@
 # ShellCheck core for Go, Python and browsers
 
-One `shellcheck_wasm.wasm` runs in all three hosts. It contains the Rust analysis
+One `rshellcheck_wasm.wasm` runs in all three hosts. It contains the Rust analysis
 core and JSON adapter, with **no CLI, Haskell, H2R, WASI, filesystem or JavaScript
 imports**. No host callback is required. Licensed GPL-3.0-or-later, like the core;
 embedding it does not change its license.
@@ -9,10 +9,10 @@ embedding it does not change its license.
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo build --release --locked -p shellcheck-wasm --target wasm32-unknown-unknown
+cargo build --release --locked -p rshellcheck-wasm --target wasm32-unknown-unknown
 ```
 
-Output: `target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm`.
+Output: `target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm`.
 The **WASM core** CI workflow builds this module, tests all hosts and uploads a
 bundle of the module, wrappers, license, source commit and checksum. This is a
 CI artifact. Tagged releases also publish the JavaScript package to npm and Python bindings to PyPI.
@@ -29,7 +29,7 @@ automatically. Browser bundlers must preserve the exported `./wasm` asset.
 ```js
 import { createChecker } from '@kjanat/rshellcheck-wasm';
 
-const bytes = await (await fetch('./shellcheck_wasm.wasm')).arrayBuffer();
+const bytes = await (await fetch('./rshellcheck_wasm.wasm')).arrayBuffer();
 const checker = await createChecker(bytes);
 console.log(checker.check({ script: '#!/bin/sh\necho $value\n' }));
 checker.close();
@@ -48,7 +48,7 @@ name is `shellcheck`. Until published on the default branch, use a local `replac
 directive pointing to `bindings/wasm/go` or pin the integration commit.
 
 ```go
-wasm, err := os.ReadFile("shellcheck_wasm.wasm")
+wasm, err := os.ReadFile("rshellcheck_wasm.wasm")
 if err != nil { return err }
 checker, err := shellcheck.New(ctx, wasm)
 if err != nil { return err }
@@ -72,7 +72,7 @@ Install the local package with `pip install ./python` (from the artifact) or
 from pathlib import Path
 from rshellcheck_wasm import Checker
 
-with Checker(Path("shellcheck_wasm.wasm").read_bytes()) as checker:
+with Checker(Path("rshellcheck_wasm.wasm").read_bytes()) as checker:
     result = checker.check({"script": "#!/bin/sh\necho $value\n"})
     print(result["comments"])
 ```
@@ -147,7 +147,7 @@ metadata. Run Python commands with `uv run` from the root or a workspace member.
 ## Validation
 
 ```sh
-cargo build --release -p shellcheck-wasm --example check
+cargo build --release -p rshellcheck-wasm --example check
 python bindings/wasm/fixtures.py
 npm run test:wasm
 uv run --locked python -m unittest discover -s bindings/wasm/python -v
@@ -174,6 +174,6 @@ license. Install the downloaded file with `npm install ./PACKAGE.tgz` or
 
 After installation, `await createChecker()` in JavaScript or `Checker()` in Python
 loads the bundled module. Existing calls supplying WASM bytes still work.
-In browsers, serve `shellcheck_wasm.wasm` alongside `shellcheck.mjs`; bundlers can
+In browsers, serve `rshellcheck_wasm.wasm` alongside `shellcheck.mjs`; bundlers can
 resolve the exported `@kjanat/rshellcheck-wasm/wasm` asset. The module-worker protocol
 continues to accept explicit WASM bytes for initialization.

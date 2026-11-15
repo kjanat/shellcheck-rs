@@ -15,10 +15,10 @@ clap.workspace             = true
 json-schema-sort.workspace = true
 rshellcheck                = { workspace = true, features = ["schema"] }
 rshellcheck-core.workspace = true
+rshellcheck-wasm           = { workspace = true, features = ["schema"] }
 schemars.workspace         = true
 serde.workspace            = true
 serde_json.workspace       = true
-shellcheck-wasm            = { workspace = true, features = ["schema"] }
 toml.workspace             = true
 
 [lints]

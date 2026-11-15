@@ -11,7 +11,7 @@ test('browser worker agrees with native core', async ({ page }) => {
 			'/': 'bindings/wasm/js/test.html',
 			'/worker.mjs': 'bindings/wasm/js/worker.mjs',
 			'/shellcheck.mjs': 'bindings/wasm/js/shellcheck.mjs',
-			'/core.wasm': 'target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm',
+			'/core.wasm': 'target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm',
 			'/fixtures.json': '.cache/wasm-parity.json',
 		};
 		if (req.url === '/') {

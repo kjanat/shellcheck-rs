@@ -138,10 +138,10 @@ dependencies = [
  "json-schema-sort",
  "rshellcheck",
  "rshellcheck-core",
+ "rshellcheck-wasm",
  "schemars",
  "serde",
  "serde_json",
- "shellcheck-wasm",
  "toml",
 ]
 
@@ -394,6 +394,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rshellcheck-wasm"
+version = "1.0.0"
+dependencies = [
+ "rshellcheck-core",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -494,16 +504,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "shellcheck-wasm"
-version = "1.0.0"
-dependencies = [
- "rshellcheck-core",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]

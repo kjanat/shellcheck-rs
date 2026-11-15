@@ -75,7 +75,7 @@ def verify(dest: Path) -> None:
             raise ValueError(f"Package checksum mismatch: {name}")
         contents = members(path)
         wasm = [
-            data for n, data in contents.items() if n.endswith("/shellcheck_wasm.wasm")
+            data for n, data in contents.items() if n.endswith("/rshellcheck_wasm.wasm")
         ]
         if len(wasm) != 1 or digest(wasm[0]) != record["wasm_sha256"]:
             raise ValueError(f"Missing or mismatched WASM in {name}")
@@ -99,7 +99,7 @@ def build(dest: Path, wasm: Path | None = None) -> None:
         != meta["version"]
     ):
         raise ValueError("Python and Rust package versions must agree")
-    wasm = wasm or ROOT / "target/wasm32-unknown-unknown/release/shellcheck_wasm.wasm"
+    wasm = wasm or ROOT / "target/wasm32-unknown-unknown/release/rshellcheck_wasm.wasm"
     if not wasm.read_bytes().startswith(b"\0asm\x01\0\0\0"):
         raise ValueError("Missing valid core WASM module")
     with tempfile.TemporaryDirectory() as temp:

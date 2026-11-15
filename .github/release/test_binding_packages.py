@@ -54,7 +54,7 @@ class PackageTests(unittest.TestCase):
             ("sdist", "python.tar.gz"),
         ):
             contents = {
-                "package/shellcheck_wasm.wasm": b"\0asm\x01\0\0\0",
+                "package/rshellcheck_wasm.wasm": b"\0asm\x01\0\0\0",
                 "package/LICENSE": (ROOT / "LICENSE").read_bytes(),
             }
             if kind == "wheel":
