@@ -90,8 +90,9 @@ class AliasTests(unittest.TestCase):
     def test_git_promotion_is_last_and_verified(self):
         meta = {"version": "0.11.1", "commit": "a" * 40, "rust": "1.99.0"}
         alias = "upstream-0.11.0"
-        for exists in (False, True):
-            with self.subTest(exists=exists), tempfile.TemporaryDirectory() as temp:
+        for cli in (None, "shellcheck-cli", "rshellcheck"):
+            exists = cli is not None
+            with self.subTest(cli=cli), tempfile.TemporaryDirectory() as temp:
                 directory = Path(temp)
                 _ = (directory / MANIFEST).write_text('{"packages":[]}')
                 responses: list[object] = [
@@ -105,6 +106,7 @@ class AliasTests(unittest.TestCase):
                     else []
                 ]
                 if exists:
+                    responses.append([{"name": "conformance"}, {"name": cli}])
                     responses.append({
                         "content": base64.b64encode(
                             b'[package]\nversion="0.11.0"'
@@ -129,6 +131,12 @@ class AliasTests(unittest.TestCase):
                 ):
                     aliases.promote(directory)
                     self.assertEqual(image.call_count, 1 + len(release.TARGETS))
+                    if exists:
+                        self.assertEqual(
+                            api.call_args_list[2].args[0],
+                            "repos/kjanat/shellcheck-rs/contents/crates/"
+                            + f"{cli}/Cargo.toml?ref={'b' * 40}",
+                        )
                     self.assertIn(
                         "PATCH" if exists else "POST", api.call_args_list[-2].args
                     )

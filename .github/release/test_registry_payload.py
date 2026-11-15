@@ -25,6 +25,42 @@ class RegistryDispatchTests(unittest.TestCase):
             self.assertEqual(release.source_text(release.ROOT / "Cargo.toml"), "pinned")
             git.assert_called_once_with("show", f"{sha}:Cargo.toml")
 
+    def test_version_reads_both_crate_directory_generations(self) -> None:
+        sha = "a" * 40
+        for listing, cli, core in (
+            (
+                "conformance\nshellcheck-cli\nshellcheck-rs",
+                "shellcheck-cli",
+                "shellcheck-rs",
+            ),
+            (
+                "conformance\nrshellcheck\nrshellcheck-core",
+                "rshellcheck",
+                "rshellcheck-core",
+            ),
+        ):
+
+            def git(*args: str, listing: str = listing) -> str:
+                return listing if args[0] == "ls-tree" else '[package]\nversion="1.2.0"'
+
+            with (
+                self.subTest(cli=cli),
+                patch.dict(os.environ, {"RELEASE_SOURCE_COMMIT": sha}),
+                patch.object(release, "git", side_effect=git) as calls,
+            ):
+                self.assertEqual(release.cargo_version(), "1.2.0")
+                self.assertEqual(
+                    [
+                        call.args
+                        for call in calls.call_args_list
+                        if call.args[0] == "show"
+                    ],
+                    [
+                        ("show", f"{sha}:crates/{cli}/Cargo.toml"),
+                        ("show", f"{sha}:crates/{core}/Cargo.toml"),
+                    ],
+                )
+
     def test_invalid_source_commit_is_rejected(self) -> None:
         with (
             patch.dict(os.environ, {"RELEASE_SOURCE_COMMIT": "master"}),

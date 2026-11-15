@@ -986,9 +986,9 @@ echo '{"comments":[]}'"#,
             serde_json::from_str(&text).unwrap()
         };
         assert_eq!(
-            read("crates/shellcheck-cli/upstream.json"),
+            read("crates/rshellcheck/upstream.json"),
             read("tools/oracle.json"),
-            "copy the pin in tools/oracle.json to crates/shellcheck-cli/upstream.json"
+            "copy the pin in tools/oracle.json to crates/rshellcheck/upstream.json"
         );
     }
 }

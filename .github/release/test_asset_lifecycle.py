@@ -131,7 +131,7 @@ class AssetLifecycleTests(unittest.TestCase):
                 Path(event["out_dir"])
                 for event in events
                 if event.get("reason") == "build-script-executed"
-                and "#rshellcheck@" in event["package_id"]
+                and "/crates/rshellcheck#" in event["package_id"]
             )
             (producer / "release-assets.json").unlink()
             self.assertEqual(

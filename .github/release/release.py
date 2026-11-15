@@ -176,10 +176,28 @@ def unpack(fmt: str, data: bytes, offset: int = 0) -> int:
     return value
 
 
+def crate_manifest(*names: str) -> Path:
+    """The manifest of the first of `names` the release source holds.
+
+    Releases through 1.2.0 hold the crates in `shellcheck-cli` and
+    `shellcheck-rs`.
+    """
+    if os.environ.get("RELEASE_SOURCE_COMMIT"):
+        present = git(
+            "ls-tree", "--name-only", f"{source_commit()}:crates"
+        ).splitlines()
+    else:
+        present = [entry.name for entry in (ROOT / "crates").iterdir()]
+    return ROOT / "crates" / next(n for n in names if n in present) / "Cargo.toml"
+
+
 def cargo_version() -> str:
     versions = [
-        toml_string(ROOT / "crates" / crate / "Cargo.toml", "package", "version")
-        for crate in ("shellcheck-cli", "shellcheck-rs")
+        toml_string(crate_manifest(*names), "package", "version")
+        for names in (
+            ("rshellcheck", "shellcheck-cli"),
+            ("rshellcheck-core", "shellcheck-rs"),
+        )
     ]
     if versions[0] != versions[1]:
         raise ValueError("CLI and library versions must agree")

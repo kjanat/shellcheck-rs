@@ -55,7 +55,7 @@ The other 292 test the Checker's IO, `ASTLib` helpers, the EditorConfig reader
 and the like, and have no shell snippet to replay.
 
 Where an entry's port-side half can be checked without the oracle, it gets a
-`#[should_panic]` test in `crates/shellcheck-rs/src/parser/tests.rs`, which
+`#[should_panic]` test in `crates/rshellcheck-core/src/parser/tests.rs`, which
 asserts what upstream does. Fixing the port makes the assertion pass, which
 makes the test *fail* — the reminder to delete the marker and the entry here in
 the same commit. That is how A1, A3, B1, B2 and E1 came to be closed. There are
@@ -114,7 +114,7 @@ A section such as `[[z-a]]` ends upstream with regex-tdfa's
 `parseRegex ... failed` error and no output, for every input under that
 `.editorconfig`. The port reports SC1134 at the section header and exits 4, as
 for any other rejected EditorConfig file. Its globs compile through
-`crates/shellcheck-rs/src/tdfa.rs`, which accepts and rejects exactly what
+`crates/rshellcheck-core/src/tdfa.rs`, which accepts and rejects exactly what
 regex-tdfa's parser does, so this applies only to the globs upstream dies on.
 
 ### Z7. An internal error in the dataflow analysis
