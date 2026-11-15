@@ -232,7 +232,12 @@ def promote(directory: Path) -> None:
             f"{image}/binaries:{version}-{target}", f"{image}/binaries:{alias}-{target}"
         )
 
-    if existing:
+    if existing and existing["object"]["sha"] == meta["commit"]:
+        # GitHub refuses the job token a ref update, even an unchanged one,
+        # while the release commit's workflow files differ from the default
+        # branch.
+        print(f"{alias} already points to {meta['commit']}", flush=True)
+    elif existing:
         _ = api(
             f"{endpoint}/git/refs/tags/{alias}",
             "--method",

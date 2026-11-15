@@ -146,6 +146,36 @@ class AliasTests(unittest.TestCase):
                         )
                     )
 
+    def test_an_alias_already_on_the_release_commit_is_not_written(self):
+        meta = {"version": "0.11.1", "commit": "a" * 40, "rust": "1.99.0"}
+        alias = "upstream-0.11.0"
+        ref = {
+            "ref": f"refs/tags/{alias}",
+            "object": {"type": "commit", "sha": "a" * 40},
+        }
+        responses: list[object] = [
+            [ref],
+            [{"name": "rshellcheck"}],
+            {"content": base64.b64encode(b'[package]\nversion="0.11.1"').decode()},
+            {"commit": {"verification": {"verified": True}}},
+            ref,
+        ]
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            patch.dict(os.environ, {"GITHUB_REPOSITORY": "kjanat/shellcheck-rs"}),
+            patch.object(aliases, "metadata", return_value=meta),
+            patch.object(aliases, "verify_bindings"),
+            patch.object(aliases, "verify_native"),
+            patch.object(aliases, "load_record", return_value={"packages": []}),
+            patch.object(aliases, "api", side_effect=responses) as api,
+            patch.object(aliases, "promote_image"),
+        ):
+            _ = (Path(temp) / MANIFEST).write_text('{"packages":[]}')
+            aliases.promote(Path(temp))
+            self.assertEqual(api.call_count, len(responses))
+            for call in api.call_args_list:
+                self.assertNotIn("--method", call.args)
+
     def test_npm_only_promotion_does_not_write_git_or_docker_tags(self):
         with (
             patch.dict(
