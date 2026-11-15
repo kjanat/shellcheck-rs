@@ -20,7 +20,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  MISE_ENV: bench
   MISE_YES: "1"
+  # Python 3.15 `tomllib` reads the TOML 1.1 in `mise.toml`.
+  UV_PYTHON: "3.15"
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
@@ -28,28 +31,27 @@ jobs:
     name: Resolve exact candidate identities
     runs-on: ubuntu-26.04
     timeout-minutes: 15
-    outputs: { candidates: "${{ steps.plan.outputs.candidates }}" }
+    outputs:
+      candidates: ${{ steps.plan.outputs.candidates }}
+      harness: ${{ steps.harness.outputs.harness }}
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         with: { install_args: "python uv github:koalaman/shellcheck" }
+      - name: Pin the harness revision
+        id: harness
+        run: |
+          read -r sha _ < <(git ls-remote origin refs/heads/bench)
+          echo "harness=git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}@${sha}" >> "${GITHUB_OUTPUT}"
       - name: Prepare bench plan
-        run: uv run bench prepare --resolve-only --plan .bench/plan.json
+        run: uvx --from "${HARNESS}" bench prepare --resolve-only --plan .bench/plan.json
+        env: { HARNESS: "${{ steps.harness.outputs.harness }}" }
       - name: Resolve once
         id: plan
-        shell: "uv run python {0}"
         run: |
-          import json
-          import os
-          from pathlib import Path
-          plan = json.loads(Path('.bench/plan.json').read_text())
-          matrix = [
-              {key: item[key] for key in ('name', 'key', 'layers_key')}
-              | {'build': item['spec']['build'] if item['source'] else 'binary', 'cabal': 'cabal' in item['spec']['tools']}
-              for item in plan['builds']
-          ]
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('candidates=' + json.dumps(matrix, separators=(',', ':')) + '\n')
+          jq -c '"candidates=" + ([.builds[] | {name, key, layers_key}
+            + {build: (if (.source // "") != "" then .spec.build else "binary" end), cabal: (.spec.tools | index("cabal") != null)}] | tojson)' \
+            -r .bench/plan.json >> "${GITHUB_OUTPUT}"
       - uses: actions/upload-artifact@v7
         with: { name: candidate-plan, path: .bench/plan.json, include-hidden-files: true }
 
@@ -100,8 +102,8 @@ jobs:
         if: matrix.cabal
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libgmp-dev libnuma-dev zlib1g-dev pkg-config
       - name: Prepare or verify cached binary
-        run: uv run bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"
-        env: { CANDIDATE: "${{ matrix.name }}" }
+        run: uvx --from "${HARNESS}" bench prepare --plan .bench/plan.json --candidates "${CANDIDATE}"
+        env: { CANDIDATE: "${{ matrix.name }}", HARNESS: "${{ needs.resolve.outputs.harness }}" }
       - name: Save completed binary
         if: ${{ steps.binary.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
@@ -126,13 +128,14 @@ jobs:
 
   measure:
     name: Measure all candidates together
-    needs: prepare
+    needs: [resolve, prepare]
     runs-on: ubuntu-26.04
     timeout-minutes: 360
+    env: { HARNESS: "${{ needs.resolve.outputs.harness }}" }
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv hyperfine github:kjanat/dprint" }
+        with: { install_args: "python uv hyperfine node kprint" }
       - name: Install measurement runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq time libgmp10 libnuma1
       - uses: actions/download-artifact@v8
@@ -145,14 +148,17 @@ jobs:
           for directory in .bench/artifacts/prepared-*; do mv "${directory}" ".bench/prepared/${directory##*/prepared-}"; done
           # Artifacts drop the executable bit of every published binary, the judge included.
           find .bench/prepared -mindepth 3 -maxdepth 3 -type f \( -name rshellcheck -o -name judge \) -exec chmod +x {} +
-          uv run bench prepare --verify --plan .bench/plan.json
+          uvx --from "${HARNESS}" bench prepare --verify --plan .bench/plan.json
+      - name: Read the pinned Omarchy revision
+        id: omarchy
+        run: uvx --from "${HARNESS}" python -c 'from bench.omarchy import spec; print(f"pin={spec().pin}")' >> "${GITHUB_OUTPUT}"
       - name: Restore pinned Omarchy source
         uses: actions/cache@v6
         with:
           path: .bench/corpora/omarchy-source
-          key: bench-corpus-omarchy-${{ runner.os }}-${{ hashFiles('src/bench/corpora.toml') }}
+          key: bench-corpus-omarchy-${{ runner.os }}-${{ steps.omarchy.outputs.pin }}
       - name: Generate synthetic and pinned Omarchy workloads
-        run: uv run bench corpus --omarchy --out .bench/corpus
+        run: uvx --from "${HARNESS}" bench corpus --omarchy --out .bench/corpus
         env: { GH_TOKEN: "${{ github.token }}" }
       - name: Measure
         env:
@@ -161,10 +167,10 @@ jobs:
           WARMUP: ${{ inputs.warmup || '1' }}
           MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '2' }}
           SCENARIOS: ${{ inputs.scenarios }}
-        run: uv run bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
+        run: uvx --from "${HARNESS}" bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
           ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
       - name: Report
-        run: uv run bench report .bench/results/ci
+        run: uvx --from "${HARNESS}" bench report .bench/results/ci
       - uses: actions/upload-artifact@v7
         id: results
         if: ${{ !cancelled() }}
@@ -172,4 +178,4 @@ jobs:
       - name: Publish summary with evidence download links
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
-        run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | dprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+        run: uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"

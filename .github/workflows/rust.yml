@@ -26,14 +26,16 @@ jobs:
     name: actionlint
     runs-on: ubuntu-latest
     steps:
-      - parallel:
-          - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-            with: { persist-credentials: false }
-          - uses: $/
-      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
-        with: { install_args: "http:actionlint" }
-      - run: actionlint check -v --network-stats
-          --experimental -o github -o pretty --summary
+      - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - env: { status: 0 }
+        run: |
+          npx -y --allow-remote=all https://pkg.pr.new/kjanat/actionlint/@kjanat/actionlint@master check -v \
+            --network-stats --experimental -o github -o pretty --summary 2>"${RUNNER_TEMP}/actionlint.stderr" || status=$?
+          echo "::group::actionlint stderr"
+          cat "${RUNNER_TEMP}/actionlint.stderr"
+          echo "::endgroup::"
+          exit "${status}"
 
   lint:
     name: "Format, clippy, workflows"

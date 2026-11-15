@@ -1,4 +1,4 @@
-name: Publish packages
+name: Publish rshellcheck crates
 on:
   workflow_dispatch:
     inputs:
