@@ -59,10 +59,12 @@ if [[ ! -e "${source}" ]]; then
 	git -C "${scratch}/source" checkout --detach "${revision}"
 	mv "${scratch}/source" "${source}"
 fi
-if [[ "$(git -C "${source}" rev-parse HEAD)" != "${revision}" ]]; then
+head="$(git -C "${source}" rev-parse HEAD)"
+if [[ "${head}" != "${revision}" ]]; then
 	die "${source} has a different revision; preserve it elsewhere before fetching"
 fi
-if [[ -n "$(git -C "${source}" status --porcelain --untracked-files=normal)" ]]; then
+changes="$(git -C "${source}" status --porcelain --untracked-files=normal)"
+if [[ -n "${changes}" ]]; then
 	die "${source} has local changes; refusing to use a modified oracle"
 fi
 echo "Oracle source: ${source} at ${revision}"
