@@ -499,7 +499,7 @@ fn zsh_inserts_attached_lists_and_quoted_paths() {
     let probe = r#"
 zmodload zsh/zpty
 zpty -b child zsh -f
-zpty -w child "PS1=''; PS2=''; autoload -Uz compinit; compinit -D; source ./completion.zsh; source ./widget.zsh"
+zpty -w child "PS1=''; PS2=''; autoload -Uz compinit; compinit -D -u; source ./completion.zsh; source ./widget.zsh"
 zpty -w -n child $'\x18'
 while [[ ! -f result-5 ]]; do
   zpty -r child line && print -r -- "$line"
