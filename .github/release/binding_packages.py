@@ -16,6 +16,8 @@ from registry_checks import verify_pypi
 from release import ROOT, git, metadata, read_member
 
 MANIFEST = "binding-packages.json"
+WASM_NAME = "rshellcheck_wasm.wasm"
+WASM_NAMES = {WASM_NAME, "shellcheck_wasm.wasm"}
 
 
 class Package(TypedDict):
@@ -47,15 +49,24 @@ def digest(data: bytes) -> str:
 def members(path: Path) -> dict[str, bytes]:
     if path.suffix in {".whl", ".zip"}:
         with zipfile.ZipFile(path) as archive:
-            return {
-                n: archive.read(n) for n in archive.namelist() if not n.endswith("/")
-            }
+            names = [n for n in archive.namelist() if not n.endswith("/")]
+            if len(names) != len(set(names)):
+                raise ValueError(f"Duplicate archive member in {path.name}")
+            return {n: archive.read(n) for n in names}
     with tarfile.open(path) as archive:
-        return {
-            m.name: read_member(archive, m.name)
-            for m in archive.getmembers()
-            if m.isfile()
-        }
+        entries = archive.getmembers()
+        names = [m.name for m in entries]
+        if len(names) != len(set(names)):
+            raise ValueError(f"Duplicate archive member in {path.name}")
+        return {m.name: read_member(archive, m.name) for m in entries if m.isfile()}
+
+
+def wasm_module(contents: dict[str, bytes]) -> bytes:
+    """Read either release generation, rejecting even identical duplicate modules."""
+    modules = [data for name, data in contents.items() if Path(name).name in WASM_NAMES]
+    if len(modules) != 1:
+        raise ValueError("Expected exactly one WASM module")
+    return modules[0]
 
 
 def verify(dest: Path) -> None:
@@ -74,10 +85,8 @@ def verify(dest: Path) -> None:
         if digest(path.read_bytes()) != package["sha256"]:
             raise ValueError(f"Package checksum mismatch: {name}")
         contents = members(path)
-        wasm = [
-            data for n, data in contents.items() if n.endswith("/rshellcheck_wasm.wasm")
-        ]
-        if len(wasm) != 1 or digest(wasm[0]) != record["wasm_sha256"]:
+        wasm = wasm_module(contents)
+        if digest(wasm) != record["wasm_sha256"]:
             raise ValueError(f"Missing or mismatched WASM in {name}")
         if not any(
             n.endswith("/LICENSE") and data == (ROOT / "LICENSE").read_bytes()
@@ -138,13 +147,13 @@ def build(dest: Path, wasm: Path | None = None) -> None:
                 else ROOT / "bindings/wasm/README.md",
                 directory / "README.md",
             )
-        _ = shutil.copy2(wasm, npm / wasm.name)
+        _ = shutil.copy2(wasm, npm / WASM_NAME)
         with (python / "README.md").open("a") as readme:
             _ = readme.write(
                 f"\nTracks ShellCheck {pin['upstream_version']} with upstream changes through "
                 + f"[{pin['upstream_revision'][:12]}]({upstream_url}).\n"
             )
-        _ = shutil.copy2(wasm, python / "rshellcheck_wasm_data" / wasm.name)
+        _ = shutil.copy2(wasm, python / "rshellcheck_wasm_data" / WASM_NAME)
         _ = subprocess.run(
             ["npm", "pack", "--ignore-scripts", "--pack-destination", str(dest)],
             cwd=npm,

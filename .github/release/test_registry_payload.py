@@ -1,11 +1,18 @@
 """Regression tests for registry publication from immutable releases."""
 
+import hashlib
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import binding_packages
+import registry_payload
 import release
+import test_binding_packages
 
 
 class RegistryDispatchTests(unittest.TestCase):
@@ -17,6 +24,42 @@ class RegistryDispatchTests(unittest.TestCase):
         ):
             self.assertEqual(release.source_text(release.ROOT / "Cargo.toml"), "pinned")
             git.assert_called_once_with("show", f"{sha}:Cargo.toml")
+
+    def test_version_reads_both_crate_directory_generations(self) -> None:
+        sha = "a" * 40
+        for listing, cli, core in (
+            (
+                "conformance\nshellcheck-cli\nshellcheck-rs",
+                "shellcheck-cli",
+                "shellcheck-rs",
+            ),
+            (
+                "conformance\nrshellcheck\nrshellcheck-core",
+                "rshellcheck",
+                "rshellcheck-core",
+            ),
+        ):
+
+            def git(*args: str, listing: str = listing) -> str:
+                return listing if args[0] == "ls-tree" else '[package]\nversion="1.2.0"'
+
+            with (
+                self.subTest(cli=cli),
+                patch.dict(os.environ, {"RELEASE_SOURCE_COMMIT": sha}),
+                patch.object(release, "git", side_effect=git) as calls,
+            ):
+                self.assertEqual(release.cargo_version(), "1.2.0")
+                self.assertEqual(
+                    [
+                        call.args
+                        for call in calls.call_args_list
+                        if call.args[0] == "show"
+                    ],
+                    [
+                        ("show", f"{sha}:crates/{cli}/Cargo.toml"),
+                        ("show", f"{sha}:crates/{core}/Cargo.toml"),
+                    ],
+                )
 
     def test_invalid_source_commit_is_rejected(self) -> None:
         with (
@@ -78,3 +121,60 @@ class RegistryDispatchTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "signature"),
         ):
             _ = release.plan("", "workflow_dispatch")
+
+
+class LegacyRecoveryTests(unittest.TestCase):
+    def test_existing_release_normalizes_verified_legacy_and_current_modules(self):
+        for name in ("shellcheck_wasm.wasm", binding_packages.WASM_NAME):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                original, dest = root / "original", root / "dest"
+                original.mkdir()
+                test_binding_packages.PackageTests().make_payload(original, (name,))
+                _ = (original / "SHA256SUMS").write_text(
+                    "".join(
+                        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+                        for path in original.iterdir()
+                    )
+                )
+
+                def command(*args, source=original):
+                    if args[:3] == ("gh", "release", "download"):
+                        shutil.copytree(source, Path(args[-1]), dirs_exist_ok=True)
+
+                def repackage(directory, wasm):
+                    self.assertEqual(wasm.name, binding_packages.WASM_NAME)
+                    self.assertEqual(wasm.read_bytes(), b"\0asm\x01\0\0\0")
+                    test_binding_packages.PackageTests().make_payload(directory)
+
+                def native(directory, _version):
+                    for manifest in ("native-packages.json", "native-wheels.json"):
+                        _ = (directory / manifest).write_text("{}")
+
+                with (
+                    patch.dict(os.environ, GITHUB_REPOSITORY="kjanat/shellcheck-rs"),
+                    patch.object(registry_payload, "run", side_effect=command),
+                    patch.object(registry_payload, "TARGETS", []),
+                    patch.object(binding_packages, "build", side_effect=repackage),
+                    patch.object(binding_packages, "test_install"),
+                    patch.object(
+                        registry_payload.native_packages, "build", side_effect=native
+                    ),
+                    patch.object(registry_payload.native_packages, "test_install"),
+                    patch.object(
+                        registry_payload.native_packages,
+                        "load_record",
+                        return_value={"packages": []},
+                    ),
+                    patch.object(
+                        registry_payload.native_wheels, "build", side_effect=native
+                    ),
+                    patch.object(registry_payload.native_wheels, "test_install"),
+                    patch.object(
+                        registry_payload.native_wheels,
+                        "load_record",
+                        return_value={"packages": []},
+                    ),
+                ):
+                    registry_payload.prepare(dest)
+                binding_packages.verify(dest)

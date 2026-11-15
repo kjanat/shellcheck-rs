@@ -19,18 +19,18 @@ changes are intentional. Preserve Rust regression tests when updating upstream.
 Upstream Haskell module to Rust location. Port functions keep the Haskell
 name in snake_case and carry every Haskell comment.
 
-| Upstream                | Rust                                                 |
-| ----------------------- | ---------------------------------------------------- |
-| `AnalyzerLib.hs`        | `crates/shellcheck-rs/src/analyzer_lib.rs`           |
-| `Analytics.hs`          | `crates/shellcheck-rs/src/analytics/<theme>.rs`      |
-| `Checks/*.hs`           | `crates/shellcheck-rs/src/checks/`                   |
-| `Data.hs`               | `crates/shellcheck-rs/src/data.rs`                   |
-| `Parser.hs`             | `crates/shellcheck-rs/src/parser/`                   |
-| `CFG.hs`, `CFGAnalysis` | `crates/shellcheck-rs/src/cfg.rs`, `cfg_analysis.rs` |
-| `Checker.hs`            | `crates/shellcheck-rs/src/checker.rs`                |
-| CLI, formatters         | `crates/shellcheck-cli`                              |
-| WASM bindings           | `crates/shellcheck-wasm`                             |
-| differential harness    | `crates/conformance`                                 |
+| Upstream                | Rust                                                    |
+| ----------------------- | ------------------------------------------------------- |
+| `AnalyzerLib.hs`        | `crates/rshellcheck-core/src/analyzer_lib.rs`           |
+| `Analytics.hs`          | `crates/rshellcheck-core/src/analytics/<theme>.rs`      |
+| `Checks/*.hs`           | `crates/rshellcheck-core/src/checks/`                   |
+| `Data.hs`               | `crates/rshellcheck-core/src/data.rs`                   |
+| `Parser.hs`             | `crates/rshellcheck-core/src/parser/`                   |
+| `CFG.hs`, `CFGAnalysis` | `crates/rshellcheck-core/src/cfg.rs`, `cfg_analysis.rs` |
+| `Checker.hs`            | `crates/rshellcheck-core/src/checker.rs`                |
+| CLI, formatters         | `crates/rshellcheck`                                    |
+| WASM bindings           | `crates/rshellcheck-wasm`                               |
+| differential harness    | `crates/conformance`                                    |
 
 Analytics themes: `variables.rs` holds scope and subshell checks,
 `flow.rs` holds variable-flow checks (SC2034, errexit), `commands.rs`,
@@ -119,7 +119,7 @@ We never diverge on:
 ## Syncing upstream
 
 1. Move the pin in `UPSTREAM.md`, `tools/oracle.json` and
-   `crates/shellcheck-cli/upstream.json`, and add one table row per imported
+   `crates/rshellcheck/upstream.json`, and add one table row per imported
    commit.
 2. Port each commit with its `prop_` tests in the matching Rust module.
 3. Rebuild the oracle with `python tools/oracle.py`.

@@ -107,6 +107,9 @@ jobs:
       # Oracle-dependent CLI integration tests run in rust.yml, which builds
       # the Haskell oracle. This job gates releases on unit tests and snapshots.
       - run: cargo test --workspace --locked --lib --bins
+      - name: Verify final-build asset ownership
+        env: { RSHELLCHECK_TEST_ASSET_LIFECYCLE: "1" }
+        run: python3 -m unittest discover -s .github/release -p test_asset_lifecycle.py -v
       - run: cargo run --release --locked -p conformance -- snapshot
 
   build:

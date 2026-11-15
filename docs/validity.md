@@ -22,7 +22,7 @@ shell and version.
 [`validity/specs/SC<code>.toml`]: ../validity/specs/
 [`validity/outcomes.toml`]: ../validity/outcomes.toml
 [`validity/REPORT.md`]: ../validity/REPORT.md
-[`dialect_rules.rs`]: ../crates/shellcheck-rs/src/dialect_rules.rs
+[`dialect_rules.rs`]: ../crates/rshellcheck-core/src/dialect_rules.rs
 [`docker/shells/<shell>/Dockerfile`]: ../docker/shells/
 [`schemas/`]: ../schemas/
 
@@ -187,7 +187,7 @@ cargo validity rules
 ```
 
 `rules` reads `outcomes.toml` and `matrix.toml` and writes
-`crates/shellcheck-rs/src/dialect_rules.rs`: one `Rule` per
+`crates/rshellcheck-core/src/dialect_rules.rs`: one `Rule` per
 `(code, dialect, version, outcome)` for every row whose cell shell names a
 dialect beyond upstream's five. Cells that name no dialect, such as `zsh-sh`
 and `tcsh`, and cells of upstream shells are left out. A row whose cell is
@@ -196,7 +196,7 @@ and version, so a second run writes the same bytes, and a test compares the
 committed table with what the committed outcomes render. `cargo validity
 --record` writes the table from the outcomes it records.
 
-`crates/shellcheck-rs/src/dialect_policy.rs` reads the table. A dialect keeps
+`crates/rshellcheck-core/src/dialect_policy.rs` reads the table. A dialect keeps
 a code when it has no row for the code or any version records `reproduces`,
 and drops it when every weighted row records `absent`. `differs`,
 `unparsable`, `timeout` and `port-miss` rows carry no weight. Every cell runs

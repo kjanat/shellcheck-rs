@@ -117,7 +117,7 @@ rshellcheck --shell zsh script.zsh
 
 A dialect's own rules come from `validity/outcomes.toml`, where each diagnostic
 is run in the real shell at each pinned version. `cargo validity rules` writes
-them to `crates/shellcheck-rs/src/dialect_rules.rs`, one entry per code,
+them to `crates/rshellcheck-core/src/dialect_rules.rs`, one entry per code,
 dialect, version and outcome. A code applies to a dialect when the table has no
 entry for it, or when any version records `reproduces`; it is dropped when every
 version records `absent`. Other outcomes carry no weight. The matrix runs each

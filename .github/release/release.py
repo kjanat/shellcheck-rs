@@ -11,7 +11,9 @@ import os
 import re
 import struct
 import subprocess
+import sys
 import tarfile
+import tempfile
 import tomllib
 import zipfile
 from collections.abc import Mapping
@@ -124,15 +126,21 @@ def run(
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        check=True,
-        cwd=ROOT,
-        capture_output=capture_output,
-        text=True,
-        env=env,
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            args,
+            check=True,
+            cwd=ROOT,
+            capture_output=capture_output,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.CalledProcessError as error:
+        if capture_output:
+            print(error.stdout or "", end="", file=sys.stderr)
+            print(error.stderr or "", end="", file=sys.stderr)
+        raise
 
 
 def git(*args: str) -> str:
@@ -168,10 +176,28 @@ def unpack(fmt: str, data: bytes, offset: int = 0) -> int:
     return value
 
 
+def crate_manifest(*names: str) -> Path:
+    """The manifest of the first of `names` the release source holds.
+
+    Releases through 1.2.0 hold the crates in `shellcheck-cli` and
+    `shellcheck-rs`.
+    """
+    if os.environ.get("RELEASE_SOURCE_COMMIT"):
+        present = git(
+            "ls-tree", "--name-only", f"{source_commit()}:crates"
+        ).splitlines()
+    else:
+        present = [entry.name for entry in (ROOT / "crates").iterdir()]
+    return ROOT / "crates" / next(n for n in names if n in present) / "Cargo.toml"
+
+
 def cargo_version() -> str:
     versions = [
-        toml_string(ROOT / "crates" / crate / "Cargo.toml", "package", "version")
-        for crate in ("shellcheck-cli", "shellcheck-rs")
+        toml_string(crate_manifest(*names), "package", "version")
+        for names in (
+            ("rshellcheck", "shellcheck-cli"),
+            ("rshellcheck-core", "shellcheck-rs"),
+        )
     ]
     if versions[0] != versions[1]:
         raise ValueError("CLI and library versions must agree")
@@ -436,10 +462,14 @@ def build(target: Triple) -> None:
         env["RUSTFLAGS"] = "-Dwarnings -C target-feature=+crt-static"
     if "darwin" in target:
         env["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
+    env["RSHELLCHECK_BUILD_IDENTITY"] = build_identity()
+    if backend == "cross":
+        env["CROSS_BUILD_ENV_PASSTHROUGH"] = "RSHELLCHECK_BUILD_IDENTITY"
     tool = "cross" if backend == "cross" else "cargo"
-    _ = run(
+    result = run(
         tool,
         "build",
+        "--message-format=json-render-diagnostics",
         "--release",
         "--locked",
         "-p",
@@ -449,9 +479,11 @@ def build(target: Triple) -> None:
         "--target",
         target,
         env=env,
+        capture_output=True,
     )
     binary = built_binary(target)
     verify_binary(binary.read_bytes(), target)
+    export_assets(result.stdout, binary, target)
     if backend == "cargo" or target in (
         "x86_64-unknown-linux-musl",
         "i686-unknown-linux-musl",
@@ -475,6 +507,89 @@ def build(target: Triple) -> None:
 def built_binary(target: Triple) -> Path:
     name = "rshellcheck.exe" if "windows" in target else "rshellcheck"
     return ROOT / "target" / target / "release" / name
+
+
+def build_identity() -> str:
+    """The source a release build names to `build.rs`."""
+    return hashlib.sha256(json.dumps(metadata(), sort_keys=True).encode()).hexdigest()
+
+
+def build_marker(
+    payload: bytes, identity: str, target: str, features: list[str]
+) -> bytes:
+    """The bytes `build.rs` links into a binary built from `payload`."""
+    enabled = ",".join(sorted(f.upper().replace("-", "_") for f in features))
+    parts = (payload, identity.encode(), target.encode(), enabled.encode())
+    digest = hashlib.sha256(b"".join(part + b"\n" for part in parts)).hexdigest()
+    return b"RSHELLCHECK-BUILD-SHA256:" + digest.encode() + b":END"
+
+
+def export_assets(messages: str, binary: Path, target: str) -> None:
+    """Export only the build-script output selected by this final Cargo build.
+
+    Fresh Cargo builds emit the same artifact/build-script messages as rebuilt
+    ones. Relative paths also work when cross reports paths inside its container.
+    Nothing scans target/, and library-only builds never promote their assets.
+    """
+    events = [
+        json.loads(line) for line in messages.splitlines() if line.startswith("{")
+    ]
+    artifacts = [
+        event
+        for event in events
+        if event.get("reason") == "compiler-artifact"
+        and event.get("target", {}).get("name") == "rshellcheck"
+        and event.get("target", {}).get("kind") == ["bin"]
+        and event.get("executable")
+    ]
+    if len(artifacts) != 1:
+        raise ValueError("Expected exactly one final rshellcheck binary artifact")
+    artifact = artifacts[0]
+    outputs = [
+        event["out_dir"]
+        for event in events
+        if event.get("reason") == "build-script-executed"
+        and event.get("package_id") == artifact["package_id"]
+    ]
+    if len(outputs) != 1:
+        raise ValueError("Expected exactly one matching asset producer")
+    relative = os.path.relpath(outputs[0], Path(artifact["executable"]).parent)
+    source = binary.parent / relative / "release-assets.json"
+    payload = source.read_bytes()
+    binary_data = binary.read_bytes()
+    marker = build_marker(payload, build_identity(), target, artifact["features"])
+    if binary_data.count(marker) != 1:
+        raise ValueError("Build asset producer does not match the linked binary")
+    produced = json.loads(payload)
+    if not isinstance(produced, dict) or any(
+        not isinstance(name, str) or not isinstance(data, str)
+        for name, data in produced.items()
+    ):
+        raise ValueError("Invalid build asset payload")
+    bundle = {
+        "binary_sha256": hashlib.sha256(binary_data).hexdigest(),
+        "build": {**metadata(), "target": target, "features": artifact["features"]},
+        "files": {
+            name: {"sha256": hashlib.sha256(data.encode()).hexdigest(), "text": data}
+            for name, data in produced.items()
+        },
+    }
+    bundle["assets_sha256"] = hashlib.sha256(
+        json.dumps(bundle["files"], sort_keys=True).encode()
+    ).hexdigest()
+    # One atomic sidecar replaces a mutable multi-file profile-wide asset tree.
+    # The binary hash rejects a concurrent/different final build before packing.
+    destination = binary.with_suffix(".assets.json")
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=binary.parent, delete=False
+    ) as staged:
+        temporary = Path(staged.name)
+        try:
+            _ = staged.write(json.dumps(bundle, sort_keys=True) + "\n")
+            staged.close()
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def emulated(target: Triple, binary: Path, entrypoint: str, *args: str) -> list[str]:
@@ -534,25 +649,38 @@ def pack(
             0o644,
         ),
     }
-    assets = binary.with_suffix(".assets")
-    manifest = assets.with_name(f"{assets.name}.manifest")
+    manifest = binary.with_suffix(".assets.json")
     if not manifest.is_file():
         raise ValueError(f"Missing build assets manifest: {manifest}")
-    listed = set(manifest.read_text().splitlines())
-    staged = {
-        path.relative_to(assets).as_posix()
-        for path in assets.rglob("*")
-        if path.is_file()
-    }
-    if staged != listed:
-        raise ValueError(
-            f"Build assets differ from {manifest.name}: "
-            f"missing {sorted(listed - staged)}, unlisted {sorted(staged - listed)}"
-        )
-    for name in sorted(staged):
+    bundle = json.loads(manifest.read_text())
+    if bundle["binary_sha256"] != hashlib.sha256(data).hexdigest():
+        raise ValueError("Build assets belong to another binary")
+    if any(
+        bundle["build"].get(key) != value
+        for key, value in {**meta, "target": target}.items()
+    ):
+        raise ValueError("Build assets belong to another build")
+    if (
+        bundle["assets_sha256"]
+        != hashlib.sha256(
+            json.dumps(bundle["files"], sort_keys=True).encode()
+        ).hexdigest()
+    ):
+        raise ValueError("Build assets inventory checksum mismatch")
+    for name, asset in sorted(bundle["files"].items()):
+        if (
+            not name
+            or "\\" in name
+            or Path(name).is_absolute()
+            or any(part in {"", ".", ".."} for part in name.split("/"))
+        ):
+            raise ValueError(f"Invalid build asset path: {name}")
         if name in files:
             raise ValueError(f"Build asset conflicts with archive member: {name}")
-        files[name] = ((assets / name).read_bytes(), 0o644)
+        contents = asset["text"].encode()
+        if hashlib.sha256(contents).hexdigest() != asset["sha256"]:
+            raise ValueError(f"Build asset checksum mismatch: {name}")
+        files[name] = (contents, 0o644)
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / archive_name(label, target)
     epoch = int(git("show", "-s", "--format=%ct", "HEAD"))

@@ -75,7 +75,7 @@ or disabled at runtime.
 ## Oracle and snapshot corpus
 
 `tools/oracle.json` pins the external oracle source, and
-`crates/shellcheck-cli/upstream.json` carries the same pin into the published
+`crates/rshellcheck/upstream.json` carries the same pin into the published
 `rshellcheck` package. A conformance test fails when the two differ. Run `python tools/oracle.py`
 with GHC, Cabal and `gh` installed to fetch and build it. The helper refuses a
 modified or differently pinned checkout, and records the source revision and

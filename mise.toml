@@ -115,7 +115,7 @@ run = [
 ]
 
 # Whether the tests would catch a behaviour change at all. Scope it to the file
-# being worked on: `mise run mutants -- --file crates/shellcheck-rs/src/cfg.rs`.
+# being worked on: `mise run mutants -- --file crates/rshellcheck-core/src/cfg.rs`.
 [tasks.mutants]
 run = "cargo mutants"
 

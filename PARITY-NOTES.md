@@ -670,7 +670,7 @@ for a plain `$name` or `${name}` whose every write precedes the trap
 SC2148. The second keeps SC2064 at 1:7-1:9.
 
 The harness removes an SC2064 from the oracle's findings when the port lacks it
-and `withheld_trap_warnings` in `crates/shellcheck-rs/src/checks/commands/mod.rs`
+and `withheld_trap_warnings` in `crates/rshellcheck-core/src/checks/commands/mod.rs`
 reports a warning with the same span and message for the script. That
 function runs the port's own stability analysis. The rest must equal the port's
 findings, or satisfy another class. An unparsable script counts as a
@@ -725,7 +725,7 @@ The second adds the same warning at 1:16-1:42 and withholds SC2064, so it needs
 this class and `stable-trap-variables` together.
 
 The harness removes an SC9002 from the port's findings when the oracle lacks it
-and `cleanup_trap_warnings` in `crates/shellcheck-rs/src/analytics/mod.rs`
+and `cleanup_trap_warnings` in `crates/rshellcheck-core/src/analytics/mod.rs`
 reports a warning with the same span and message for the script. That
 function runs the port's own SC9002 check over the AST. The rest must equal the
 oracle's findings, or satisfy another class. An unparsable script counts as a
@@ -769,7 +769,7 @@ exit 0
 
 **Port: diverges.** Deviation `added-dialect`. `zsh`, `mksh`, `oksh`, `loksh`,
 `yash`, `posh`, `bosh`, `osh`, `brush`, `freebsd-sh` and `netbsd-sh` are
-dialects (`crates/shellcheck-rs/src/dialect.rs`), accepted by `--shell`, rc
+dialects (`crates/rshellcheck-core/src/dialect.rs`), accepted by `--shell`, rc
 `shell=`, `# shellcheck shell=`, EditorConfig `shellcheck.shell` and the
 shebang. Each is checked with the rules of its upstream floor: bash for zsh,
 osh and brush; ksh for mksh, oksh and loksh; sh for the rest. The three inputs
@@ -780,7 +780,7 @@ above give
 ```
 
 for zsh, nothing for mksh, and nothing for the mksh directive. Bash would add
-SC2086 on the same line; `crates/shellcheck-rs/src/dialect_rules.rs`, generated
+SC2086 on the same line; `crates/rshellcheck-core/src/dialect_rules.rs`, generated
 from `validity/outcomes.toml` by `cargo validity rules`, records SC2086 absent
 in every tested zsh version, so the checker drops it for zsh. `tcsh` stays
 refused with SC1071: its grammar is unrelated.

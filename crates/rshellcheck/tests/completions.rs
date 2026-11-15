@@ -2,10 +2,12 @@
 //! that shell to complete `rshellcheck` command lines.
 #![cfg(all(unix, feature = "completions"))]
 
-use std::io::Write;
+use std::fmt::Write as _;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -37,12 +39,12 @@ impl Drop for Fixture {
 /// Whether `program` can run. A missing shell skips its test on a developer
 /// machine and fails it in CI.
 fn installed(program: &str) -> bool {
-    let found = Command::new(program)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok();
+    let found = bounded(
+        Command::new(program).arg("--version"),
+        "",
+        Duration::from_secs(10),
+    )
+    .is_ok();
     if !found {
         assert!(
             std::env::var_os("CI").is_none(),
@@ -54,40 +56,122 @@ fn installed(program: &str) -> bool {
 }
 
 fn script(shell: &str) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
-        .env_remove("SHELLCHECK_OPTS")
-        .args(["--generate-completions", shell])
-        .output()
-        .unwrap_or_else(|e| panic!("run CLI: {e}"));
+    let output = bounded(
+        Command::new(env!("CARGO_BIN_EXE_rshellcheck"))
+            .env_remove("SHELLCHECK_OPTS")
+            .args(["--generate-completions", shell]),
+        "",
+        Duration::from_secs(30),
+    )
+    .unwrap_or_else(|e| panic!("run CLI: {e}"));
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     String::from_utf8(output.stdout).unwrap_or_else(|e| panic!("{shell} script: {e}"))
 }
 
-fn run(dir: &Path, program: &str, args: &[&str], stdin: &str) -> String {
-    let mut child = Command::new(program)
-        .current_dir(dir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+/// Files avoid pipe backpressure (including stdin) while the parent enforces
+/// a deadline. A process group also terminates subprocesses spawned by shells.
+fn bounded(command: &mut Command, stdin: &str, timeout: Duration) -> Result<Output, String> {
+    let capture = Fixture::new();
+    let input = capture.0.join("stdin");
+    let stdout = capture.0.join("stdout");
+    let stderr = capture.0.join("stderr");
+    std::fs::write(&input, stdin).map_err(|e| e.to_string())?;
+    let mut child = command
+        .process_group(0)
+        .stdin(Stdio::from(
+            std::fs::File::open(input).map_err(|e| e.to_string())?,
+        ))
+        .stdout(Stdio::from(
+            std::fs::File::create(&stdout).map_err(|e| e.to_string())?,
+        ))
+        .stderr(Stdio::from(
+            std::fs::File::create(&stderr).map_err(|e| e.to_string())?,
+        ))
         .spawn()
-        .unwrap_or_else(|e| panic!("start {program}: {e}"));
-    child
-        .stdin
-        .take()
-        .unwrap_or_else(|| panic!("{program} stdin"))
-        .write_all(stdin.as_bytes())
-        .unwrap_or_else(|e| panic!("write {program} stdin: {e}"));
-    let output = child
-        .wait_with_output()
-        .unwrap_or_else(|e| panic!("wait for {program}: {e}"));
+        .map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let mut expired = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            expired = true;
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .status();
+            let _ = child.kill();
+            break child.wait().map_err(|e| e.to_string())?;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = Output {
+        status,
+        stdout: std::fs::read(stdout).map_err(|e| e.to_string())?,
+        stderr: std::fs::read(stderr).map_err(|e| e.to_string())?,
+    };
+    if expired {
+        return Err(format!(
+            "{command:?} timed out after {timeout:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output)
+}
+
+fn run(dir: &Path, program: &str, args: &[&str], stdin: &str) -> String {
+    let output = bounded(
+        Command::new(program).current_dir(dir).args(args),
+        stdin,
+        Duration::from_secs(30),
+    )
+    .unwrap_or_else(|e| panic!("run {program}: {e}"));
     assert!(
         output.status.success(),
         "{program} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap_or_else(|e| panic!("{program} output: {e}"))
+}
+
+#[test]
+fn a_stuck_shell_is_killed_and_preserves_diagnostics() {
+    let started = Instant::now();
+    let error = bounded(
+        Command::new("sh").args([
+            "-c",
+            "echo before; echo problem >&2; sleep 60 & echo \"descendant=$!.\"; wait",
+        ]),
+        "",
+        Duration::from_millis(150),
+    )
+    .expect_err("shell must time out");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        error.contains("timed out") && error.contains("before") && error.contains("problem"),
+        "{error}"
+    );
+    let Some((descendant, _)) = error
+        .split_once("descendant=")
+        .and_then(|(_, rest)| rest.split_once('.'))
+    else {
+        panic!("no descendant pid: {error}");
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Command::new("kill")
+        .args(["-0", descendant])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "descendant {descendant} survived"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn quote(word: &str) -> String {
@@ -395,5 +479,60 @@ fn zsh_asks_for_options_values_and_files() {
         if *expected == "FILES\n" {
             assert!(!section.contains('<'), "{words:?}: {section}");
         }
+    }
+}
+
+/// Exercise real compset/compadd/_files inside a ZLE completion widget. zpty
+/// supplies a terminal without an external PTY driver or interactive user.
+#[test]
+fn zsh_inserts_attached_lists_and_quoted_paths() {
+    if !installed("zsh") {
+        return;
+    }
+    let fixture = Fixture::new();
+    std::fs::write(fixture.0.join("it's mine.sh"), "").expect("quoted fixture");
+    std::fs::write(fixture.0.join("completion.zsh"), script("zsh")).expect("completion script");
+    let cases = [
+        ("rshellcheck --format=g", "rshellcheck --format=gcc"),
+        ("rshellcheck -fjso", "rshellcheck -fjson"),
+        (
+            "rshellcheck -o add-default-case,dep",
+            "rshellcheck -o add-default-case,deprecate-which",
+        ),
+        (
+            "rshellcheck --source-path=.:sub",
+            "rshellcheck --source-path=.:subdir/",
+        ),
+        (
+            "rshellcheck --rcfile my",
+            "rshellcheck --rcfile my\\ script.sh",
+        ),
+        (
+            "rshellcheck --files-from=it",
+            "rshellcheck --files-from=it\\'s\\ mine.sh",
+        ),
+    ];
+    let mut widget = String::from("probe() {\n");
+    for (index, (line, _)) in cases.iter().enumerate() {
+        writeln!(widget, "BUFFER={}; CURSOR=$#BUFFER; zle complete-word; print -r -- \"$BUFFER\" > result-{index}", quote(line)).expect("widget source");
+    }
+    widget.push_str("BUFFER=''; }\nzle -N probe\nbindkey '^X' probe\n");
+    std::fs::write(fixture.0.join("widget.zsh"), widget).expect("widget script");
+    let probe = r#"
+zmodload zsh/zpty
+zpty -b child zsh -f
+zpty -w child "PS1=''; PS2=''; autoload -Uz compinit; compinit -D -u && source ./completion.zsh && source ./widget.zsh"
+zpty -w -n child $'\x18'
+while [[ ! -f result-5 ]]; do
+  zpty -r child line && print -r -- "$line"
+  sleep 0.01
+done
+zpty -d child
+"#;
+    run(&fixture.0, "zsh", &["-f"], probe);
+    for (index, (line, expected)) in cases.iter().enumerate() {
+        let inserted = std::fs::read_to_string(fixture.0.join(format!("result-{index}")))
+            .expect("completion result");
+        assert_eq!(inserted.trim_end(), *expected, "{line}");
     }
 }

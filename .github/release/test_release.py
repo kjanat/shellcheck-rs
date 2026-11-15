@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 import struct
 import subprocess
@@ -89,18 +90,99 @@ SCRIPTS = {
 def built(directory: Path, target: release.Triple, data: bytes) -> Path:
     """A target binary beside the assets staged by its build."""
     binary = directory / ("rshellcheck.exe" if "windows" in target else "rshellcheck")
-    _ = binary.write_bytes(data)
-    assets = binary.with_suffix(".assets") / "completions"
-    assets.mkdir(parents=True, exist_ok=True)
-    for name, script in SCRIPTS.items():
-        _ = (assets / name).write_bytes(script)
-    _ = (binary.parent / "rshellcheck.assets.manifest").write_text(
-        "".join(f"completions/{name}\n" for name in SCRIPTS)
+    producer = directory / "build" / "cli" / "out"
+    producer.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({
+        f"completions/{name}": script.decode() for name, script in SCRIPTS.items()
+    })
+    _ = (producer / "release-assets.json").write_text(payload)
+    _ = binary.write_bytes(
+        data
+        + release.build_marker(
+            payload.encode(), release.build_identity(), target, ["completions"]
+        )
+    )
+    release.export_assets(
+        json.dumps({
+            "reason": "build-script-executed",
+            "package_id": "cli",
+            "out_dir": str(producer),
+        })
+        + "\n"
+        + json.dumps({
+            "reason": "compiler-artifact",
+            "package_id": "cli",
+            "features": ["completions"],
+            "target": {"name": "rshellcheck", "kind": ["bin"]},
+            "executable": str(binary),
+        }),
+        binary,
+        target,
     )
     return binary
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_export_rejects_old_build_messages_after_another_binary_lands(self):
+        target = "x86_64-unknown-linux-musl"
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            binary = built(directory, target, executable(target))
+            sidecar = binary.with_suffix(".assets.json")
+            original = sidecar.read_bytes()
+            payload = (directory / "build/cli/out/release-assets.json").read_bytes()
+            identity = release.build_identity()
+            messages = "\n".join(
+                json.dumps(event)
+                for event in (
+                    {
+                        "reason": "build-script-executed",
+                        "package_id": "cli",
+                        "out_dir": str(directory / "build" / "cli" / "out"),
+                    },
+                    {
+                        "reason": "compiler-artifact",
+                        "package_id": "cli",
+                        "features": ["completions"],
+                        "target": {"name": "rshellcheck", "kind": ["bin"]},
+                        "executable": str(binary),
+                    },
+                )
+            )
+            # Each marker models another build replacing the shared final binary
+            # after Cargo returns, before the earlier build exports its assets.
+            for scenario, marker in (
+                (
+                    "feature-disabled build",
+                    release.build_marker(b"{}", identity, target, []),
+                ),
+                (
+                    "other source, identical assets",
+                    release.build_marker(payload, "0" * 64, target, ["completions"]),
+                ),
+                (
+                    "build outside the release builder, identical assets",
+                    release.build_marker(payload, "", target, ["completions"]),
+                ),
+                (
+                    "other target, identical assets",
+                    release.build_marker(
+                        payload, identity, "aarch64-unknown-linux-musl", ["completions"]
+                    ),
+                ),
+                (
+                    "other features, identical assets",
+                    release.build_marker(
+                        payload, identity, target, ["completions", "schema"]
+                    ),
+                ),
+            ):
+                with self.subTest(scenario=scenario):
+                    _ = binary.write_bytes(executable(target) + b"changed" + marker)
+                    with self.assertRaisesRegex(ValueError, "Build asset producer"):
+                        release.export_assets(messages, binary, target)
+                    self.assertEqual(sidecar.read_bytes(), original)
+
     def test_smoke_preserves_lf_input_on_windows(self):
         def invoke(
             command: list[str], **kwargs: object
@@ -305,16 +387,25 @@ class ReleaseTests(unittest.TestCase):
                 "i686-linux-android",
             ):
                 _ = (clang_dir / f"{clang}{release.ANDROID_API}-clang").write_text("")
-            for target, _, _ in release.TARGETS:
+            identity = release.build_identity()
+            for target, _, backend in release.TARGETS:
                 with (
                     self.subTest(target=target),
                     patch.dict(os.environ, ANDROID_HOME=str(sdk)),
-                    patch.object(release, "run"),
+                    patch.object(release, "build_identity", return_value=identity),
+                    patch.object(release, "run") as run,
                     patch.object(release, "verify_binary"),
+                    patch.object(release, "export_assets"),
                     patch.object(Path, "read_bytes", return_value=b""),
                     patch.object(release, "smoke") as smoke,
                 ):
                     release.build(target)
+                    env = run.call_args.kwargs["env"]
+                    self.assertEqual(env["RSHELLCHECK_BUILD_IDENTITY"], identity)
+                    self.assertEqual(
+                        env.get("CROSS_BUILD_ENV_PASSTHROUGH"),
+                        "RSHELLCHECK_BUILD_IDENTITY" if backend == "cross" else None,
+                    )
                     binary = release.built_binary(target)
                     if "freebsd" in target:
                         expected = []
@@ -344,26 +435,41 @@ class ReleaseTests(unittest.TestCase):
                     "x86_64-unknown-linux-musl", "test", binary, directory / "dist"
                 )
 
-    def test_pack_requires_exactly_the_listed_assets(self):
+    def test_pack_rejects_changed_assets_and_build_identity(self):
+        target = "x86_64-unknown-linux-musl"
+        for scenario in ("bytes", "missing", "unlisted", "binary", "commit", "target"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                directory = Path(temp)
+                binary = built(directory, target, executable(target))
+                manifest = binary.with_suffix(".assets.json")
+                bundle = json.loads(manifest.read_text())
+                if scenario == "bytes":
+                    bundle["files"]["completions/rshellcheck.fish"]["text"] = "replaced"
+                elif scenario == "missing":
+                    del bundle["files"]["completions/rshellcheck.fish"]
+                elif scenario == "unlisted":
+                    bundle["files"]["stale"] = {"text": "", "sha256": ""}
+                elif scenario == "binary":
+                    _ = binary.write_bytes(binary.read_bytes() + b"changed")
+                else:
+                    bundle["build"][scenario] = "wrong"
+                _ = manifest.write_text(json.dumps(bundle))
+                with self.assertRaisesRegex(ValueError, "Build assets"):
+                    _ = release.pack(target, "test", binary, directory / "dist")
+
+    def test_pack_checks_individual_digest_even_with_valid_inventory(self):
         target = "x86_64-unknown-linux-musl"
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             binary = built(directory, target, executable(target))
-            completions = binary.with_suffix(".assets") / "completions"
-            (completions / "rshellcheck.fish").unlink()
-            with self.assertRaisesRegex(
-                ValueError, r"missing \['completions/rshellcheck.fish'\], unlisted \[\]"
-            ):
-                _ = release.pack(target, "test", binary, directory / "dist")
-            for script in completions.iterdir():
-                script.unlink()
-            with self.assertRaisesRegex(ValueError, "Build assets differ"):
-                _ = release.pack(target, "test", binary, directory / "dist")
-            binary = built(directory, target, executable(target))
-            _ = (completions / "stale").write_bytes(b"")
-            with self.assertRaisesRegex(
-                ValueError, r"missing \[\], unlisted \['completions/stale'\]"
-            ):
+            manifest = binary.with_suffix(".assets.json")
+            bundle = json.loads(manifest.read_text())
+            bundle["files"]["completions/rshellcheck.fish"]["text"] = "replaced"
+            bundle["assets_sha256"] = hashlib.sha256(
+                json.dumps(bundle["files"], sort_keys=True).encode()
+            ).hexdigest()
+            _ = manifest.write_text(json.dumps(bundle))
+            with self.assertRaisesRegex(ValueError, "Build asset checksum mismatch"):
                 _ = release.pack(target, "test", binary, directory / "dist")
 
     def test_archives_reproducible_and_executable(self):

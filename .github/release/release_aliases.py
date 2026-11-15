@@ -170,9 +170,18 @@ def promote(directory: Path) -> None:
         if existing["object"]["type"] != "commit":
             raise ValueError("Expected a lightweight upstream alias tag")
         old_sha = existing["object"]["sha"]
+        # Releases through 1.2.0 hold the CLI crate in `crates/shellcheck-cli`.
+        crates = cast(
+            list[dict[str, str]], api(f"{endpoint}/contents/crates?ref={old_sha}")
+        )
+        cli = next(
+            entry["name"]
+            for entry in crates
+            if entry["name"] in ("rshellcheck", "shellcheck-cli")
+        )
         content = cast(
             dict[str, str],
-            api(f"{endpoint}/contents/crates/shellcheck-cli/Cargo.toml?ref={old_sha}"),
+            api(f"{endpoint}/contents/crates/{cli}/Cargo.toml?ref={old_sha}"),
         )
         previous = cast(
             dict[str, dict[str, str]],

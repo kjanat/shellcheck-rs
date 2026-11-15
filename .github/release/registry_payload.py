@@ -63,14 +63,8 @@ def prepare(dest: Path) -> None:
         binding_packages.verify(original)
         npm = next(p for p in record["packages"] if p["kind"] == "npm")
         contents = binding_packages.members(original / npm["name"])
-        wasm = original / "rshellcheck_wasm.wasm"
-        _ = wasm.write_bytes(
-            next(
-                data
-                for name, data in contents.items()
-                if name.endswith("/rshellcheck_wasm.wasm")
-            )
-        )
+        wasm = original / binding_packages.WASM_NAME
+        _ = wasm.write_bytes(binding_packages.wasm_module(contents))
         binding_packages.build(dest, wasm)
         binding_packages.test_install(dest.resolve())
         for target, _, _ in TARGETS:
