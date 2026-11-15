@@ -3,7 +3,6 @@
 #
 # Usage: tools/oracle.sh [--fetch-only | --verify-only]
 set -euo pipefail
-shopt -s inherit_errexit
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cache="${root}/.cache"
@@ -30,7 +29,12 @@ pin() {
 # The metadata a binary built from the pin carries.
 identity() {
 	local digest
-	digest="$(sha256sum "${binary}")"
+	# macOS ships `shasum` and no `sha256sum`.
+	if command -v sha256sum >/dev/null; then
+		digest="$(sha256sum "${binary}")" || return 1
+	else
+		digest="$(shasum -a 256 "${binary}")" || return 1
+	fi
 	jq -n --arg repository "${repository}" --arg revision "${revision}" \
 		--arg version "${version}" --arg sha256 "${digest%% *}" \
 		'{repository: $repository, revision: $revision, version: $version, sha256: $sha256}'
@@ -81,5 +85,6 @@ grep -qxF "version: ${version}" <<<"${reported}" \
 scratch="$(mktemp -d "${cache}/oracle-build-XXXXXX")"
 cp -p "${built}" "${scratch}/shellcheck-oracle"
 mv "${scratch}/shellcheck-oracle" "${binary}"
-identity >"${metadata}"
+identity >"${scratch}/record"
+mv "${scratch}/record" "${metadata}"
 echo "Oracle built: ${binary}"
