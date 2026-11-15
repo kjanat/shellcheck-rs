@@ -895,17 +895,21 @@ mod tests {
         for shell in completions::Shell::ALL {
             let script = completions::script(shell);
             for def in OPTS {
-                let long = if shell == completions::Shell::Fish {
-                    format!("-l '{}'", def.long)
-                } else {
-                    format!("'--{}'", def.long)
+                let long = match shell {
+                    completions::Shell::Fish => format!("-l '{}'", def.long),
+                    completions::Shell::Zsh => format!("'--{}:", def.long),
+                    completions::Shell::Bash | completions::Shell::Powershell => {
+                        format!("'--{}'", def.long)
+                    }
                 };
                 assert!(script.contains(&long), "{}: {long}", shell.name());
                 if let Some(short) = def.short {
-                    let short = if shell == completions::Shell::Fish {
-                        format!("-s '{short}'")
-                    } else {
-                        format!("'-{short}'")
+                    let short = match shell {
+                        completions::Shell::Fish => format!("-s '{short}'"),
+                        completions::Shell::Zsh => format!("'-{short}:"),
+                        completions::Shell::Bash | completions::Shell::Powershell => {
+                            format!("'-{short}'")
+                        }
                     };
                     assert!(script.contains(&short), "{}: {short}", shell.name());
                 }

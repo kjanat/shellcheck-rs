@@ -47,6 +47,8 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
 - The WASM crate `shellcheck-wasm` is `rshellcheck-wasm`, and the module in the
   npm and PyPI packages is `rshellcheck_wasm.wasm`. The npm export
   `@kjanat/rshellcheck-wasm/wasm` resolves to it
+- Zsh completion lists the spellings of one option on one line with its
+  description, and offers options only after `-`
 
 ### Fixed
 

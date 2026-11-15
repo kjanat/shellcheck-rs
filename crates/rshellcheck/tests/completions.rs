@@ -470,8 +470,8 @@ fn powershell_completes_options_values_and_files() {
     assert_cases("powershell", &cases, &output);
 }
 
-/// Zsh's completion widgets need a terminal, so `compadd`, `compset` and
-/// `_files` print what the script asks of them.
+/// Zsh's completion widgets need a terminal, so `compadd`, `compset`,
+/// `_describe` and `_files` print what the script asks of them.
 #[test]
 fn zsh_asks_for_options_values_and_files() {
     if !installed("zsh") {
@@ -505,7 +505,7 @@ fn zsh_asks_for_options_values_and_files() {
         (&["-j", ""], "status=1\n"),
     ];
     let mut probe = format!(
-        "compdef() {{ :; }}\ncompadd() {{ while [[ $1 != -- && $# -gt 0 ]]; do shift; done; shift; printf '<%s> ' \"$@\"; print; }}\n_files() {{ print FILES; }}\ncompset() {{ print -r -- \"compset $*\"; }}\n{}",
+        "compdef() {{ :; }}\ncompadd() {{ while [[ $1 != -- && $# -gt 0 ]]; do shift; done; shift; printf '<%s> ' \"$@\"; print; }}\n_describe() {{ local -a specs; specs=(\"${{(@P)${{@[-1]}}}}\"); printf '<%s> ' \"${{specs[@]%%:*}}\"; print; }}\n_files() {{ print FILES; }}\ncompset() {{ print -r -- \"compset $*\"; }}\n{}",
         script("zsh")
     );
     for (words, _) in cases {
