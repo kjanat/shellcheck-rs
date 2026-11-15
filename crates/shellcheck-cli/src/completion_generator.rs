@@ -2,25 +2,14 @@
 //! compiles this file and writes the scripts the binary embeds.
 
 use fujo_complete::generate_with_options;
-use fujo_core::command::{Builtins, CommandSchema, ProgramSchema};
+use fujo_core::command::{CommandSchema, ProgramSchema};
 use fujo_core::parse::ParseOptions;
 use fujo_core::schema::{Flag, InputSchema, arg, flag, value};
 use rshellcheck_core::{Dialect, optional_checks};
 
-use crate::option_table::{ArgKind, OPTS, OptDef, SEVERITIES, SUPPORTED_FORMATS, Shell};
+use crate::option_table::{ArgKind, COLORS, OPTS, OptDef, SEVERITIES, SUPPORTED_FORMATS, Shell};
 
 const NAME: &str = "rshellcheck";
-
-/// fujo takes choices as a fixed-size array, so a runtime list names its
-/// length at the call site.
-fn choices<const N: usize>(
-    option: &str,
-    names: Vec<&'static str>,
-) -> Result<[&'static str; N], String> {
-    let found = names.len();
-    <[&str; N]>::try_from(names)
-        .map_err(|_| format!("--{option}: expected {N} choices, found {found}"))
-}
 
 /// The abbreviations of `def.long` that the option parser resolves to it.
 /// fujo reads a one-letter name as a short option, so `--g` has none.
@@ -49,19 +38,17 @@ fn finish<T, P>(input: Flag<T, P>, def: &OptDef) -> InputSchema {
 
 /// The fujo declaration of one option, with the values its argument takes.
 fn declare(def: &OptDef) -> Result<InputSchema, String> {
-    // fujo has no optional option argument: a value-taking flag consumes
-    // the next word, which `--color FILE` must leave as an input.
-    if def.kind != ArgKind::Required {
+    if def.kind == ArgKind::None {
         return Ok(finish(flag::boolean(def.long), def));
     }
     Ok(match def.key {
-        "format" => finish(
-            flag::enumeration(
-                def.long,
-                choices::<7>(def.long, SUPPORTED_FORMATS.to_vec())?,
-            ),
+        // A bare `--color` means `always`; only `--color=WHEN` and `-CWHEN`
+        // carry a value, and `--color FILE` leaves the word as an input.
+        "color" => finish(
+            flag::enumeration(def.long, COLORS).optional_value("always".to_string()),
             def,
         ),
+        "format" => finish(flag::enumeration(def.long, SUPPORTED_FORMATS), def),
         "shell" => finish(
             flag::enumeration(def.long, Dialect::ALL.map(Dialect::name)),
             def,
@@ -73,10 +60,8 @@ fn declare(def: &OptDef) -> Result<InputSchema, String> {
             def,
         ),
         "enable" => {
-            let names = std::iter::once("all")
-                .chain(optional_checks().iter().map(|check| check.name))
-                .collect();
-            let names = choices::<14>(def.long, names)?;
+            let names =
+                std::iter::once("all").chain(optional_checks().iter().map(|check| check.name));
             finish(
                 flag::array(def.long, value::enumeration(names)).separator(','),
                 def,
@@ -100,37 +85,19 @@ fn declare(def: &OptDef) -> Result<InputSchema, String> {
 ///
 /// # Errors
 ///
-/// An option without a completion declaration, a choice list whose length
-/// differs from the declared one, or a table fujo rejects.
+/// An option without a completion declaration, or a table fujo rejects.
 pub fn generate(shell: Shell) -> Result<String, String> {
-    let command = CommandSchema {
-        name: NAME.to_string(),
-        description: String::new(),
-        aliases: vec![],
-        hidden: false,
-        flags: OPTS.iter().map(declare).collect::<Result<_, _>>()?,
-        args: vec![arg::path("files").variadic().into_schema()],
-        commands: vec![],
-        examples: vec![],
-    };
+    let command = OPTS
+        .iter()
+        .map(declare)
+        .try_fold(CommandSchema::new(NAME), |command, flag| {
+            flag.map(|flag| command.flag(flag))
+        })?
+        .arg(arg::path("files").variadic().into_schema());
     command.validate().map_err(|e| e.message)?;
-    let program = ProgramSchema {
-        name: NAME.to_string(),
-        version: None,
-        description: String::new(),
-        commands: vec![],
-        default: Some(command),
-        // rshellcheck declares its own `--help` and `--version`.
-        builtins: Builtins {
-            help: false,
-            json: false,
-            quiet: false,
-            explain: false,
-        },
-        completions: false,
-        config: false,
-        flags: vec![],
-    };
+    // `ProgramSchema::new` enables no builtins: rshellcheck declares its own
+    // `--help` and `--version`.
+    let program = ProgramSchema::new(NAME).default(command);
     let shell = match shell {
         Shell::Bash => fujo_complete::Shell::Bash,
         Shell::Zsh => fujo_complete::Shell::Zsh,
@@ -148,6 +115,8 @@ pub fn generate(shell: Shell) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use fujo_core::schema::ValueArity;
+
     use super::*;
     use crate::completions;
 
@@ -168,8 +137,11 @@ mod tests {
             declare(&option("probe", ArgKind::Required)).map(|_| ()),
             Err("--probe: no completion declared for `probe`".to_string())
         );
+        assert_eq!(
+            declare(&option("probe", ArgKind::Optional)).map(|_| ()),
+            Err("--probe: no completion declared for `probe`".to_string())
+        );
         assert!(declare(&option("probe", ArgKind::None)).is_ok());
-        assert!(declare(&option("probe", ArgKind::Optional)).is_ok());
     }
 
     #[test]
@@ -200,25 +172,16 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_list_of_another_length_is_an_error() {
-        assert_eq!(choices::<2>("probe", vec!["a", "b"]), Ok(["a", "b"]));
-        assert_eq!(
-            choices::<2>("probe", vec!["a"]),
-            Err("--probe: expected 2 choices, found 1".to_string())
-        );
-    }
-
-    #[test]
-    fn every_option_has_a_declaration_and_an_optional_argument_takes_no_word() {
+    fn every_option_declares_the_argument_kind_of_the_table() {
         for def in OPTS {
             let schema = declare(def).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(schema.name, def.long);
-            assert_eq!(
-                schema.expects_value(),
-                def.kind == ArgKind::Required,
-                "--{}",
-                def.long
-            );
+            let arity = match def.kind {
+                ArgKind::None => ValueArity::None,
+                ArgKind::Required => ValueArity::Required,
+                ArgKind::Optional => ValueArity::Optional,
+            };
+            assert_eq!(schema.value_arity, arity, "--{}", def.long);
         }
     }
 

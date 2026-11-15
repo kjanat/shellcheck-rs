@@ -9,6 +9,9 @@ pub const SUPPORTED_FORMATS: &[&str] =
 /// The `-S`/`--severity` values, most severe first.
 pub const SEVERITIES: [&str; 4] = ["error", "warning", "info", "style"];
 
+/// The `-C`/`--color` values.
+pub const COLORS: [&str; 3] = ["auto", "always", "never"];
+
 /// Argument kind for a recognised option, following the Haskell `ArgDescr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgKind {

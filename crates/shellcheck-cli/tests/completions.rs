@@ -111,6 +111,7 @@ const CASES: &[(&[&str], &[&str])] = &[
     (&["--extended-analysis", ""], &["false", "true"]),
     (&["my"], &["my script.sh"]),
     (&["--color", "my"], &["my script.sh"]),
+    (&["--color=al"], &["--color=always"]),
     (&["-x", "--norc", "oth"], &["other.sh"]),
     (&["--rcfile", "my"], &["my script.sh"]),
     (&["--files-from=oth"], &["--files-from=other.sh"]),
@@ -127,6 +128,10 @@ const ABBREVIATED: &[(&[&str], &[&str])] = &[
     (&["--for", "j"], &["json", "json1"]),
     (&["--sh=z"], &["--sh=zsh"]),
 ];
+
+/// An optional value attached to its short option. Fish offers nothing for
+/// `-Cal` while `-a` is a short option too (kjanat/fujo#27).
+const ATTACHED_SHORT: &[(&[&str], &[&str])] = &[(&["-Cal"], &["-Calways"])];
 
 type Case = (&'static [&'static str], &'static [&'static str]);
 
@@ -186,7 +191,7 @@ fn bash_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let script = script("bash");
-    let cases = cases_with(&[FREE_TEXT, ABBREVIATED]);
+    let cases = cases_with(&[FREE_TEXT, ABBREVIATED, ATTACHED_SHORT]);
     let words: Vec<&[&str]> = cases.iter().map(|(words, _)| *words).collect();
     let output = run(
         &fixture.0,
@@ -313,7 +318,7 @@ fn powershell_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let mut probe = format!("$ErrorActionPreference = 'Stop'\n{}", script("powershell"));
-    let cases = cases_with(&[ABBREVIATED]);
+    let cases = cases_with(&[ABBREVIATED, ATTACHED_SHORT]);
     for (words, _) in &cases {
         let line = format!("rshellcheck {}", words.join(" ")).replace('\'', "''");
         let _ = std::fmt::Write::write_fmt(

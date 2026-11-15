@@ -37,7 +37,7 @@ use rshellcheck_core::{Dialect, optional_checks};
 #[cfg(feature = "completions")]
 use crate::completions;
 pub use crate::option_table::SUPPORTED_FORMATS;
-use crate::option_table::{ArgKind, OPTS, OptDef, SEVERITIES};
+use crate::option_table::{ArgKind, COLORS, OPTS, OptDef, SEVERITIES};
 
 /// What the caller should do after parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -595,10 +595,7 @@ fn parse_option(flag: &Flag, o: &mut Folded) -> ControlFlow<Outcome> {
                 "always" => ColorOption::ColorAlways,
                 "never" => ColorOption::ColorNever,
                 _ => {
-                    return ControlFlow::Break(support_error(
-                        "color",
-                        &["auto", "always", "never"],
-                    ));
+                    return ControlFlow::Break(support_error("color", &COLORS));
                 }
             };
         }
