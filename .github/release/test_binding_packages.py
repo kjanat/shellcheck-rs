@@ -40,6 +40,30 @@ class PackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Duplicate archive member"):
                     packages.verify(root)
 
+    def test_a_hard_link_cannot_repeat_the_module_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_payload(root)
+            record = packages.load_record(root)
+            package = next(p for p in record["packages"] if p["kind"] == "npm")
+            path = root / package["name"]
+            name = "package/" + packages.WASM_NAME
+            contents = packages.members(path)
+            contents["package/payload.bin"] = contents[name]
+            with tarfile.open(path, "w:gz") as archive:
+                for member, data in contents.items():
+                    entry = tarfile.TarInfo(member)
+                    entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data))
+                link = tarfile.TarInfo(name)
+                link.type = tarfile.LNKTYPE
+                link.linkname = "package/payload.bin"
+                archive.addfile(link)
+            package["sha256"] = packages.digest(path.read_bytes())
+            _ = (root / packages.MANIFEST).write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "Duplicate archive member"):
+                packages.verify(root)
+
     def test_pypi_uploads_only_python_and_verifies_remote_hashes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

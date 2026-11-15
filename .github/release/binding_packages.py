@@ -54,10 +54,11 @@ def members(path: Path) -> dict[str, bytes]:
                 raise ValueError(f"Duplicate archive member in {path.name}")
             return {n: archive.read(n) for n in names}
     with tarfile.open(path) as archive:
-        names = [m.name for m in archive.getmembers() if m.isfile()]
+        entries = archive.getmembers()
+        names = [m.name for m in entries]
         if len(names) != len(set(names)):
             raise ValueError(f"Duplicate archive member in {path.name}")
-        return {name: read_member(archive, name) for name in names}
+        return {m.name: read_member(archive, m.name) for m in entries if m.isfile()}
 
 
 def wasm_module(contents: dict[str, bytes]) -> bytes:
