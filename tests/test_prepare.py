@@ -9,38 +9,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from bench.candidates import harness_lock, read_manifest
-
-
-class HarnessLockTests(unittest.TestCase):
-    def test_each_mise_environment_lock_overrides_the_ones_before_it(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        (root / "mise.bench.lock").write_text('[[tools.rust]]\nversion = "1.7"\n')
-        (root / "mise.ci.lock").write_text('[[tools.rust]]\nversion = "1.9"\n')
-
-        def versions(environment: str) -> dict[str, str]:
-            with (
-                patch("bench.candidates.ROOT", root),
-                patch.dict(os.environ, {"MISE_ENV": environment}),
-            ):
-                return {
-                    name: entries[0]["version"]
-                    for name, entries in harness_lock().items()
-                }
-
-        self.assertEqual(versions(""), {})
-        self.assertEqual(versions("bench"), {"rust": "1.7"})
-        (root / "mise.lock").write_text(
-            '[[tools.rust]]\nversion = "1.0"\n[[tools.ghc]]\nversion = "9.6"\n'
-        )
-        self.assertEqual(versions(""), {"rust": "1.0", "ghc": "9.6"})
-        self.assertEqual(versions("bench"), {"rust": "1.7", "ghc": "9.6"})
-        self.assertEqual(versions("bench,ci"), {"rust": "1.9", "ghc": "9.6"})
-        self.assertEqual(versions("ci,bench"), {"rust": "1.7", "ghc": "9.6"})
+from bench.candidates import read_manifest
 
 
 class PreparationTests(unittest.TestCase):
@@ -73,6 +43,11 @@ import pathlib
 import shutil
 import sys
 mutation = pathlib.Path({str(self.root / "mutation")!r})
+with pathlib.Path({str(self.root / "mise-calls")!r}).open('a') as calls:
+    calls.write(' '.join(sys.argv[1:]) + '\\n')
+if sys.argv[1:] == ['ls', '--current', '--json']:
+    print('{{"rust": [{{"version": "1.7"}}], "ghc": [{{"version": "9.6"}}]}}')
+    sys.exit(0)
 if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'setup':
     pathlib.Path('main.rs').write_text('changed by setup')
 if sys.argv[1] == 'exec' and '--no-deps' not in sys.argv[:sys.argv.index('--')]:
@@ -395,6 +370,29 @@ tools = ["rust"]
         second = json.loads(plan.read_text())["builds"][0]
         self.assertNotEqual(first["key"], second["key"])
         self.assertNotEqual(first["layers_key"], second["layers_key"])
+
+    def test_a_tool_the_candidate_does_not_lock_uses_the_harness_version(self):
+        (self.source / "mise.lock").write_text('[[tools.ghc]]\nversion = "9.6"\n')
+        self.commit()
+        calls = self.root / "mise-calls"
+        self.prepare()
+        recorded = calls.read_text().splitlines()
+        self.assertIn("ls --current --json", recorded)
+        self.assertIn("install rust@1.7", recorded)
+        self.assertNotIn("install --locked rust", recorded)
+        self.assertTrue(
+            any(
+                line.startswith("exec --no-deps rust@1.7 -- cargo") for line in recorded
+            ),
+            recorded,
+        )
+        calls.unlink()
+        (self.source / "mise.lock").write_text('[[tools.rust]]\nversion = "1.0"\n')
+        self.commit()
+        self.prepare()
+        recorded = calls.read_text().splitlines()
+        self.assertNotIn("ls --current --json", recorded)
+        self.assertIn("install --locked rust", recorded)
 
     def test_plan_builds_resolved_sha_even_after_remote_branch_moves(self):
         plan = self.root / "plan.json"

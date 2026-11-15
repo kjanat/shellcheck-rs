@@ -193,18 +193,17 @@ def checkout(state: Path, name: str, spec: CandidateSpec) -> Path:
     return source
 
 
-def harness_lock() -> dict[str, Any]:
-    # mise reads `mise.<env>.lock` beside `mise.lock` for each `MISE_ENV`
-    # entry, and a later environment wins.
-    names = ["mise.lock"] + [
-        f"mise.{env}.lock" for env in os.environ.get("MISE_ENV", "").split(",") if env
-    ]
-    tools: dict[str, Any] = {}
-    for name in names:
-        if (ROOT / name).exists():
-            with (ROOT / name).open("rb") as file:
-                tools |= tomllib.load(file).get("tools", {})
-    return tools
+def harness_versions() -> dict[str, str]:
+    # Without a tool argument, `mise ls` also resolves tools whose backend
+    # plugin is not installed yet.
+    listing: dict[str, list[dict[str, Any]]] = json.loads(
+        command(["mise", "ls", "--current", "--json"], cwd=ROOT)
+    )
+    return {
+        name: records[0]["version"]
+        for name, records in listing.items()
+        if len(records) == 1
+    }
 
 
 def tool_inputs(source: Path, tools: list[str]) -> dict[str, object]:
@@ -223,18 +222,20 @@ def tool_inputs(source: Path, tools: list[str]) -> dict[str, object]:
                 "tool_alias": contents.get("tool_alias", {}),
                 "plugins": contents.get("plugins", {}),
             }
-    fallback = harness_lock()
     source_lock = {}
     if (source / "mise.lock").exists():
         with (source / "mise.lock").open("rb") as file:
             source_lock = tomllib.load(file).get("tools", {})
+    fallback = harness_versions() if any(not source_lock.get(t) for t in tools) else {}
     locked_tools: dict[str, object] = {}
     versions: dict[str, str] = {}
     for name in tools:
-        entries = source_lock.get(name) or fallback.get(name)
+        entries = source_lock.get(name) or (
+            [{"version": fallback[name]}] if name in fallback else None
+        )
         if not entries or len(entries) != 1:
             raise ValueError(
-                f"{name}: need one locked version in the candidate or harness mise.lock"
+                f"{name}: need one version from the candidate mise.lock or the harness mise config"
             )
         locked_tools[name] = entries
         versions[name] = entries[0]["version"]
@@ -497,11 +498,13 @@ def build_candidate(build: Build, state: Path) -> tuple[Path, Path | None]:
         with (source / "mise.lock").open("rb") as file:
             source_tools = tomllib.load(file).get("tools", {})
     for name in build.spec.tools:
-        origin = source if source_tools.get(name) else ROOT
-        # Install from the lock without refreshing it. Keep locked mode scoped to
-        # installation: explicit version overrides in `mise exec` need not match
-        # the lockfile's configured request (for example `latest`).
-        run(["mise", "install", "--locked", name], origin)
+        if source_tools.get(name):
+            # Install from the lock without refreshing it. Keep locked mode scoped
+            # to installation: explicit version overrides in `mise exec` need not
+            # match the lockfile's configured request (for example `latest`).
+            run(["mise", "install", "--locked", name], source)
+        else:
+            run(["mise", "install", f"{name}@{versions[name]}"], ROOT)
     verify_source(build, "during toolchain setup")
     # A candidate's own `[deps]` (such as `uv sync`) needs tools the build
     # toolchain lacks, and the build needs none.
