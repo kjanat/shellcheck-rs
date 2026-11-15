@@ -14,12 +14,13 @@ import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
 from bench.schema import CandidatesFile, CandidateSpec, Manifest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path.cwd()
 STATE = ROOT / ".bench"
 # Bump when the preparation recipe or its artifact contract changes.
 RECIPE = 5
@@ -192,6 +193,20 @@ def checkout(state: Path, name: str, spec: CandidateSpec) -> Path:
     return source
 
 
+def harness_lock() -> dict[str, Any]:
+    # mise reads `mise.<env>.lock` beside `mise.lock` for each `MISE_ENV`
+    # entry, and a later environment wins.
+    names = ["mise.lock"] + [
+        f"mise.{env}.lock" for env in os.environ.get("MISE_ENV", "").split(",") if env
+    ]
+    tools: dict[str, Any] = {}
+    for name in names:
+        if (ROOT / name).exists():
+            with (ROOT / name).open("rb") as file:
+                tools |= tomllib.load(file).get("tools", {})
+    return tools
+
+
 def tool_inputs(source: Path, tools: list[str]) -> dict[str, object]:
     config: dict[str, object] = {}
     for filename in ("mise.toml", "mise.lock"):
@@ -208,8 +223,7 @@ def tool_inputs(source: Path, tools: list[str]) -> dict[str, object]:
                 "tool_alias": contents.get("tool_alias", {}),
                 "plugins": contents.get("plugins", {}),
             }
-    with (ROOT / "mise.lock").open("rb") as file:
-        fallback = tomllib.load(file).get("tools", {})
+    fallback = harness_lock()
     source_lock = {}
     if (source / "mise.lock").exists():
         with (source / "mise.lock").open("rb") as file:

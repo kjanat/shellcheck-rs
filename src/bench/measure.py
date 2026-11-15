@@ -57,6 +57,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import JsonValue, TypeAdapter
 
+from bench.candidates import STATE
 from bench.schema import (
     Config,
     CorpusManifest,
@@ -76,8 +77,7 @@ from bench.schema import (
 )
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
-BENCH = ROOT / ".bench"
+BENCH = STATE
 JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 

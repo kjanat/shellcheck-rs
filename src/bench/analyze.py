@@ -50,6 +50,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy import stats
 
+from bench.candidates import STATE
 from bench.schema import (
     CandidateSummary,
     Comparison,
@@ -68,8 +69,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=stats.DegenerateDataWarning)
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
-BENCH = ROOT / ".bench"
+BENCH = STATE
 
 ALPHA = 0.05
 RESAMPLES = 10_000

@@ -9,8 +9,38 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from bench.candidates import read_manifest
+from bench.candidates import harness_lock, read_manifest
+
+
+class HarnessLockTests(unittest.TestCase):
+    def test_each_mise_environment_lock_overrides_the_ones_before_it(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "mise.bench.lock").write_text('[[tools.rust]]\nversion = "1.7"\n')
+        (root / "mise.ci.lock").write_text('[[tools.rust]]\nversion = "1.9"\n')
+
+        def versions(environment: str) -> dict[str, str]:
+            with (
+                patch("bench.candidates.ROOT", root),
+                patch.dict(os.environ, {"MISE_ENV": environment}),
+            ):
+                return {
+                    name: entries[0]["version"]
+                    for name, entries in harness_lock().items()
+                }
+
+        self.assertEqual(versions(""), {})
+        self.assertEqual(versions("bench"), {"rust": "1.7"})
+        (root / "mise.lock").write_text(
+            '[[tools.rust]]\nversion = "1.0"\n[[tools.ghc]]\nversion = "9.6"\n'
+        )
+        self.assertEqual(versions(""), {"rust": "1.0", "ghc": "9.6"})
+        self.assertEqual(versions("bench"), {"rust": "1.7", "ghc": "9.6"})
+        self.assertEqual(versions("bench,ci"), {"rust": "1.9", "ghc": "9.6"})
+        self.assertEqual(versions("ci,bench"), {"rust": "1.7", "ghc": "9.6"})
 
 
 class PreparationTests(unittest.TestCase):
