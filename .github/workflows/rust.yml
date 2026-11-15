@@ -30,7 +30,7 @@ jobs:
           - uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
             with: { persist-credentials: false }
           - uses: $/
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with: { install_args: "http:actionlint" }
       - run: actionlint check -v --network-stats
           --experimental -o github -o pretty --summary
@@ -47,7 +47,7 @@ jobs:
         with: { persist-credentials: false }
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
 
       - name: Check formatting
         uses: kjanat/dprint-check@b6a885d3403db5e40ed59f2c27917d758381f577 # v3.2.0
@@ -68,7 +68,7 @@ jobs:
 
       - name: Install Rust stable
         id: rust
-        uses: &rust dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        uses: &rust dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: Cache cargo
         uses: &CA actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
