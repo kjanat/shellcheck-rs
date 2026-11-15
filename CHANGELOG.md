@@ -40,6 +40,9 @@ Upstream: ShellCheck 0.11.0 at `919d37c4d77a`.
   `rshellcheck` and the analysis library `shellcheck-rs` is `rshellcheck-core`,
   imported as `rshellcheck` and `rshellcheck_core`. Each carries a README and
   crates.io metadata. Installs from git name `rshellcheck`
+- The WASM crate `shellcheck-wasm` is `rshellcheck-wasm`, and the module in the
+  npm and PyPI packages is `rshellcheck_wasm.wasm`. The npm export
+  `@kjanat/rshellcheck-wasm/wasm` resolves to it
 
 ### Fixed
 
