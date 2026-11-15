@@ -17,8 +17,6 @@ on:
       - "docker/shells/**"
       - "validity/**"
       - "crates/conformance/**"
-      - "tools/affected_shell_cells.py"
-      - "tools/test_affected_shell_cells.py"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".cargo/**"
@@ -35,9 +33,6 @@ jobs:
       - name: Checkout repository
         uses: &CO actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0, persist-credentials: false }
-
-      - name: Test affected-cell selection
-        run: python3 -m unittest discover -s tools -p test_affected_shell_cells.py
 
       - name: Install Rust stable
         uses: &RUST dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -56,13 +51,13 @@ jobs:
           elif [[ -n "${PLAN_BASE}" && ! "${PLAN_BASE}" =~ ^0+$ ]]; then
             if git cat-file -e "${PLAN_BASE}^{commit}" 2>/dev/null ||
               git fetch --no-tags origin "${PLAN_BASE}"; then
-              cells="$(python3 tools/affected_shell_cells.py --base "${PLAN_BASE}")"
+              cells="$(cargo validity affected --base "${PLAN_BASE}")"
             else
               echo "::warning::Comparison commit ${PLAN_BASE} is unavailable; rebuilding all shell cells."
               cells="$(cargo validity cells)"
             fi
           else
-            cells="$(python3 tools/affected_shell_cells.py)"
+            cells="$(cargo validity affected)"
           fi
           echo "cells=${cells}" >> "${GITHUB_OUTPUT}"
           echo "Selected shell cells: ${cells}"
