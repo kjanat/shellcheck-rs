@@ -1,0 +1,20 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+# Benchmark tools, loaded with `MISE_ENV=bench`. Candidate locks take precedence
+# over this build toolchain.
+
+[tools]
+cabal                        = "latest"
+ghc                          = "9.14.1"
+ghcup                        = "latest"
+hyperfine                    = "2.0.0"
+rust                         = "latest"
+"github:koalaman/shellcheck" = "latest"
+
+[tool_alias]
+ghc = "mise-ghcup:ghc"
+
+[plugins]
+"vfox-backend:mise-ghcup" = "https://github.com/wasp-lang/mise-ghcup.git"
+
+[settings]
+lockfile = true
