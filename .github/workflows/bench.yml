@@ -22,6 +22,8 @@ concurrency:
 env:
   MISE_ENV: bench
   MISE_YES: "1"
+  # Python 3.15 `tomllib` reads the TOML 1.1 in `mise.toml`.
+  UV_PYTHON: "3.15"
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
