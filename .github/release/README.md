@@ -9,8 +9,9 @@
 `build.rs` writes scripts and a generic asset bundle only into its Cargo-owned
 `OUT_DIR`. After the final binary build, the release builder explicitly exports
 that build's bundle using Cargo's artifact messages, including on cached builds.
-The exporter checks the producer digest retained in the linked executable, so
-replaying another build's outputs fails. The atomic `rshellcheck.assets.json`
+The linked executable retains a digest of the bundle, the release source, the
+target and the enabled features. The exporter checks that digest, so a binary
+from another build fails the export, including one with identical assets. The atomic `rshellcheck.assets.json`
 sidecar binds the assets to the binary's
 SHA-256, source identity, target and enabled features. Packaging validates both
 the inventory and every content digest before archiving. Library-only checks,

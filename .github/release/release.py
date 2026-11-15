@@ -444,6 +444,9 @@ def build(target: Triple) -> None:
         env["RUSTFLAGS"] = "-Dwarnings -C target-feature=+crt-static"
     if "darwin" in target:
         env["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
+    env["RSHELLCHECK_BUILD_IDENTITY"] = build_identity()
+    if backend == "cross":
+        env["CROSS_BUILD_ENV_PASSTHROUGH"] = "RSHELLCHECK_BUILD_IDENTITY"
     tool = "cross" if backend == "cross" else "cargo"
     result = run(
         tool,
@@ -488,6 +491,21 @@ def built_binary(target: Triple) -> Path:
     return ROOT / "target" / target / "release" / name
 
 
+def build_identity() -> str:
+    """The source a release build names to `build.rs`."""
+    return hashlib.sha256(json.dumps(metadata(), sort_keys=True).encode()).hexdigest()
+
+
+def build_marker(
+    payload: bytes, identity: str, target: str, features: list[str]
+) -> bytes:
+    """The bytes `build.rs` links into a binary built from `payload`."""
+    enabled = ",".join(sorted(f.upper().replace("-", "_") for f in features))
+    parts = (payload, identity.encode(), target.encode(), enabled.encode())
+    digest = hashlib.sha256(b"".join(part + b"\n" for part in parts)).hexdigest()
+    return b"RSHELLCHECK-BUILD-SHA256:" + digest.encode() + b":END"
+
+
 def export_assets(messages: str, binary: Path, target: str) -> None:
     """Export only the build-script output selected by this final Cargo build.
 
@@ -521,11 +539,7 @@ def export_assets(messages: str, binary: Path, target: str) -> None:
     source = binary.parent / relative / "release-assets.json"
     payload = source.read_bytes()
     binary_data = binary.read_bytes()
-    marker = (
-        b"RSHELLCHECK-ASSETS-SHA256:"
-        + hashlib.sha256(payload).hexdigest().encode()
-        + b":END"
-    )
+    marker = build_marker(payload, build_identity(), target, artifact["features"])
     if binary_data.count(marker) != 1:
         raise ValueError("Build asset producer does not match the linked binary")
     produced = json.loads(payload)

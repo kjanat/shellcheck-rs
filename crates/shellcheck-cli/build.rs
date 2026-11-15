@@ -51,15 +51,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     let contents = serde_json::to_string(&files)?;
     stage(&payload, &contents)?;
     println!("cargo:rerun-if-changed={}", payload.display());
+    // The release builder names its source in `RSHELLCHECK_BUILD_IDENTITY`.
+    // The digest covers that name, the target and the enabled features, so a
+    // binary another build left in a shared target directory fails the export.
+    println!("cargo:rerun-if-env-changed=RSHELLCHECK_BUILD_IDENTITY");
+    let mut features: Vec<String> = std::env::vars()
+        .filter_map(|(name, _)| name.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
+        .collect();
+    features.sort();
+    let mut hasher = Sha256::new();
+    for part in [
+        contents.as_str(),
+        &std::env::var("RSHELLCHECK_BUILD_IDENTITY").unwrap_or_default(),
+        &std::env::var("TARGET")?,
+        &features.join(","),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\n");
+    }
     let identity = out.join("release-asset-identity");
     let mut digest = String::with_capacity(64);
-    for byte in Sha256::digest(contents.as_bytes()) {
+    for byte in hasher.finalize() {
         write!(&mut digest, "{byte:02x}")?;
     }
-    stage(
-        &identity,
-        &format!("RSHELLCHECK-ASSETS-SHA256:{digest}:END"),
-    )?;
+    stage(&identity, &format!("RSHELLCHECK-BUILD-SHA256:{digest}:END"))?;
     println!("cargo:rerun-if-changed={}", identity.display());
     Ok(())
 }

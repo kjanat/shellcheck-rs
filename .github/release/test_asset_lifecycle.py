@@ -28,16 +28,26 @@ class AssetLifecycleTests(unittest.TestCase):
             root = Path(temp)
             shared = root / "target"
             checkout = root / "other-checkout"
-            shutil.copytree(
-                release.ROOT,
-                checkout,
-                ignore=shutil.ignore_patterns(
-                    ".git", "target", ".cache", "node_modules", ".venv", "__pycache__"
-                ),
-            )
-            env = {**os.environ, "CARGO_TARGET_DIR": str(shared)}
+            for name in release.git("ls-files", "-z").split("\0"):
+                source = release.ROOT / name
+                if name and source.is_file():
+                    copy = checkout / name
+                    copy.parent.mkdir(parents=True, exist_ok=True)
+                    _ = shutil.copy2(source, copy)
+            env = {
+                **os.environ,
+                "CARGO_TARGET_DIR": str(shared),
+                "RSHELLCHECK_BUILD_IDENTITY": release.build_identity(),
+                # mise's cargo shim refuses the copied `mise.toml` otherwise.
+                "MISE_TRUSTED_CONFIG_PATHS": str(checkout),
+            }
 
-            def cargo(cwd: Path, operation: str = "build", *options: str) -> str:
+            def cargo(
+                cwd: Path,
+                operation: str = "build",
+                *options: str,
+                identity: str | None = None,
+            ) -> str:
                 return subprocess.check_output(
                     [
                         "cargo",
@@ -51,7 +61,9 @@ class AssetLifecycleTests(unittest.TestCase):
                         *options,
                     ],
                     cwd=cwd,
-                    env=env,
+                    env=env
+                    if identity is None
+                    else {**env, "RSHELLCHECK_BUILD_IDENTITY": identity},
                     text=True,
                     timeout=180,
                 )
@@ -130,4 +142,11 @@ class AssetLifecycleTests(unittest.TestCase):
             _ = cargo(checkout, "check", "--lib", "--no-default-features")
             self.assertEqual(sidecar.read_bytes(), restored)
             _ = exported(cargo(checkout, "build", "--bin", "rshellcheck"), True)
-            _ = exported(cargo(release.ROOT, "build", "--bin", "rshellcheck"), True)
+            current = cargo(release.ROOT, "build", "--bin", "rshellcheck")
+            final = exported(current, True)
+            # Another source builds identical assets into the shared binary
+            # after Cargo returns, before this build exports.
+            _ = cargo(checkout, "build", "--bin", "rshellcheck", identity="0" * 64)
+            with self.assertRaisesRegex(ValueError, "Build asset producer"):
+                release.export_assets(current, binary, host)
+            self.assertEqual(sidecar.read_bytes(), final)

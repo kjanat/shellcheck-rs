@@ -98,9 +98,9 @@ def built(directory: Path, target: release.Triple, data: bytes) -> Path:
     _ = (producer / "release-assets.json").write_text(payload)
     _ = binary.write_bytes(
         data
-        + b"RSHELLCHECK-ASSETS-SHA256:"
-        + hashlib.sha256(payload.encode()).hexdigest().encode()
-        + b":END"
+        + release.build_marker(
+            payload.encode(), release.build_identity(), target, ["completions"]
+        )
     )
     release.export_assets(
         json.dumps({
@@ -130,14 +130,8 @@ class ReleaseTests(unittest.TestCase):
             binary = built(directory, target, executable(target))
             sidecar = binary.with_suffix(".assets.json")
             original = sidecar.read_bytes()
-            # Model a feature-disabled build replacing the shared final binary
-            # after Cargo returns, before the earlier build exports its assets.
-            _ = binary.write_bytes(
-                executable(target)
-                + b"RSHELLCHECK-ASSETS-SHA256:"
-                + hashlib.sha256(b"{}").hexdigest().encode()
-                + b":END"
-            )
+            payload = (directory / "build/cli/out/release-assets.json").read_bytes()
+            identity = release.build_identity()
             messages = "\n".join(
                 json.dumps(event)
                 for event in (
@@ -155,9 +149,39 @@ class ReleaseTests(unittest.TestCase):
                     },
                 )
             )
-            with self.assertRaisesRegex(ValueError, "(?i)(producer|identity|another)"):
-                release.export_assets(messages, binary, target)
-            self.assertEqual(sidecar.read_bytes(), original)
+            # Each marker models another build replacing the shared final binary
+            # after Cargo returns, before the earlier build exports its assets.
+            for scenario, marker in (
+                (
+                    "feature-disabled build",
+                    release.build_marker(b"{}", identity, target, []),
+                ),
+                (
+                    "other source, identical assets",
+                    release.build_marker(payload, "0" * 64, target, ["completions"]),
+                ),
+                (
+                    "build outside the release builder, identical assets",
+                    release.build_marker(payload, "", target, ["completions"]),
+                ),
+                (
+                    "other target, identical assets",
+                    release.build_marker(
+                        payload, identity, "aarch64-unknown-linux-musl", ["completions"]
+                    ),
+                ),
+                (
+                    "other features, identical assets",
+                    release.build_marker(
+                        payload, identity, target, ["completions", "schema"]
+                    ),
+                ),
+            ):
+                with self.subTest(scenario=scenario):
+                    _ = binary.write_bytes(executable(target) + b"changed" + marker)
+                    with self.assertRaisesRegex(ValueError, "Build asset producer"):
+                        release.export_assets(messages, binary, target)
+                    self.assertEqual(sidecar.read_bytes(), original)
 
     def test_smoke_preserves_lf_input_on_windows(self):
         def invoke(
@@ -363,17 +387,25 @@ class ReleaseTests(unittest.TestCase):
                 "i686-linux-android",
             ):
                 _ = (clang_dir / f"{clang}{release.ANDROID_API}-clang").write_text("")
-            for target, _, _ in release.TARGETS:
+            identity = release.build_identity()
+            for target, _, backend in release.TARGETS:
                 with (
                     self.subTest(target=target),
                     patch.dict(os.environ, ANDROID_HOME=str(sdk)),
-                    patch.object(release, "run"),
+                    patch.object(release, "build_identity", return_value=identity),
+                    patch.object(release, "run") as run,
                     patch.object(release, "verify_binary"),
                     patch.object(release, "export_assets"),
                     patch.object(Path, "read_bytes", return_value=b""),
                     patch.object(release, "smoke") as smoke,
                 ):
                     release.build(target)
+                    env = run.call_args.kwargs["env"]
+                    self.assertEqual(env["RSHELLCHECK_BUILD_IDENTITY"], identity)
+                    self.assertEqual(
+                        env.get("CROSS_BUILD_ENV_PASSTHROUGH"),
+                        "RSHELLCHECK_BUILD_IDENTITY" if backend == "cross" else None,
+                    )
                     binary = release.built_binary(target)
                     if "freebsd" in target:
                         expected = []

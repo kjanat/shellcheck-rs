@@ -27,7 +27,7 @@ use rshellcheck_core::interface::{
 const ANALYSIS_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
-    // Retain the producer's asset digest through linking/stripping. The host
+    // Retain the producer's build digest through linking/stripping. The host
     // exporter verifies it without running this (possibly foreign) executable.
     std::hint::black_box(include_bytes!(concat!(
         env!("OUT_DIR"),
