@@ -3,12 +3,12 @@
 # over this build toolchain.
 
 [tools]
-cabal                        = "latest"
+cabal                        = "3.18.2.0"
 ghc                          = "9.14.1"
-ghcup                        = "latest"
+ghcup                        = "0.2.6.2"
 hyperfine                    = "2.0.0"
-rust                         = "latest"
-"github:koalaman/shellcheck" = "latest"
+rust                         = "1.100.0"
+"github:koalaman/shellcheck" = "0.11.0"
 
 [tool_alias]
 ghc = "mise-ghcup:ghc"
