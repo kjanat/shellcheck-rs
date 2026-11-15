@@ -91,8 +91,7 @@ Add-Content $PROFILE '. (Join-Path $PSScriptRoot rshellcheck.ps1)'
 ```
 
 Zsh loads `~/.zfunc/_rshellcheck` when `~/.zshrc` has `fpath=(~/.zfunc $fpath)`
-before `compinit`. The Bash script needs Bash 4 or later, which the `bash` that
-ships with macOS predates.
+before `compinit`.
 
 ### In your editor
 

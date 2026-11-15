@@ -112,6 +112,10 @@ const CASES: &[(&[&str], &[&str])] = &[
     (&["my"], &["my script.sh"]),
     (&["--color", "my"], &["my script.sh"]),
     (&["--color=al"], &["--color=always"]),
+    (&["-Cal"], &["-Calways"]),
+    (&["--for", "j"], &["json", "json1"]),
+    (&["--sh=z"], &["--sh=zsh"]),
+    (&["--g", "b"], &["bash"]),
     (&["-x", "--norc", "oth"], &["other.sh"]),
     (&["--rcfile", "my"], &["my script.sh"]),
     (&["--files-from=oth"], &["--files-from=other.sh"]),
@@ -121,17 +125,6 @@ const CASES: &[(&[&str], &[&str])] = &[
 /// Values without a candidate list. PowerShell 7.6 rejects an empty result and
 /// completes file names for these, so only Bash and Fish are asked.
 const FREE_TEXT: &[(&[&str], &[&str])] = &[(&["-j", ""], &[]), (&["--include", ""], &[])];
-
-/// Abbreviated long options. Fish is told each long option by its full name,
-/// so it reads the word after `--for` as a file.
-const ABBREVIATED: &[(&[&str], &[&str])] = &[
-    (&["--for", "j"], &["json", "json1"]),
-    (&["--sh=z"], &["--sh=zsh"]),
-];
-
-/// An optional value attached to its short option. Fish offers nothing for
-/// `-Cal` while `-a` is a short option too (kjanat/fujo#27).
-const ATTACHED_SHORT: &[(&[&str], &[&str])] = &[(&["-Cal"], &["-Calways"])];
 
 type Case = (&'static [&'static str], &'static [&'static str]);
 
@@ -191,7 +184,7 @@ fn bash_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let script = script("bash");
-    let cases = cases_with(&[FREE_TEXT, ABBREVIATED, ATTACHED_SHORT]);
+    let cases = cases_with(&[FREE_TEXT]);
     let words: Vec<&[&str]> = cases.iter().map(|(words, _)| *words).collect();
     let output = run(
         &fixture.0,
@@ -318,7 +311,7 @@ fn powershell_completes_options_values_and_files() {
     }
     let fixture = Fixture::new();
     let mut probe = format!("$ErrorActionPreference = 'Stop'\n{}", script("powershell"));
-    let cases = cases_with(&[ABBREVIATED, ATTACHED_SHORT]);
+    let cases = cases_with(&[]);
     for (words, _) in &cases {
         let line = format!("rshellcheck {}", words.join(" ")).replace('\'', "''");
         let _ = std::fmt::Write::write_fmt(
@@ -365,6 +358,7 @@ fn zsh_asks_for_options_values_and_files() {
             &["--for", "j"],
             "<checkstyle> <diff> <gcc> <json> <json1> <quiet> <tty> \n",
         ),
+        (&["--g", "b"], "<bash> <zsh> <fish> <powershell> \n"),
         (&["-fj"], "compset -P -f\n<checkstyle>"),
         (&["-xs", "z"], "<sh> <bash> <dash> <ksh> <busybox> <zsh>"),
         (

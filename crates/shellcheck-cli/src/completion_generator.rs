@@ -1,7 +1,7 @@
 //! Generates the completion scripts from the option table. The build script
 //! compiles this file and writes the scripts the binary embeds.
 
-use fujo_complete::generate_with_options;
+use fujo_complete::{CompletionOptions, generate_with_config};
 use fujo_core::command::{CommandSchema, ProgramSchema};
 use fujo_core::parse::ParseOptions;
 use fujo_core::schema::{Flag, InputSchema, arg, flag, value};
@@ -11,24 +11,8 @@ use crate::option_table::{ArgKind, COLORS, OPTS, OptDef, SEVERITIES, SUPPORTED_F
 
 const NAME: &str = "rshellcheck";
 
-/// The abbreviations of `def.long` that the option parser resolves to it.
-/// fujo reads a one-letter name as a short option, so `--g` has none.
-fn abbreviations(def: &OptDef) -> impl Iterator<Item = &'static str> {
-    let long = def.long;
-    (2..long.len())
-        .map(move |len| &long[..len])
-        .filter(|prefix| OPTS.iter().filter(|o| o.long.starts_with(prefix)).count() == 1)
-}
-
 fn finish<T, P>(input: Flag<T, P>, def: &OptDef) -> InputSchema {
     let input = input.describe(def.help);
-    // An abbreviated option takes the same values. The scripts do not offer
-    // the abbreviations themselves.
-    let input = if def.kind == ArgKind::Required {
-        abbreviations(def).fold(input, Flag::hidden_alias)
-    } else {
-        input
-    };
     match def.short {
         Some(short) => input.alias(short.to_string()),
         None => input,
@@ -104,12 +88,16 @@ pub fn generate(shell: Shell) -> Result<String, String> {
         Shell::Fish => fujo_complete::Shell::Fish,
         Shell::Powershell => fujo_complete::Shell::PowerShell,
     };
-    // `case_parity` would add spellings such as `--checkSourced` that
-    // rshellcheck rejects.
-    Ok(generate_with_options(
+    Ok(generate_with_config(
         &program,
         shell,
-        ParseOptions { case_parity: false },
+        CompletionOptions {
+            // `case_parity` would add spellings such as `--checkSourced` that
+            // rshellcheck rejects.
+            parse: ParseOptions { case_parity: false },
+            // The option parser resolves a unique prefix such as `--for`.
+            abbreviate_long_options: true,
+        },
     ))
 }
 
@@ -142,33 +130,6 @@ mod tests {
             Err("--probe: no completion declared for `probe`".to_string())
         );
         assert!(declare(&option("probe", ArgKind::None)).is_ok());
-    }
-
-    #[test]
-    fn an_abbreviation_is_a_prefix_no_other_option_shares() {
-        let named = |long: &str| {
-            OPTS.iter()
-                .find(|def| def.long == long)
-                .map(|def| abbreviations(def).collect::<Vec<_>>())
-        };
-        assert_eq!(named("format"), Some(vec!["fo", "for", "form", "forma"]));
-        assert_eq!(named("shell"), Some(vec!["sh", "she", "shel"]));
-        assert_eq!(
-            named("source-path").and_then(|a| a.first().copied()),
-            Some("so")
-        );
-        let schema = OPTS
-            .iter()
-            .find(|def| def.long == "format")
-            .map_or_else(|| panic!("--format"), declare)
-            .unwrap_or_else(|e| panic!("{e}"));
-        let hidden: Vec<&str> = schema
-            .aliases
-            .iter()
-            .filter(|alias| alias.hidden)
-            .map(|alias| alias.name.as_str())
-            .collect();
-        assert_eq!(hidden, ["fo", "for", "form", "forma"]);
     }
 
     #[test]
