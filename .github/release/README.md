@@ -17,7 +17,6 @@ the inventory and every content digest before archiving. Library-only checks,
 feature-disabled builds and other checkouts do not stage or delete release assets.
 The packager neither locates Cargo outputs nor executes a target binary.
 
-
 The binary is GPL-3.0-or-later; see `LICENSE.txt`. `BUILD.json` records the source
 commit, Cargo version, Rust toolchain and binary SHA-256. Each GitHub release
 also includes the corresponding source archive, `source.spdx.json`,
