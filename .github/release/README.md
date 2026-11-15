@@ -6,12 +6,17 @@
 `completions/` holds the completion scripts for Bash (`rshellcheck.bash`), Zsh
 (`_rshellcheck`), Fish (`rshellcheck.fish`) and PowerShell (`rshellcheck.ps1`);
 `rshellcheck --generate-completions SHELL` prints the same scripts.
-`build.rs` writes those scripts into both `OUT_DIR` for embedding and
-`rshellcheck.assets/completions/` beside the target binary for packaging, and
-lists the staged files in `rshellcheck.assets.manifest` as its last step.
-The packager rejects a tree that differs from that list.
-The packager includes the staged asset tree without locating Cargo build outputs
-or inspecting the binary for completion contents.
+`build.rs` writes scripts and a generic asset bundle only into its Cargo-owned
+`OUT_DIR`. After the final binary build, the release builder explicitly exports
+that build's bundle using Cargo's artifact messages, including on cached builds.
+The exporter checks the producer digest retained in the linked executable, so
+replaying another build's outputs fails. The atomic `rshellcheck.assets.json`
+sidecar binds the assets to the binary's
+SHA-256, source identity, target and enabled features. Packaging validates both
+the inventory and every content digest before archiving. Library-only checks,
+feature-disabled builds and other checkouts do not stage or delete release assets.
+The packager neither locates Cargo outputs nor executes a target binary.
+
 
 The binary is GPL-3.0-or-later; see `LICENSE.txt`. `BUILD.json` records the source
 commit, Cargo version, Rust toolchain and binary SHA-256. Each GitHub release

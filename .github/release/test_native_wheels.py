@@ -85,12 +85,12 @@ class NativeWheelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
             target = next(iter(wheels.TARGETS))
-            binary = built(dest, target, executable(target))
             with patch.object(
                 release,
                 "metadata",
                 return_value={**release.metadata(), "commit": "0" * 40},
             ):
+                binary = built(dest, target, executable(target))
                 _ = release.pack(target, "test", binary, dest)
             with self.assertRaisesRegex(ValueError, "source identity"):
                 wheels.build(dest, "test")

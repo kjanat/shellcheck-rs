@@ -27,6 +27,12 @@ use rshellcheck_core::interface::{
 const ANALYSIS_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
+    // Retain the producer's asset digest through linking/stripping. The host
+    // exporter verifies it without running this (possibly foreign) executable.
+    std::hint::black_box(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/release-asset-identity"
+    )));
     // SHELLCHECK_OPTS is split on whitespace (Haskell `words`) and prepended to
     // argv before parsing, so env-configured defaults apply but explicit argv
     // can still override them (shellcheck.hs `getOptions`: env ++ args).

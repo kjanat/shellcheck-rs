@@ -1,7 +1,9 @@
 //! Exposes the upstream ShellCheck pin from `upstream.json` to the CLI and
 //! generates the completion scripts it embeds.
 
+use sha2::{Digest, Sha256};
 use std::error::Error;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 #[cfg(feature = "completions")]
@@ -26,82 +28,47 @@ fn main() -> Result<(), Box<dyn Error>> {
         pin.revision
     );
     let out = PathBuf::from(std::env::var("OUT_DIR")?);
-    let profile = out
-        .ancestors()
-        .find(|directory| directory.file_name().is_some_and(|name| name == "build"))
-        .and_then(std::path::Path::parent)
-        .ok_or("OUT_DIR has no build profile directory")?;
-    let assets = profile.join("rshellcheck.assets");
-    // The packager archives exactly the files this manifest lists.
-    let manifest = profile.join("rshellcheck.assets.manifest");
-    #[cfg(not(feature = "completions"))]
-    {
-        if manifest.is_file() {
-            std::fs::remove_file(&manifest)?;
-        }
-        if assets.is_dir() {
-            std::fs::remove_dir_all(&assets)?;
-        }
-        println!("cargo:rerun-if-changed={}", assets.display());
-    }
+    // Cargo owns OUT_DIR per package/build configuration. Checks, feature-off
+    // builds and other checkouts must never mutate a final binary's assets.
+    #[allow(unused_mut)]
+    let mut files = std::collections::BTreeMap::<String, String>::new();
     #[cfg(feature = "completions")]
     {
-        let tree = assets;
-        let assets = tree.join("completions");
-        let mut staged_names = String::new();
         for source in ["src/completion_generator.rs", "src/option_table.rs"] {
             println!("cargo:rerun-if-changed={source}");
         }
-        std::fs::create_dir_all(&assets)?;
         for shell in option_table::Shell::ALL {
             let script = completion_generator::generate(shell)?;
-            std::fs::write(out.join(shell.file_name()), &script)?;
-            let staged = assets.join(shell.file_name());
-            stage(&staged, &script)?;
-            // Restore staged artifacts if a cache cleanup deletes or replaces them.
-            println!("cargo:rerun-if-changed={}", staged.display());
-            staged_names.push_str("completions/");
-            staged_names.push_str(shell.file_name());
-            staged_names.push('\n');
+            let path = out.join(shell.file_name());
+            stage(&path, &script)?;
+            println!("cargo:rerun-if-changed={}", path.display());
+            files.insert(format!("completions/{}", shell.file_name()), script);
         }
-        // A cached `target` may hold files an earlier revision staged.
-        prune(&tree, &["completions"])?;
-        prune(
-            &assets,
-            &option_table::Shell::ALL.map(option_table::Shell::file_name),
-        )?;
-        for directory in [&tree, &assets] {
-            println!("cargo:rerun-if-changed={}", directory.display());
-        }
-        stage(&manifest, &staged_names)?;
-        println!("cargo:rerun-if-changed={}", manifest.display());
     }
+    // A single producer-owned bundle is exported explicitly after linking.
+    // Packaging never discovers Cargo outputs or runs a target executable.
+    let payload = out.join("release-assets.json");
+    let contents = serde_json::to_string(&files)?;
+    stage(&payload, &contents)?;
+    println!("cargo:rerun-if-changed={}", payload.display());
+    let identity = out.join("release-asset-identity");
+    let mut digest = String::with_capacity(64);
+    for byte in Sha256::digest(contents.as_bytes()) {
+        write!(&mut digest, "{byte:02x}")?;
+    }
+    stage(
+        &identity,
+        &format!("RSHELLCHECK-ASSETS-SHA256:{digest}:END"),
+    )?;
+    println!("cargo:rerun-if-changed={}", identity.display());
     Ok(())
 }
 
 /// Writes `contents` to `path` unless the file already holds them. Cargo
 /// reruns this script while a watched file is newer than the last run.
-#[cfg(feature = "completions")]
 fn stage(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read(path).is_ok_and(|current| current == contents.as_bytes()) {
         return Ok(());
     }
     std::fs::write(path, contents)
-}
-
-/// Removes every entry of `directory` whose name is not in `keep`.
-#[cfg(feature = "completions")]
-fn prune(directory: &std::path::Path, keep: &[&str]) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        if keep.iter().any(|name| entry.file_name() == *name) {
-            continue;
-        }
-        if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(entry.path())?;
-        } else {
-            std::fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(())
 }

@@ -7,19 +7,17 @@ use std::process::Command;
 #[test]
 fn staged_completions_match_the_binary() {
     let binary = Path::new(env!("CARGO_BIN_EXE_rshellcheck"));
-    let assets = binary.with_extension("assets").join("completions");
     let shells = [
         ("bash", "rshellcheck.bash"),
         ("zsh", "_rshellcheck"),
         ("fish", "rshellcheck.fish"),
         ("powershell", "rshellcheck.ps1"),
     ];
-    let manifest = std::fs::read_to_string(binary.with_extension("assets.manifest"))
-        .unwrap_or_else(|error| panic!("read manifest: {error}"));
-    assert_eq!(
-        manifest.lines().collect::<Vec<_>>(),
-        shells.map(|(_, name)| format!("completions/{name}"))
-    );
+    let assets: std::collections::BTreeMap<String, String> = serde_json::from_str(include_str!(
+        concat!(env!("OUT_DIR"), "/release-assets.json")
+    ))
+    .unwrap_or_else(|error| panic!("read asset bundle: {error}"));
+    assert_eq!(assets.len(), shells.len());
     for (shell, name) in shells {
         let output = Command::new(binary)
             .env_remove("SHELLCHECK_OPTS")
@@ -27,8 +25,9 @@ fn staged_completions_match_the_binary() {
             .output()
             .unwrap_or_else(|error| panic!("run {shell}: {error}"));
         assert!(output.status.success(), "{shell}: {:?}", output.stderr);
-        let staged =
-            std::fs::read(assets.join(name)).unwrap_or_else(|error| panic!("read {name}: {error}"));
-        assert_eq!(staged, output.stdout, "{shell}");
+        let staged = assets
+            .get(&format!("completions/{name}"))
+            .expect("generated asset");
+        assert_eq!(staged.as_bytes(), output.stdout, "{shell}");
     }
 }
