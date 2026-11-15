@@ -140,7 +140,10 @@ fn run(dir: &Path, program: &str, args: &[&str], stdin: &str) -> String {
 fn a_stuck_shell_is_killed_and_preserves_diagnostics() {
     let started = Instant::now();
     let error = bounded(
-        Command::new("sh").args(["-c", "echo before; echo problem >&2; sleep 60"]),
+        Command::new("sh").args([
+            "-c",
+            "echo before; echo problem >&2; sleep 60 & echo \"descendant=$!.\"; wait",
+        ]),
         "",
         Duration::from_millis(150),
     )
@@ -150,6 +153,25 @@ fn a_stuck_shell_is_killed_and_preserves_diagnostics() {
         error.contains("timed out") && error.contains("before") && error.contains("problem"),
         "{error}"
     );
+    let Some((descendant, _)) = error
+        .split_once("descendant=")
+        .and_then(|(_, rest)| rest.split_once('.'))
+    else {
+        panic!("no descendant pid: {error}");
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Command::new("kill")
+        .args(["-0", descendant])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "descendant {descendant} survived"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn quote(word: &str) -> String {
@@ -499,7 +521,7 @@ fn zsh_inserts_attached_lists_and_quoted_paths() {
     let probe = r#"
 zmodload zsh/zpty
 zpty -b child zsh -f
-zpty -w child "PS1=''; PS2=''; autoload -Uz compinit; compinit -D -u; source ./completion.zsh; source ./widget.zsh"
+zpty -w child "PS1=''; PS2=''; autoload -Uz compinit; compinit -D -u && source ./completion.zsh && source ./widget.zsh"
 zpty -w -n child $'\x18'
 while [[ ! -f result-5 ]]; do
   zpty -r child line && print -r -- "$line"
