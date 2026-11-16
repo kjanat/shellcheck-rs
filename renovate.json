@@ -9,6 +9,10 @@
 			"matchPackageNames": ["fujo", "fujo-*"],
 			"groupName": "fujo crates",
 			"separateMajorMinor": false
+		},
+		{
+			"matchDepNames": ["ghcup"],
+			"allowedVersions": "!/^0\\.21$/"
 		}
 	],
 	"github-actions": {
