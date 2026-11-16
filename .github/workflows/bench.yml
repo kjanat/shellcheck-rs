@@ -11,6 +11,9 @@ on:
   push:
     branches: [bench]
     paths: [src/**, tests/**, pyproject.toml, uv.lock, mise.toml, mise.lock, .github/workflows/bench.yml]
+  # Every pull request: the branch rulesets require `Bench builds`, and a job
+  # that a path filter skips never reports.
+  pull_request: null
 
 permissions:
   contents: read
@@ -24,8 +27,26 @@ env:
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
+  changes:
+    name: Detect toolchain changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs: { toolchain: "${{ steps.diff.outputs.toolchain }}" }
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false, fetch-depth: 2 }
+      - name: Compare with the base branch
+        id: diff
+        env: { EVENT: "${{ github.event_name }}" }
+        run: |
+          if [[ "${EVENT}" != pull_request ]] || git diff --name-only HEAD^1 HEAD | grep -Eq '^(mise(\.[^/]+)?\.(toml|lock)|\.github/workflows/bench\.yml)$'; then
+            echo "toolchain=true" >> "${GITHUB_OUTPUT}"
+          fi
+
   resolve:
     name: Resolve exact candidate identities
+    needs: changes
+    if: needs.changes.outputs.toolchain == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs: { candidates: "${{ steps.plan.outputs.candidates }}" }
@@ -127,6 +148,7 @@ jobs:
   measure:
     name: Measure all candidates together
     needs: prepare
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
     timeout-minutes: 360
     steps:
@@ -173,3 +195,20 @@ jobs:
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
         run: uv run bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+
+  builds:
+    name: Bench builds
+    needs: [changes, prepare]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every candidate build after a toolchain change
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          TOOLCHAIN: ${{ needs.changes.outputs.toolchain }}
+          PREPARE: ${{ needs.prepare.result }}
+        run: |
+          echo "change detection: ${CHANGES}, toolchain changed: ${TOOLCHAIN:-false}, candidate builds: ${PREPARE}"
+          [[ "${CHANGES}" == success ]]
+          [[ "${TOOLCHAIN}" != true || "${PREPARE}" == success ]]
