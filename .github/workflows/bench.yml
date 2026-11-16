@@ -49,7 +49,7 @@ jobs:
       - name: Compare the pull request with its base branch
         id: pr
         if: github.event_name == 'pull_request'
-        env: { PR: "${{ github.event.pull_request.number }}", BASE: "${{ github.base_ref }}" }
+        env: { BASE: "${{ github.event.pull_request.base.sha }}", MERGE: "${{ github.sha }}" }
         run: |
           mkdir -p .bench
           cat > .bench/pr-candidates.toml <<EOF
@@ -63,7 +63,7 @@ jobs:
 
           [candidates.pr]
           repo    = "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          ref     = "refs/pull/${PR}/head"
+          ref     = "${MERGE}"
           package = "rshellcheck"
           tools   = ["rust"]
           judge   = "conformance"
@@ -158,13 +158,14 @@ jobs:
 
   measure:
     name: Measure all candidates together
-    permissions: { contents: read, pull-requests: write }
+    outputs: { artifact: "${{ steps.results.outputs.artifact-url }}" }
     needs: [resolve, prepare]
     runs-on: ubuntu-26.04
     timeout-minutes: 360
     env: { HARNESS: "${{ needs.resolve.outputs.harness }}" }
     steps:
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: jdx/mise-action@v5
         with: { install_args: "python uv hyperfine node kprint" }
       - name: Install measurement runtime dependencies
@@ -210,12 +211,28 @@ jobs:
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
         run: uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+
+  comment:
+    name: Comment the results on the pull request
+    needs: [resolve, measure]
+    # A fork's token cannot write comments.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    # The only job that can write, and it runs no candidate code.
+    permissions: { contents: read, pull-requests: write }
+    env: { HARNESS: "${{ needs.resolve.outputs.harness }}" }
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv kprint" }
+      - uses: actions/download-artifact@v8
+        with: { name: bench-results, path: .bench/results/ci }
       - name: Post the results on the pull request
-        # A fork's token cannot write comments.
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_URL: ${{ steps.results.outputs.artifact-url }}
+          ARTIFACT_URL: ${{ needs.measure.outputs.artifact }}
           PR: ${{ github.event.pull_request.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
