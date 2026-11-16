@@ -90,8 +90,12 @@ class MetricsTests(unittest.TestCase):
         row = next(
             line for line in report.splitlines() if line.startswith("| upstream |")
         )
-        self.assertIn("(once)", row)
-        self.assertIn("sampling stopped", row)
+        self.assertTrue(
+            row.endswith(
+                "| sampling stopped in round 2: upstream: timed round exceeded its 790s execution budget |"
+            ),
+            row,
+        )
         self.assertNotIn("🏆", row)
 
     def test_hyperfine_export_versions_preserve_units_samples_and_exit_status(self):
@@ -223,7 +227,7 @@ class MetricsTests(unittest.TestCase):
             line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertIn("🏆", row)
-        self.assertTrue(row.endswith("| faster |"), row)
+        self.assertTrue(row.endswith("| faster (noisy, drift) |"), row)
         self.assertNotIn(
             "🏆",
             next(

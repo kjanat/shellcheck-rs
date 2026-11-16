@@ -300,7 +300,11 @@ tools = ["rust"]
         self.cli("report", str(out))
         report = (out / "report.md").read_text()
         self.assertIn("Baseline: **upstream-release-vfixture**", report)
-        self.assertIn(plan["notes"][0], report)
+        self.assertIn(
+            f"> [!NOTE]\n> upstream-head skipped: default branch HEAD `{head[:12]}` "
+            "is the vfixture release commit\n",
+            report,
+        )
 
     def test_head_past_release_tag_keeps_the_source_build_as_baseline(self):
         flags = self.upstream_config()

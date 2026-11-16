@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from bench.analyze import analyze
-from bench.report import label
+from bench.report import label, quality
 from bench.schema import Manifest, Run, Samples
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
@@ -71,24 +71,24 @@ class ReportTests(unittest.TestCase):
         report = rendered(run)
         line = row(report, "rshellcheck")
         self.assertNotIn("not comparable", line)
-        self.assertIn("≈", line)
-        self.assertIn("(no CI)", line)
-        self.assertIn(
-            "upstream timed once (3.0s, over the 15s per-run budget); ratio without interval",
-            line,
-        )
-        self.assertIn("(once)", row(report, "upstream"))
+        self.assertRegex(line, r"\| ≈\d\.\d\d× \|")
+        self.assertTrue(line.endswith("| baseline timed once |"), line)
+        self.assertIn("| 3.000 s |", row(report, "upstream"))
+        self.assertTrue(row(report, "upstream").endswith("| timed once |"))
+        self.assertIn("longer than the per-run budget (15s)", report)
 
     def test_sanctioned_output_is_compared_like_matching_output(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
         check = run.precheck["medium"]["rshellcheck"]
         check.parity = "sanctioned"
         check.deviations = ["stable-trap-variables", "signal-only-cleanup-trap"]
-        line = row(rendered(run), "rshellcheck")
+        report = rendered(run)
+        line = row(report, "rshellcheck")
+        self.assertIn("| sanctioned ([diff](precheck/medium/rshellcheck.diff)) |", line)
         self.assertIn(
-            "matches up to sanctioned deviations (stable-trap-variables, signal-only-cleanup-trap; "
-            "[diff](precheck/medium/rshellcheck.diff))",
-            line,
+            "Sanctioned deviations: rshellcheck `stable-trap-variables`, "
+            "`signal-only-cleanup-trap`.",
+            report,
         )
         self.assertNotIn("not comparable", line)
         self.assertRegex(line, r"\| \d\.\d\d× \[\d\.\d\d, \d\.\d\d\] \|")
@@ -111,7 +111,8 @@ class ReportTests(unittest.TestCase):
         run.samples["medium"]["upstream"] = Samples()
         run.precheck["medium"]["rshellcheck"].parity = "differs"
         line = row(rendered(run), "rshellcheck")
-        self.assertIn("| ≈0.05× (no CI) |", line)
+        self.assertIn("| differs ([diff](precheck/medium/rshellcheck.diff)) |", line)
+        self.assertIn("| ≈0.05× |", line)
         self.assertIn("| not comparable |", line)
         self.assertNotIn("🏆", line)
 
@@ -135,7 +136,8 @@ class ReportTests(unittest.TestCase):
         check.reason = "one run took 0.1s, over the 15s per-run budget; timed once only"
         run.samples["medium"]["h2r"] = Samples()
         report = rendered(run)
-        self.assertIn("50.00 ms (once)", row(report, "h2r"))
+        self.assertIn("| 50.00 ms |", row(report, "h2r"))
+        self.assertTrue(row(report, "h2r").endswith("| timed once |"))
         for name in ("upstream", "h2r", "rshellcheck"):
             self.assertNotIn("🏆", row(report, name))
 
@@ -164,7 +166,11 @@ class ReportTests(unittest.TestCase):
             run.precheck["medium"][name].parity = "differs"
         report = rendered(run)
         actions = where_to_look(report)
-        self.assertIn("rshellcheck, **", actions)
+        self.assertIn(
+            "- **rshellcheck**: output differs on **synthetic** "
+            "([diff](precheck/medium/rshellcheck.diff)).",
+            actions,
+        )
         self.assertNotIn("h2r", actions)
         self.assertIn("[diff](precheck/medium/h2r.diff)", row(report, "h2r"))
 
@@ -176,7 +182,10 @@ class ReportTests(unittest.TestCase):
         candidate.repo = "https://github.com/kjanat/shellcheck-rs"
         report = rendered(run)
         actions = where_to_look(report)
-        self.assertIn("rshellcheck: largest observed memory ratio", actions)
+        self.assertIn(
+            "- **rshellcheck**: highest memory ratio on **synthetic**: **1374 MiB**, **6.25×** baseline.",
+            actions,
+        )
         self.assertNotIn("h2r", actions)
         self.assertIn("| 767 MiB | 3.49× |", row(report, "h2r"))
 
@@ -188,10 +197,12 @@ class ReportTests(unittest.TestCase):
         check.status = "failed"
         check.reason = "exit 3 without output"
         run.samples["medium"]["h2r"] = Samples()
+        report = rendered(run)
         self.assertIn(
-            "h2r, **synthetic**: investigate exit 3 without output.",
-            where_to_look(rendered(run)),
+            "- **h2r**, **synthetic**: investigate exit 3 without output.",
+            where_to_look(report),
         )
+        self.assertTrue(row(report, "h2r").endswith("| exit 3 without output |"))
 
     def test_a_candidate_timed_once_gives_a_memory_ratio(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
@@ -201,6 +212,97 @@ class ReportTests(unittest.TestCase):
         check.reason = "one run took 3.0s, over the 15s per-run budget; timed once only"
         run.samples["medium"]["h2r"] = Samples()
         self.assertIn("| 767 MiB | ≈3.49× |", row(rendered(run), "h2r"))
+
+    def test_output_differences_of_a_candidate_share_one_entry(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        run.scenarios["labelled"] = run.scenarios["medium"].model_copy(
+            update={"label": "Labelled"}
+        )
+        run.precheck["labelled"] = {
+            name: check.model_copy() for name, check in run.precheck["medium"].items()
+        }
+        run.samples["labelled"] = run.samples["medium"]
+        for scenario in ("medium", "labelled"):
+            run.precheck[scenario]["rshellcheck"].parity = "differs"
+        actions = where_to_look(rendered(run))
+        self.assertIn(
+            "- **rshellcheck**: output differs on "
+            "**synthetic** ([diff](precheck/medium/rshellcheck.diff)), "
+            "**Labelled** (tty, [diff](precheck/labelled/rshellcheck.diff)). "
+            "Read the diffs before its timings.",
+            actions,
+        )
+        self.assertEqual(actions.count("**rshellcheck**: output differs"), 1)
+
+    def test_budget_limits_read_as_budget_spent(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        check = run.precheck["medium"]["h2r"]
+        check.status = "limited"
+        check.parity = "unknown"
+        check.wall_s = 4.0
+        check.reason = "total candidate measurement budget of 600s exhausted; sweep did not complete"
+        run.samples["medium"]["h2r"] = Samples()
+        report = rendered(run)
+        self.assertIn(
+            "- **h2r**: the measurement budget ran out during **synthetic**; "
+            "output agreement there is unknown.",
+            where_to_look(report),
+        )
+        line = row(report, "h2r")
+        self.assertIn("| unknown | 4.000 s (stopped) |", line)
+        self.assertTrue(line.endswith("| budget spent |"), line)
+
+        check.status = "skipped"
+        self.assertTrue(row(rendered(run), "h2r").endswith("| - | budget spent |"))
+
+    def test_a_budget_stop_before_sampling_reads_as_budget_spent(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        run.samples["medium"]["h2r"] = Samples(
+            stop_reason="total candidate measurement budget of 600s exhausted; "
+            "showing initial sweep only"
+        )
+        line = row(rendered(run), "h2r")
+        self.assertRegex(line, r"\| ≈\d\.\d\d× \|")
+        self.assertTrue(line.endswith("| budget spent |"), line)
+
+    def test_quality_names_each_flag_kind_once(self):
+        self.assertEqual(
+            quality([
+                "only 3 samples",
+                "drift between rounds (p=0.01)",
+                "noisy: CV 12%",
+                "noisy: CV 15%",
+                "outliers: 2",
+            ]),
+            ["noisy", "drift", "few samples"],
+        )
+
+    def test_notes_show_short_commits_in_a_callout(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        run.notes = [
+            (
+                f"upstream-head: default branch HEAD {'a' * 40} differs from the "
+                f"v0.11.0 release commit {'b' * 40}"
+            )
+        ]
+        self.assertIn(
+            "> [!NOTE]\n> upstream-head: default branch HEAD `aaaaaaaaaaaa` "
+            "differs from the v0.11.0 release commit `bbbbbbbbbbbb`\n",
+            rendered(run),
+        )
+
+    def test_candidates_table_and_warm_up_count(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        report = rendered(run)
+        self.assertIn("| candidate | revision | binary | SHA-256 |", report)
+        self.assertIn("| rshellcheck | 0 | 0.0 MiB | [](run.json) |", report)
+        self.assertIn("4 shuffled rounds × 6 timed runs, 1 warm-up per round.", report)
+        run.config.rounds = 1
+        run.config.runs = 1
+        run.config.warmup = 2
+        self.assertIn(
+            "1 shuffled round × 1 timed run, 2 warm-ups per round.", rendered(run)
+        )
 
 
 if __name__ == "__main__":

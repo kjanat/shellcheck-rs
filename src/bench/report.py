@@ -26,14 +26,14 @@ def actions_summary(results: Path, artifact_url: str) -> str:
             return match.group()
         if not (results / target).is_file():
             raise ValueError(f"linked evidence is missing from the artifact: {target}")
-        return f"[{label} · `{target}`]({artifact_url})"
+        return f'[{label}]({artifact_url} "{target}")'
 
     report = re.sub(
         r"\[([^\]]+)\]\(([^)]+)\)", evidence, (results / "report.md").read_text()
     )
     return (
         f"📦 [Download benchmark evidence]({artifact_url}). "
-        "Evidence links download the ZIP; extract it and open the path shown in each link. "
+        "Evidence links download the ZIP; hover a link to see the file it points to inside. "
         "The bundled `report.md` links directly to those files.\n\n" + report
     )
 
@@ -46,6 +46,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--artifact-url", required=True)
     args = parser.parse_args(argv)
     print(actions_summary(args.results, args.artifact_url))
+
+
+def count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 def duration(seconds: float) -> str:
@@ -68,6 +72,39 @@ def workload(run: Run, name: str) -> str:
     )
     context = f"{scenario.label} · " if scenario.label else ""
     return f"{context}{size} · {output}"
+
+
+def brief(run: Run, name: str, *extra: str) -> str:
+    """The workload's label and output format, or its full title when it has no
+    label, with `extra` appended in parentheses."""
+    scenario = run.scenarios[name]
+    if not scenario.label:
+        return f"**{workload(run, name)}**" + (
+            f" ({', '.join(extra)})" if extra else ""
+        )
+    output = {"gcc": "GCC", "json1": "JSON"}.get(scenario.format, scenario.format)
+    return f"**{scenario.label}** ({', '.join((output, *extra))})"
+
+
+def quality(flags: list[str]) -> list[str]:
+    """Short names of the measurement-quality flags in `flags`."""
+    names = {"noisy": "noisy", "drift": "drift", "only ": "few samples"}
+    return [
+        word
+        for prefix, word in names.items()
+        if any(flag.startswith(prefix) for flag in flags)
+    ]
+
+
+def stopped(reason: str) -> str:
+    """The status of a cell whose sampling stopped early."""
+    first = reason.split("; ", 1)[0]
+    # `measure.Budget.reason` opens with these words.
+    return (
+        "budget spent"
+        if first.startswith("total candidate measurement budget")
+        else first
+    )
 
 
 def label(candidate: Manifest) -> str:
@@ -152,14 +189,16 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             ),
             "",
         ]
+    for note in run.notes:
+        # `candidates.plan` writes full commit hashes into its notes.
+        note = re.sub(r"\b[0-9a-f]{40}\b", lambda sha: f"`{sha[0][:12]}`", note)
+        lines += ["> [!NOTE]", f"> {note}", ""]
     lines += [
         "## Where to look first",
         "",
         f"Baseline: **{shown[baseline]}**. Ratios are candidate ÷ baseline; higher means more cost.",
         "",
     ]
-    for note in run.notes:
-        lines += [note, ""]
     actions: list[str] = []
     reference = project(next(c for c in candidates if c.name == baseline))
     for candidate in candidates:
@@ -171,22 +210,23 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         upstream = reference is not None and project(candidate) == reference
         reliable: list[tuple[float, str]] = []
         memory: list[tuple[float, str, float]] = []
+        differs: list[str] = []
+        limited: list[str] = []
+        failed: list[str] = []
         for scenario in run.scenarios:
             check = run.precheck[scenario][name]
             cell = summary.descriptives[scenario][name]
             base = summary.descriptives[scenario][baseline]
             flags = summary.flags[scenario][name] + summary.flags[scenario][baseline]
             if check.parity == "differs" and not upstream:
-                actions.append(
-                    f"{shown[name]}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
+                differs.append(
+                    brief(run, scenario, f"[diff](precheck/{scenario}/{name}.diff)")
                 )
             if check.status == "limited":
-                actions.append(
-                    f"{shown[name]}, **{workload(run, scenario)}**: this workload stopped at the total measurement budget; its output agreement is unknown."
-                )
+                limited.append(brief(run, scenario))
             elif check.status == "failed":
-                actions.append(
-                    f"{shown[name]}, **{workload(run, scenario)}**: investigate {check.reason}."
+                failed.append(
+                    f"**{shown[name]}**, {brief(run, scenario)}: investigate {check.reason}."
                 )
             if (
                 upstream
@@ -215,22 +255,33 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                     scenario,
                     cell.peak_rss_median,
                 ))
+        if differs:
+            actions.append(
+                f"**{shown[name]}**: output differs on {', '.join(differs)}. "
+                "Read the diffs before its timings."
+            )
+        if limited:
+            actions.append(
+                f"**{shown[name]}**: the measurement budget ran out during {', '.join(limited)}; "
+                "output agreement there is unknown."
+            )
+        actions += failed
         if reliable:
             ratio, scenario = max(reliable)
             cell = summary.descriptives[scenario][name]
             base = summary.descriptives[scenario][baseline]
             assert cell and base
             actions.append(
-                f"{shown[name]}: profile the **{workload(run, scenario)}**: "
-                f"**{duration(cell.median)}** vs {shown[baseline]} **{duration(base.median)}** "
-                f"(**{ratio:.2f}× time**)."
+                f"**{shown[name]}**: profile {brief(run, scenario)}: "
+                f"**{duration(cell.median)}** against {shown[baseline]} **{duration(base.median)}** "
+                f"(**{ratio:.2f}×** time)."
             )
         if memory:
             ratio, scenario, rss = max(memory)
             if ratio > 1:
                 actions.append(
-                    f"{shown[name]}: largest observed memory ratio is on the **{workload(run, scenario)}** "
-                    f"(**{rss / 2**20:.0f} MiB**, **{ratio:.2f}× baseline**)."
+                    f"**{shown[name]}**: highest memory ratio on {brief(run, scenario)}: "
+                    f"**{rss / 2**20:.0f} MiB**, **{ratio:.2f}×** baseline."
                 )
     if actions:
         lines += [f"- {action}" for action in actions[:8]]
@@ -242,24 +293,44 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         lines.append(
             "No clear performance priority from this run; inspect measurement status before drawing conclusions."
         )
+    config = run.config
+    budgets = sorted(
+        {
+            scenario.max_run_seconds or config.max_run_s
+            for scenario in run.scenarios.values()
+        }
+        - {0}
+    )
+    limits = ", ".join(f"{budget:g}s" for budget in budgets)
+    per_run = f"per-run budget ({limits})" if limits else "per-run budget"
     lines += [
         "",
         "## The results",
         "",
         (
-            "🏆 marks the lowest observed median of a table when that candidate's output matches and at least two candidates match. "
-            "A table whose fastest candidate differs in output or was timed once awards no trophy. "
-            "Noise and statistical significance appear in the status column."
+            "- 🏆 marks the lowest median of a table when that candidate's output matches and at least two candidates match. "
+            "A table whose fastest candidate differs in output or ran once awards no trophy."
         ),
+        (
+            "- **faster** and **slower** are significant verdicts. **noisy**, **drift** or **few samples** "
+            "after a verdict flag an unsteady measurement; alone they ask for a repeat."
+        ),
+        (
+            f"- **timed once**: one run took longer than the {per_run}, so the candidate ran once. "
+            "**baseline timed once**: the ratio divides by that single baseline run. "
+            "≈ marks such a ratio, which has no interval."
+        ),
+        "- **budget spent**: the candidate's total measurement budget ran out before or during this workload.",
     ]
     for scenario in run.scenarios:
         lines += [
             "",
             f"### {workload(run, scenario)}",
             "",
-            "| candidate | output | median | time / baseline [95% CI] | peak RSS | RSS / baseline | status |",
+            "| candidate | output | median | time ratio [95% CI] | peak RSS | RSS ratio | status |",
             "|---|---|---:|---:|---:|---:|---|",
         ]
+        sanctioned: list[str] = []
         base = summary.descriptives[scenario][baseline]
         base_check = run.precheck[scenario][baseline]
         base_value = observed(scenario, baseline)
@@ -296,21 +367,27 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             flags = summary.flags[scenario][name]
             pair = comparisons.get((scenario, name))
             value = observed(scenario, name)
+            diff = f"[diff](precheck/{scenario}/{name}.diff)"
             output = {
                 "baseline": "baseline",
                 "identical": "matches",
                 # The judge compares findings. Equal findings can differ in
                 # bytes: the port's json1 adds a `sources` member.
-                "sanctioned": f"matches up to sanctioned deviations ({', '.join(check.deviations)}; [diff](precheck/{scenario}/{name}.diff))"
+                "sanctioned": f"sanctioned ({diff})"
                 if check.deviations
-                else f"same findings ([diff](precheck/{scenario}/{name}.diff))",
+                else f"same findings ({diff})",
                 "unknown": "unknown",
-                "differs": f"[diff](precheck/{scenario}/{name}.diff)",
+                "differs": f"differs ({diff})",
             }[check.parity]
+            if check.parity == "sanctioned" and check.deviations:
+                sanctioned.append(
+                    f"{shown[name]} "
+                    + ", ".join(f"`{deviation}`" for deviation in check.deviations)
+                )
             median = (
                 duration(cell.median)
                 if cell
-                else duration(check.wall_s) + " (once)"
+                else duration(check.wall_s)
                 if once(check) or run.samples[scenario][name].stop_reason
                 else duration(check.wall_s) + " (stopped)"
                 if check.status == "limited"
@@ -327,7 +404,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 ratio = "1.00×"
             elif value is not None and base_value:
                 # One side was timed once: a point ratio, never an interval.
-                ratio = f"≈{value / base_value:.2f}× (no CI)"
+                ratio = f"≈{value / base_value:.2f}×"
             rss = cell.peak_rss_median if cell else check.peak_rss_bytes
             completed = check.status in ("ok", "slow")
             base_rss = (
@@ -344,15 +421,14 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 rss_ratio = f"≈{rss / base_rss:.2f}×"
             else:
                 rss_ratio = "-"
-            unstable = any(
-                flag.startswith(("noisy", "drift", "only ")) for flag in flags
-            )
             base_flags = summary.flags[scenario][baseline]
-            base_unstable = any(
-                flag.startswith(("noisy", "drift", "only ")) for flag in base_flags
-            )
-            if run.samples[scenario][name].stop_reason:
-                status = run.samples[scenario][name].stop_reason
+            unsteady = quality(flags + base_flags)
+            if stop := run.samples[scenario][name].stop_reason:
+                status = stopped(stop)
+            elif check.status == "slow":
+                status = "timed once"
+            elif check.status in ("limited", "skipped"):
+                status = "budget spent"
             elif check.status != "ok":
                 status = check.reason or check.status
             elif check.parity not in COMPARABLE or any(
@@ -360,22 +436,17 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             ):
                 status = "not comparable"
             elif once(base_check) and name != baseline:
-                limit = run.scenarios[scenario].max_run_seconds or run.config.max_run_s
-                status = (
-                    f"{shown[baseline]} timed once ({base_check.wall_s:.1f}s, over the "
-                    f"{limit:g}s per-run budget); ratio without interval"
-                )
+                status = "baseline timed once"
             # `analyze.verdict` grants these only with an interval excluding 1
             # and a Holm-adjusted p < 0.05, both computed over the noisy samples.
             elif pair and pair.verdict in ("faster", "slower"):
-                status = pair.verdict
-            elif unstable or base_unstable:
+                status = pair.verdict + (
+                    f" ({', '.join(unsteady)})" if unsteady else ""
+                )
+            elif unsteady:
                 status = (
                     "repeat: noise/drift"
-                    if any(
-                        flag.startswith(("noisy", "drift"))
-                        for flag in flags + base_flags
-                    )
+                    if {"noisy", "drift"} & set(unsteady)
                     else "repeat: few samples"
                 )
             elif name == baseline:
@@ -385,43 +456,37 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             else:
                 status = "not comparable"
             if name == winner:
-                median = f"***🏆 {median}***"
+                median = f"**🏆 {median}**"
             rss_text = "-" if check.status == "skipped" else f"{rss / 2**20:.0f} MiB"
             lines.append(
                 f"| {shown[name]} | {output} | {median} | {ratio} | {rss_text} | {rss_ratio} | {status} |"
             )
-    lines += ["", "Candidates:", ""]
+        if sanctioned:
+            lines += ["", f"Sanctioned deviations: {'; '.join(sanctioned)}."]
+    lines += [
+        "",
+        "## Candidates",
+        "",
+        "| candidate | revision | binary | SHA-256 |",
+        "|---|---|---:|---|",
+    ]
     for candidate in candidates:
         dirty = " + local changes" if candidate.dirty else ""
         lines.append(
-            f"- **{shown[candidate.name]}**: {revision(candidate)}{dirty}; "
-            f"{candidate.binary_bytes / 2**20:.1f} MiB binary; "
-            f"SHA-256 [{candidate.binary_sha256[:12]}](run.json)."
+            f"| {shown[candidate.name]} | {revision(candidate)}{dirty} | "
+            f"{candidate.binary_bytes / 2**20:.1f} MiB | "
+            f"[{candidate.binary_sha256[:12]}](run.json) |"
         )
-    config = run.config
     for name, limit in config.candidate_budget_s.items():
         lines += [
             "",
-            f"**{shown.get(name, name)} total measurement budget: {duration(limit)}**; used **{duration(run.candidate_elapsed_s.get(name, 0))}** across initial checks, warm-ups and timed runs. Compilation is separate. Budget-limited and skipped workloads are marked above.",
-        ]
-    budgets = sorted(
-        {
-            scenario.max_run_seconds or config.max_run_s
-            for scenario in run.scenarios.values()
-        }
-        - {0}
-    )
-    if budgets:
-        lines += [
-            "",
-            "Per-run sampling budgets: "
-            + ", ".join(f"**{budget:g}s**" for budget in budgets)
-            + ". Over-budget candidates are reported once, without a timing confidence interval.",
+            f"**{shown.get(name, name)} total measurement budget: {limit:g}s**; used **{run.candidate_elapsed_s.get(name, 0):.1f}s** across initial checks, warm-ups and timed runs. Compilation is separate.",
         ]
     lines += [
         "",
         (
-            f"{config.rounds} shuffled rounds × {config.runs} timed runs, {config.warmup} warm-ups per round. "
+            f"{count(config.rounds, 'shuffled round')} × {count(config.runs, 'timed run')}, "
+            f"{count(config.warmup, 'warm-up')} per round. "
             f"Seed {config.seed}; corpus [{run.corpus.sha256[:12]}](run.json). "
             f"CPU: {run.environment.cpu_model or 'unknown'}; {'CPU ' + config.pin if config.pin else 'no CPU pinning'}."
         ),
@@ -433,7 +498,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         "",
         (
             "Evidence: [raw run](run.json), [all statistics and quality flags](summary.json), `raw/`, and `precheck/`. "
-            "Rebuild this report with `uv run bench report <directory>`."
+            "Rebuild this report with `uvx --from git+https://github.com/kjanat/shellcheck-rs@bench bench report <directory>`."
         ),
         "",
     ]
