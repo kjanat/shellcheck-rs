@@ -1,8 +1,11 @@
 """A compact decision surface over the complete statistical summary."""
 
 import argparse
+import json
 import re
+import subprocess
 import tomllib
+from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +18,32 @@ COMPARABLE = ("baseline", "identical", "sanctioned")
 
 # Workloads listed under one finding in "Where to look first".
 LISTED = 6
+
+HARNESS_REPO = "https://github.com/kjanat/shellcheck-rs"
+
+
+def harness_source() -> str:
+    """The `uvx --from` source that reinstalls exactly this harness revision."""
+    try:
+        recorded = metadata.distribution("shellcheck-bench").read_text(
+            "direct_url.json"
+        )
+    except metadata.PackageNotFoundError:
+        recorded = None
+    # uv and pip record a VCS install's resolved commit in `direct_url.json` (PEP 610).
+    origin = json.loads(recorded or "{}")
+    commit = origin.get("vcs_info", {}).get("commit_id")
+    if commit:
+        return f"git+{origin['url']}@{commit}"
+    checkout = subprocess.run(
+        ["git", "-C", str(Path(__file__).parent), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if checkout.returncode == 0:
+        return f"git+{HARNESS_REPO}@{checkout.stdout.strip()}"
+    return f"git+{HARNESS_REPO}@bench"
 
 
 def actions_summary(results: Path, artifact_url: str) -> str:
@@ -515,7 +544,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
         )
     lines += [
         "- **Rebuild this report**",
-        "  - `uvx --from git+https://github.com/kjanat/shellcheck-rs@bench bench report <directory>`",
+        f"  - `uvx --from {harness_source()} bench report <directory>`",
         "",
     ]
     return "\n".join(lines)

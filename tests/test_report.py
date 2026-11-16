@@ -1,11 +1,15 @@
 import contextlib
 import io
+import json
+import subprocess
 import tempfile
 import unittest
+from importlib import metadata
 from pathlib import Path
+from unittest.mock import patch
 
 from bench.analyze import analyze
-from bench.report import label, quality
+from bench.report import HARNESS_REPO, harness_source, label, quality
 from bench.schema import Manifest, Run, Samples
 from tests.test_memory import SELFTEST_ORDERS, _synthetic_run
 
@@ -41,6 +45,52 @@ def row(report: str, name: str) -> str:
 
 def where_to_look(report: str) -> str:
     return report.split("## Where to look first", 1)[1].split("## The results", 1)[0]
+
+
+class Recorded:
+    def __init__(self, origin: object):
+        self.origin = origin
+
+    def read_text(self, name: str) -> str | None:
+        assert name == "direct_url.json"
+        return None if self.origin is None else json.dumps(self.origin)
+
+
+class HarnessSourceTests(unittest.TestCase):
+    def test_a_vcs_install_names_its_resolved_commit(self):
+        origin = {
+            "url": "https://github.com/kjanat/shellcheck-rs",
+            "vcs_info": {"vcs": "git", "commit_id": "a" * 40},
+        }
+        with patch("bench.report.metadata.distribution", return_value=Recorded(origin)):
+            self.assertEqual(
+                harness_source(),
+                f"git+https://github.com/kjanat/shellcheck-rs@{'a' * 40}",
+            )
+
+    def test_a_checkout_names_its_head_commit(self):
+        head = subprocess.run(
+            ["git", "-C", str(Path(__file__).parent), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        editable = {"url": "file:///checkout", "dir_info": {"editable": True}}
+        with patch(
+            "bench.report.metadata.distribution", return_value=Recorded(editable)
+        ):
+            self.assertEqual(harness_source(), f"git+{HARNESS_REPO}@{head}")
+
+    def test_without_a_recorded_or_checked_out_commit_it_names_the_branch(self):
+        failed = subprocess.CompletedProcess([], 128, "", "not a git repository")
+        with (
+            patch(
+                "bench.report.metadata.distribution",
+                side_effect=metadata.PackageNotFoundError("shellcheck-bench"),
+            ),
+            patch("bench.report.subprocess.run", return_value=failed),
+        ):
+            self.assertEqual(harness_source(), f"git+{HARNESS_REPO}@bench")
 
 
 class ReportTests(unittest.TestCase):
