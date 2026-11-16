@@ -46,7 +46,8 @@ mutation = pathlib.Path({str(self.root / "mutation")!r})
 with pathlib.Path({str(self.root / "mise-calls")!r}).open('a') as calls:
     calls.write(' '.join(sys.argv[1:]) + '\\n')
 if sys.argv[1:] == ['ls', '--current', '--json']:
-    print('{{"rust": [{{"version": "1.7"}}], "ghc": [{{"version": "9.6"}}]}}')
+    rust = "1.9" if pathlib.Path('mise.bench.toml').exists() else "1.7"
+    print('{{"rust": [{{"version": "' + rust + '"}}], "ghc": [{{"version": "9.6"}}]}}')
     sys.exit(0)
 if sys.argv[1] == 'install' and mutation.exists() and mutation.read_text() == 'setup':
     pathlib.Path('main.rs').write_text('changed by setup')
@@ -397,6 +398,25 @@ tools = ["rust"]
         recorded = calls.read_text().splitlines()
         self.assertNotIn("ls --current --json", recorded)
         self.assertIn("install --locked rust", recorded)
+
+    def test_a_candidate_with_the_active_mise_env_file_uses_its_own_pins(self):
+        (self.source / "mise.lock").write_text('[[tools.ghc]]\nversion = "9.6"\n')
+        (self.source / "mise.bench.toml").write_text('[tools]\nrust = "1.9"\n')
+        self.commit()
+        calls = self.root / "mise-calls"
+        self.environment.pop("MISE_ENV", None)
+        self.prepare()
+        harness = self.manifest()["build_key"]
+        recorded = calls.read_text().splitlines()
+        self.assertIn("install rust@1.7", recorded)
+        self.assertNotIn("trust -q", recorded[: recorded.index("ls --current --json")])
+        calls.unlink()
+        self.environment["MISE_ENV"] = "bench"
+        self.prepare()
+        recorded = calls.read_text().splitlines()
+        self.assertIn("trust -q", recorded[: recorded.index("ls --current --json")])
+        self.assertIn("install rust@1.9", recorded)
+        self.assertNotEqual(harness, self.manifest()["build_key"])
 
     def test_plan_builds_resolved_sha_even_after_remote_branch_moves(self):
         plan = self.root / "plan.json"

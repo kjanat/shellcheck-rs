@@ -193,11 +193,26 @@ def checkout(state: Path, name: str, spec: CandidateSpec) -> Path:
     return source
 
 
-def harness_versions() -> dict[str, str]:
+def toolchain_root(source: Path) -> Path:
+    """Where a candidate's unlocked tool versions come from.
+
+    A candidate whose checkout ships the active `mise.<env>.toml` builds with
+    its own pins, so a pull request that bumps them leaves its base revision
+    on the old toolchain. Every other candidate uses the harness config.
+    """
+    environments = [name for name in os.environ.get("MISE_ENV", "").split(",") if name]
+    if any((source / f"mise.{name}.toml").is_file() for name in environments):
+        return source
+    return ROOT
+
+
+def harness_versions(root: Path = ROOT) -> dict[str, str]:
+    if root != ROOT:
+        command(["mise", "trust", "-q"], cwd=root)
     # Without a tool argument, `mise ls` also resolves tools whose backend
     # plugin is not installed yet.
     listing: dict[str, list[dict[str, Any]]] = json.loads(
-        command(["mise", "ls", "--current", "--json"], cwd=ROOT)
+        command(["mise", "ls", "--current", "--json"], cwd=root)
     )
     return {
         name: records[0]["version"]
@@ -226,7 +241,11 @@ def tool_inputs(source: Path, tools: list[str]) -> dict[str, object]:
     if (source / "mise.lock").exists():
         with (source / "mise.lock").open("rb") as file:
             source_lock = tomllib.load(file).get("tools", {})
-    fallback = harness_versions() if any(not source_lock.get(t) for t in tools) else {}
+    fallback = (
+        harness_versions(toolchain_root(source))
+        if any(not source_lock.get(t) for t in tools)
+        else {}
+    )
     locked_tools: dict[str, object] = {}
     versions: dict[str, str] = {}
     for name in tools:
