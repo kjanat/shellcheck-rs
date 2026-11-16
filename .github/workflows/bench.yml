@@ -11,6 +11,9 @@ on:
   push:
     branches: [bench]
     paths: [src/**, tests/**, pyproject.toml, uv.lock, mise.toml, mise.lock, .github/workflows/bench.yml]
+  pull_request:
+    branches: [master]
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", ".cargo/**", "mise.toml", "mise.bench.toml", ".github/workflows/bench.yml"]
 
 permissions:
   contents: read
@@ -43,9 +46,36 @@ jobs:
         run: |
           read -r sha _ < <(git ls-remote origin refs/heads/bench)
           echo "harness=git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}@${sha}" >> "${GITHUB_OUTPUT}"
+      - name: Compare the pull request with its base branch
+        id: pr
+        if: github.event_name == 'pull_request'
+        env: { PR: "${{ github.event.pull_request.number }}", BASE: "${{ github.base_ref }}" }
+        run: |
+          mkdir -p .bench
+          cat > .bench/pr-candidates.toml <<EOF
+          [candidates.master]
+          baseline = true
+          repo     = "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          ref      = "${BASE}"
+          package  = "rshellcheck"
+          tools    = ["rust"]
+          judge    = "conformance"
+
+          [candidates.pr]
+          repo    = "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          ref     = "refs/pull/${PR}/head"
+          package = "rshellcheck"
+          tools   = ["rust"]
+          judge   = "conformance"
+
+          [candidates.upstream-release]
+          binary = "shellcheck"
+          tool   = "shellcheck"
+          EOF
+          echo "config=.bench/pr-candidates.toml" >> "${GITHUB_OUTPUT}"
       - name: Prepare bench plan
-        run: uvx --from "${HARNESS}" bench prepare --resolve-only --plan .bench/plan.json
-        env: { HARNESS: "${{ steps.harness.outputs.harness }}" }
+        run: uvx --from "${HARNESS}" bench prepare --resolve-only --plan .bench/plan.json ${CONFIG:+--config "${CONFIG}"}
+        env: { HARNESS: "${{ steps.harness.outputs.harness }}", CONFIG: "${{ steps.pr.outputs.config }}" }
       - name: Resolve once
         id: plan
         run: |
@@ -128,6 +158,7 @@ jobs:
 
   measure:
     name: Measure all candidates together
+    permissions: { contents: read, pull-requests: write }
     needs: [resolve, prepare]
     runs-on: ubuntu-26.04
     timeout-minutes: 360
@@ -165,7 +196,7 @@ jobs:
           ROUNDS: ${{ inputs.rounds || '5' }}
           RUNS: ${{ inputs.runs || '4' }}
           WARMUP: ${{ inputs.warmup || '1' }}
-          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '30' }}
+          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || (github.event_name == 'pull_request' && '5' || '30') }}
           SCENARIOS: ${{ inputs.scenarios }}
         run: uvx --from "${HARNESS}" bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
           ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
@@ -179,3 +210,27 @@ jobs:
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
         run: uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Post the results on the pull request
+        # A fork's token cannot write comments.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_URL: ${{ steps.results.outputs.artifact-url }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker='<!-- rshellcheck-bench -->'
+          {
+            echo "${marker}"
+            uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md
+            echo
+            echo "<sub>[Bench run](${RUN_URL})</sub>"
+          } > "${RUNNER_TEMP}/comment.md"
+          # `--paginate` applies `--jq` to each page, so take the last id overall.
+          comment=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | tail -n 1)
+          if [[ -n "${comment}" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment}" -F "body=@${RUNNER_TEMP}/comment.md" --jq .html_url
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F "body=@${RUNNER_TEMP}/comment.md" --jq .html_url
+          fi
