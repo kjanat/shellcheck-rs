@@ -226,7 +226,7 @@ jobs:
       - uses: actions/checkout@v7
         with: { persist-credentials: false }
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv kprint" }
+        with: { install_args: "python uv node kprint" }
       - uses: actions/download-artifact@v8
         with: { name: bench-results, path: .bench/results/ci }
       - name: Post the results on the pull request
