@@ -220,9 +220,35 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           marker='<!-- rshellcheck-bench -->'
+          results=.bench/results/ci
           {
             echo "${marker}"
-            uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md
+            jq -r --arg pr "${PR}" --slurpfile run "${results}/run.json" '
+              def f2: (. * 100 | round) as $n | "\($n / 100 | floor).\($n % 100 | tostring | if length < 2 then "0" + . else . end)";
+              def name($s): $run[0].scenarios[$s] as $x
+                | (if $x.label != "" then $x.label else $s end) + " (" + ({gcc: "GCC", json1: "JSON"}[$x.format] // $x.format) + ")";
+              [.comparisons[] | select(.candidate == "pr" and .reference == "master")] as $pairs
+              | [$pairs[] | select(.verdict == "slower" or .verdict == "faster")] as $changed
+              | [$run[0].precheck | to_entries[] | select(.value.pr.parity == "differs" or .value.pr.parity == "unknown") | .key] as $differs
+              | ([.descriptives | to_entries[] | select(.value.pr != null and .value.master != null)
+                  | {s: .key, r: (.value.pr.peak_rss_median / .value.master.peak_rss_median)}] | max_by(.r)) as $memory
+              | "## PR #\($pr) against master",
+                "",
+                (if $differs == [] then "- **Output** matches master on every workload"
+                 else "- **Output differs** from master", ($differs[] | "  - \(name(.))") end),
+                (if $changed == [] then "- **Time** shows no significant change on \($pairs | length) workloads"
+                 else "- **Time** changed on \($changed | length) of \($pairs | length) workloads",
+                   ($changed[] | "  - **\(.verdict)** \(name(.scenario)): **\(1 / .speedup_median | f2)×** [\(1 / .speedup_median_ci[1] | f2), \(1 / .speedup_median_ci[0] | f2)]") end),
+                (if $memory then "- **Peak memory** changes at most **\($memory.r | f2)×**, on \(name($memory.s))" else empty end),
+                "",
+                "Ratios are the pull request over master, with 95% intervals."
+            ' "${results}/summary.json"
+            echo
+            echo "<details><summary>Full report</summary>"
+            echo
+            uvx --from "${HARNESS}" bench summary "${results}" --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md
+            echo
+            echo "</details>"
             echo
             echo "<sub>[Bench run](${RUN_URL})</sub>"
           } > "${RUNNER_TEMP}/comment.md"
