@@ -244,7 +244,7 @@ class OmarchyTests(unittest.TestCase):
             analyze(results, plots=False, resamples=200)
         report = (results / "report.md").read_text()
         self.assertIn(f"{self.identity.repo}/commit/{self.identity.pin}", report)
-        self.assertIn("1 shell file, 23 lines", report)
+        self.assertIn("1 shell file with 23 lines", report)
         self.assertIn(
             "Omarchy runtime commands · 23-line script · GCC diagnostics", report
         )

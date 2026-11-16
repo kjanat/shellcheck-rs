@@ -168,7 +168,11 @@ class MetricsTests(unittest.TestCase):
         )
         self.assertIn("not comparable", row)
         self.assertNotIn("🏆", row)
-        self.assertIn("output diff", report)
+        self.assertIn(
+            "  - Output differs from the baseline\n"
+            "    - **synthetic** ([diff](precheck/medium/rshellcheck.diff))\n",
+            report,
+        )
 
     def test_changed_exit_status_during_timing_is_not_comparable(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)

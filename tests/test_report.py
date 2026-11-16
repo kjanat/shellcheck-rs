@@ -75,7 +75,7 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(line.endswith("| baseline timed once |"), line)
         self.assertIn("| 3.000 s |", row(report, "upstream"))
         self.assertTrue(row(report, "upstream").endswith("| timed once |"))
-        self.assertIn("longer than the per-run budget (15s)", report)
+        self.assertIn("one run exceeded the per-run budget of 15s", report)
 
     def test_sanctioned_output_is_compared_like_matching_output(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
@@ -86,8 +86,8 @@ class ReportTests(unittest.TestCase):
         line = row(report, "rshellcheck")
         self.assertIn("| sanctioned ([diff](precheck/medium/rshellcheck.diff)) |", line)
         self.assertIn(
-            "Sanctioned deviations: rshellcheck `stable-trap-variables`, "
-            "`signal-only-cleanup-trap`.",
+            "Sanctioned deviations:\n\n- rshellcheck: `stable-trap-variables`, "
+            "`signal-only-cleanup-trap`\n",
             report,
         )
         self.assertNotIn("not comparable", line)
@@ -167,8 +167,9 @@ class ReportTests(unittest.TestCase):
         report = rendered(run)
         actions = where_to_look(report)
         self.assertIn(
-            "- **rshellcheck**: output differs on **synthetic** "
-            "([diff](precheck/medium/rshellcheck.diff)).",
+            "- **rshellcheck**\n"
+            "  - Output differs from the baseline\n"
+            "    - **synthetic** ([diff](precheck/medium/rshellcheck.diff))\n",
             actions,
         )
         self.assertNotIn("h2r", actions)
@@ -183,7 +184,9 @@ class ReportTests(unittest.TestCase):
         report = rendered(run)
         actions = where_to_look(report)
         self.assertIn(
-            "- **rshellcheck**: highest memory ratio on **synthetic**: **1374 MiB**, **6.25×** baseline.",
+            "- **rshellcheck**\n"
+            "  - Highest memory ratio\n"
+            "    - **synthetic**: **1374 MiB**, **6.25×**\n",
             actions,
         )
         self.assertNotIn("h2r", actions)
@@ -199,7 +202,7 @@ class ReportTests(unittest.TestCase):
         run.samples["medium"]["h2r"] = Samples()
         report = rendered(run)
         self.assertIn(
-            "- **h2r**, **synthetic**: investigate exit 3 without output.",
+            "- **h2r**\n  - Failed\n    - **synthetic**: exit 3 without output\n",
             where_to_look(report),
         )
         self.assertTrue(row(report, "h2r").endswith("| exit 3 without output |"))
@@ -226,13 +229,13 @@ class ReportTests(unittest.TestCase):
             run.precheck[scenario]["rshellcheck"].parity = "differs"
         actions = where_to_look(rendered(run))
         self.assertIn(
-            "- **rshellcheck**: output differs on "
-            "**synthetic** ([diff](precheck/medium/rshellcheck.diff)), "
-            "**Labelled** (tty, [diff](precheck/labelled/rshellcheck.diff)). "
-            "Read the diffs before its timings.",
+            "- **rshellcheck**\n"
+            "  - Output differs from the baseline\n"
+            "    - **synthetic** ([diff](precheck/medium/rshellcheck.diff))\n"
+            "    - **Labelled** (tty, [diff](precheck/labelled/rshellcheck.diff))\n",
             actions,
         )
-        self.assertEqual(actions.count("**rshellcheck**: output differs"), 1)
+        self.assertEqual(actions.count("Output differs"), 1)
 
     def test_budget_limits_read_as_budget_spent(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
@@ -244,8 +247,9 @@ class ReportTests(unittest.TestCase):
         run.samples["medium"]["h2r"] = Samples()
         report = rendered(run)
         self.assertIn(
-            "- **h2r**: the measurement budget ran out during **synthetic**; "
-            "output agreement there is unknown.",
+            "- **h2r**\n"
+            "  - Budget ran out before the output check finished\n"
+            "    - **synthetic**\n",
             where_to_look(report),
         )
         line = row(report, "h2r")
@@ -296,12 +300,15 @@ class ReportTests(unittest.TestCase):
         report = rendered(run)
         self.assertIn("| candidate | revision | binary | SHA-256 |", report)
         self.assertIn("| rshellcheck | 0 | 0.0 MiB | [](run.json) |", report)
-        self.assertIn("4 shuffled rounds × 6 timed runs, 1 warm-up per round.", report)
+        self.assertIn(
+            "  - 4 shuffled rounds of 6 timed runs\n  - 1 warm-up per round\n", report
+        )
         run.config.rounds = 1
         run.config.runs = 1
         run.config.warmup = 2
         self.assertIn(
-            "1 shuffled round × 1 timed run, 2 warm-ups per round.", rendered(run)
+            "  - 1 shuffled round of 1 timed run\n  - 2 warm-ups per round\n",
+            rendered(run),
         )
 
 

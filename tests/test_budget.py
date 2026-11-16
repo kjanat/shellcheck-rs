@@ -112,7 +112,7 @@ else:
             self.assertIsNone(summary.descriptives["unused"]["h2r"])
             self.assertFalse(summary.comparisons)
             report = (root / "report.md").read_text()
-            self.assertIn("h2r total measurement budget: 1s", report)
+            self.assertRegex(report, r"  - h2r: used \*\*\d\.\ds\*\* of \*\*1s\*\*\n")
             self.assertIn("| h2r | unknown | - | - | - | - |", report)
             self.assertIn("(stopped)", report)
             self.assertNotIn(

@@ -37,7 +37,7 @@ class SummaryTests(unittest.TestCase):
             for file in (diff, "run.json", "summary.json", "timing.svg"):
                 self.assertIn(f'({artifact} "{file}")', rendered)
                 self.assertNotIn(f"]({file})", rendered)
-            self.assertIn("hover a link", rendered)
+            self.assertIn("hover text names the file", rendered)
             self.assertEqual((root / "report.md").read_text(), report)
 
     def test_missing_evidence_cannot_be_published_as_a_working_link(self):
