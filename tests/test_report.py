@@ -39,6 +39,10 @@ def row(report: str, name: str) -> str:
     return next(line for line in report.splitlines() if line.startswith(f"| {name} |"))
 
 
+def where_to_look(report: str) -> str:
+    return report.split("## Where to look first", 1)[1].split("## The results", 1)[0]
+
+
 class ReportTests(unittest.TestCase):
     def test_upstream_candidates_carry_the_revision_they_measured(self):
         head = manifest(
@@ -146,6 +150,48 @@ class ReportTests(unittest.TestCase):
         self.assertIn("| 1374 MiB | ≈6.25× |", row(report, "rshellcheck"))
         self.assertIn("| 767 MiB | ≈3.49× |", row(report, "h2r"))
         self.assertIn("| 1.00× | 220 MiB | ≈1.00× |", row(report, "upstream"))
+
+    def test_another_build_of_the_baseline_project_stays_out_of_where_to_look(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        repos = {
+            "upstream": "https://github.com/koalaman/shellcheck.git",
+            "h2r": "https://github.com/koalaman/shellcheck",
+            "rshellcheck": "https://github.com/kjanat/shellcheck-rs.git",
+        }
+        for candidate in run.candidates:
+            candidate.repo = repos[candidate.name]
+        for name in ("h2r", "rshellcheck"):
+            run.precheck["medium"][name].parity = "differs"
+        report = rendered(run)
+        actions = where_to_look(report)
+        self.assertIn("rshellcheck, **", actions)
+        self.assertNotIn("h2r", actions)
+        self.assertIn("[diff](precheck/medium/h2r.diff)", row(report, "h2r"))
+
+    def test_another_build_of_the_baseline_project_leaves_memory_to_the_table(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        for candidate in run.candidates:
+            candidate.repo = "https://github.com/koalaman/shellcheck"
+        candidate = next(c for c in run.candidates if c.name == "rshellcheck")
+        candidate.repo = "https://github.com/kjanat/shellcheck-rs"
+        report = rendered(run)
+        actions = where_to_look(report)
+        self.assertIn("rshellcheck: largest observed memory ratio", actions)
+        self.assertNotIn("h2r", actions)
+        self.assertIn("| 767 MiB | 3.49× |", row(report, "h2r"))
+
+    def test_a_failed_build_of_the_baseline_project_stays_in_where_to_look(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        for candidate in run.candidates:
+            candidate.repo = "https://github.com/koalaman/shellcheck"
+        check = run.precheck["medium"]["h2r"]
+        check.status = "failed"
+        check.reason = "exit 3 without output"
+        run.samples["medium"]["h2r"] = Samples()
+        self.assertIn(
+            "h2r, **synthetic**: investigate exit 3 without output.",
+            where_to_look(rendered(run)),
+        )
 
     def test_a_candidate_timed_once_gives_a_memory_ratio(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)

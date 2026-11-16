@@ -96,10 +96,15 @@ def once(check: Precheck) -> bool:
     return check.status == "slow"
 
 
+def project(candidate: Manifest) -> str | None:
+    """The candidate's repository URL without a trailing slash or `.git`."""
+    return candidate.repo.rstrip("/").removesuffix(".git") if candidate.repo else None
+
+
 def revision(candidate: Manifest) -> str:
     label = candidate.pin[:12] or "supplied binary"
-    if candidate.repo and candidate.repo.startswith("https://github.com/"):
-        repo = candidate.repo.rstrip("/").removesuffix(".git")
+    repo = project(candidate)
+    if repo and repo.startswith("https://github.com/"):
         if candidate.kind == "git" and candidate.pin:
             return f"[{label}]({repo}/commit/{candidate.pin})"
         if candidate.kind == "release" and candidate.pin:
@@ -156,9 +161,14 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
     for note in run.notes:
         lines += [note, ""]
     actions: list[str] = []
-    for name in names:
+    reference = project(next(c for c in candidates if c.name == baseline))
+    for candidate in candidates:
+        name = candidate.name
         if name == baseline:
             continue
+        # Another build of the baseline's project differs from it by upstream's
+        # own changes; its comparisons stay in the tables.
+        upstream = reference is not None and project(candidate) == reference
         reliable: list[tuple[float, str]] = []
         memory: list[tuple[float, str, float]] = []
         for scenario in run.scenarios:
@@ -166,7 +176,7 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
             cell = summary.descriptives[scenario][name]
             base = summary.descriptives[scenario][baseline]
             flags = summary.flags[scenario][name] + summary.flags[scenario][baseline]
-            if check.parity == "differs":
+            if check.parity == "differs" and not upstream:
                 actions.append(
                     f"{shown[name]}, **{workload(run, scenario)}**: inspect the [output diff](precheck/{scenario}/{name}.diff) before interpreting performance."
                 )
@@ -178,7 +188,12 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                 actions.append(
                     f"{shown[name]}, **{workload(run, scenario)}**: investigate {check.reason}."
                 )
-            if not cell or not base or check.parity not in ("identical", "sanctioned"):
+            if (
+                upstream
+                or not cell
+                or not base
+                or check.parity not in ("identical", "sanctioned")
+            ):
                 continue
             pair = comparisons.get((scenario, name))
             unstable = any(
