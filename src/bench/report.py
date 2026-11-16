@@ -350,6 +350,10 @@ def render(run: Run, summary: Summary, plot_paths: dict[str, str] | None = None)
                     f"{shown[baseline]} timed once ({base_check.wall_s:.1f}s, over the "
                     f"{limit:g}s per-run budget); ratio without interval"
                 )
+            # `analyze.verdict` grants these only with an interval excluding 1
+            # and a Holm-adjusted p < 0.05, both computed over the noisy samples.
+            elif pair and pair.verdict in ("faster", "slower"):
+                status = pair.verdict
             elif unstable or base_unstable:
                 status = (
                     "repeat: noise/drift"

@@ -206,7 +206,7 @@ class MetricsTests(unittest.TestCase):
         low, high = pair.speedup_median_ci
         self.assertIn(f"[{1 / high:.2f}, {1 / low:.2f}]", row)
 
-    def test_fastest_observed_result_keeps_highlight_and_noise_qualification(self):
+    def test_a_noisy_fastest_result_keeps_its_highlight_and_verdict(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
         samples = run.samples["medium"]["rshellcheck"]
         for round_ in samples.rounds:
@@ -223,13 +223,40 @@ class MetricsTests(unittest.TestCase):
             line for line in report.splitlines() if line.startswith("| rshellcheck |")
         )
         self.assertIn("🏆", row)
-        self.assertIn("repeat: noise/drift", row)
+        self.assertTrue(row.endswith("| faster |"), row)
         self.assertNotIn(
             "🏆",
             next(
                 line for line in report.splitlines() if line.startswith("| upstream |")
             ),
         )
+
+    def test_noise_without_a_verdict_asks_for_a_repeat(self):
+        run, _ = _synthetic_run(True, SELFTEST_ORDERS)
+        samples = run.samples["medium"]["rshellcheck"]
+        baseline = run.samples["medium"]["upstream"]
+        for round_, base in zip(samples.rounds, baseline.rounds, strict=True):
+            round_.times = [
+                time * (0.5 if i % 2 else 1.5) for i, time in enumerate(base.times)
+            ]
+        samples.times = [time for round_ in samples.rounds for time in round_.times]
+        summary, report = self.analyze_run(run)
+        pair = next(
+            pair
+            for pair in summary.comparisons
+            if pair.candidate == "rshellcheck" and pair.reference == "upstream"
+        )
+        self.assertEqual(pair.verdict, "no significant difference")
+        self.assertTrue(
+            any(
+                flag.startswith("noisy")
+                for flag in summary.flags["medium"]["rshellcheck"]
+            )
+        )
+        row = next(
+            line for line in report.splitlines() if line.startswith("| rshellcheck |")
+        )
+        self.assertTrue(row.endswith("| repeat: noise/drift |"), row)
 
     def test_baseline_alone_earns_no_trophy(self):
         run, _ = _synthetic_run(True, SELFTEST_ORDERS)
