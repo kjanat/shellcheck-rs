@@ -11,6 +11,9 @@ on:
   push:
     branches: [bench]
     paths: [src/**, tests/**, pyproject.toml, uv.lock, mise.toml, mise.lock, .github/workflows/bench.yml]
+  pull_request:
+    branches: [master]
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", ".cargo/**", "mise.toml", "mise.bench.toml", ".github/workflows/bench.yml"]
 
 permissions:
   contents: read
@@ -43,9 +46,36 @@ jobs:
         run: |
           read -r sha _ < <(git ls-remote origin refs/heads/bench)
           echo "harness=git+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}@${sha}" >> "${GITHUB_OUTPUT}"
+      - name: Compare the pull request with its base branch
+        id: pr
+        if: github.event_name == 'pull_request'
+        env: { BASE: "${{ github.event.pull_request.base.sha }}", MERGE: "${{ github.sha }}" }
+        run: |
+          mkdir -p .bench
+          cat > .bench/pr-candidates.toml <<EOF
+          [candidates.master]
+          baseline = true
+          repo     = "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          ref      = "${BASE}"
+          package  = "rshellcheck"
+          tools    = ["rust"]
+          judge    = "conformance"
+
+          [candidates.pr]
+          repo    = "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          ref     = "${MERGE}"
+          package = "rshellcheck"
+          tools   = ["rust"]
+          judge   = "conformance"
+
+          [candidates.upstream-release]
+          binary = "shellcheck"
+          tool   = "shellcheck"
+          EOF
+          echo "config=.bench/pr-candidates.toml" >> "${GITHUB_OUTPUT}"
       - name: Prepare bench plan
-        run: uvx --from "${HARNESS}" bench prepare --resolve-only --plan .bench/plan.json
-        env: { HARNESS: "${{ steps.harness.outputs.harness }}" }
+        run: uvx --from "${HARNESS}" bench prepare --resolve-only --plan .bench/plan.json ${CONFIG:+--config "${CONFIG}"}
+        env: { HARNESS: "${{ steps.harness.outputs.harness }}", CONFIG: "${{ steps.pr.outputs.config }}" }
       - name: Resolve once
         id: plan
         run: |
@@ -128,12 +158,14 @@ jobs:
 
   measure:
     name: Measure all candidates together
+    outputs: { artifact: "${{ steps.results.outputs.artifact-url }}" }
     needs: [resolve, prepare]
     runs-on: ubuntu-26.04
     timeout-minutes: 360
     env: { HARNESS: "${{ needs.resolve.outputs.harness }}" }
     steps:
       - uses: actions/checkout@v7
+        with: { persist-credentials: false }
       - uses: jdx/mise-action@v5
         with: { install_args: "python uv hyperfine node kprint" }
       - name: Install measurement runtime dependencies
@@ -165,7 +197,7 @@ jobs:
           ROUNDS: ${{ inputs.rounds || '5' }}
           RUNS: ${{ inputs.runs || '4' }}
           WARMUP: ${{ inputs.warmup || '1' }}
-          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || '30' }}
+          MAX_RUN_SECONDS: ${{ inputs.max_run_seconds || (github.event_name == 'pull_request' && '5' || '30') }}
           SCENARIOS: ${{ inputs.scenarios }}
         run: uvx --from "${HARNESS}" bench run --plan .bench/plan.json --rounds "${ROUNDS}" --runs "${RUNS}" --warmup "${WARMUP}" --max-run-seconds "${MAX_RUN_SECONDS}" --h2r-budget-seconds 600
           ${SCENARIOS:+--scenarios "${SCENARIOS}"} --out .bench/results/ci
@@ -179,3 +211,60 @@ jobs:
         shell: bash
         env: { ARTIFACT_URL: "${{ steps.results.outputs.artifact-url }}" }
         run: uvx --from "${HARNESS}" bench summary .bench/results/ci --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md >> "${GITHUB_STEP_SUMMARY}"
+
+  comment:
+    name: Comment the results on the pull request
+    needs: [resolve, measure]
+    # A fork's token cannot write comments.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    # The only job that can write, and it runs no candidate code.
+    permissions: { contents: read, pull-requests: write }
+    env: { HARNESS: "${{ needs.resolve.outputs.harness }}" }
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jdx/mise-action@v5
+        with: { install_args: "python uv node kprint" }
+      - uses: actions/download-artifact@v8
+        with: { name: bench-results, path: .bench/results/ci }
+      - name: Post the results on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_URL: ${{ needs.measure.outputs.artifact }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          start='<!-- rshellcheck-bench:start -->'
+          end='<!-- rshellcheck-bench:end -->'
+          results=.bench/results/ci
+          {
+            echo "${start}"
+            jq -r --arg pr "${PR}" --slurpfile run "${results}/run.json" -f .github/scripts/bench-comment.jq "${results}/summary.json"
+            echo "<details><summary>Full report</summary>"
+            echo
+            uvx --from "${HARNESS}" bench summary "${results}" --artifact-url "${ARTIFACT_URL}" | kprint fmt --stdin md
+            echo
+            echo "</details>"
+            echo
+            echo "<sub>[Bench run](${RUN_URL})</sub>"
+            echo "${end}"
+          } > "${RUNNER_TEMP}/section.md"
+          # `--paginate` applies `--jq` to each page, so take the last id overall.
+          comment=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- rshellcheck-bench"))) | .id' | tail -n 1)
+          if [[ -z "${comment}" ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F "body=@${RUNNER_TEMP}/section.md" --jq .html_url
+            exit
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment}" --jq .body > "${RUNNER_TEMP}/old.md"
+          # Only the marked section changes, so text written around it survives.
+          jq -nr --rawfile old "${RUNNER_TEMP}/old.md" --rawfile section "${RUNNER_TEMP}/section.md" --arg start "${start}" --arg end "${end}" '
+            ($old | rtrimstr("\n")) as $old
+            | ($section | rtrimstr("\n")) as $section
+            | if ($old | contains($start)) and ($old | contains($end))
+              then ($old | split($start)[0]) + $section + ($old | split($end)[1:] | join($end))
+              else $section end
+          ' > "${RUNNER_TEMP}/comment.md"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment}" -F "body=@${RUNNER_TEMP}/comment.md" --jq .html_url
