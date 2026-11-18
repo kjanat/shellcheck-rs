@@ -15,9 +15,6 @@
 			"allowedVersions": "!/^0\\.21$/"
 		}
 	],
-	"github-actions": {
-		"enabled": false
-	},
 	"forkProcessing": "enabled",
 	"baseBranchPatterns": [
 		"$default",
