@@ -49,7 +49,7 @@ jobs:
         with: { persist-credentials: false }
 
       - name: Install the toolchain (mise)
-        uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: Check formatting
         uses: kjanat/dprint-check@b6a885d3403db5e40ed59f2c27917d758381f577 # v3.2.0
