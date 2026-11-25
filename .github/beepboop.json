@@ -124,12 +124,6 @@
         {
           "via": "action",
           "workflow": "start-release.yml"
-        },
-        {
-          "via": "dashboard"
-        },
-        {
-          "via": "cli"
         }
       ],
       "companionModules": ["pkg:golang/github.com/kjanat/shellcheck-rs/go"]
