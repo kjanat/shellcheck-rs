@@ -1,1 +1,2 @@
 *.go text eol=lf
+kprint.schema.json -diff linguist-generated
