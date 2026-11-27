@@ -14,19 +14,14 @@ min_version.hard = "2026.11.2"
 [tools]
 cargo-mutants  = { prefix = "27", depends = ["cargo-binstall"] }
 droast         = { prefix = "1", depends = ["cargo-binstall"] }
-kprint         = {
-  version               = "latest",
-  allow_low_downloads   = true,
-  # Staged publish -> trusted publishing switch trips aube's no-downgrade policy.
-  trust_policy_excludes = ["@kprint/*", "@kjanat/*"],
-}
-tombi          = { prefix = "1.10" }                              # Exact version avoids release-age range resolution failures.
-cargo-binstall = { prefix = "1.23" }
-go             = { prefix = "1.27" }
+kprint         = "latest"
+tombi          = "1"
+cargo-binstall = "1"
+go             = "1.27"
 node           = "26"
 python         = "3.15"                                           # conformance harness (rust/harness/*.py)
-uv             = { prefix = "0.13" }
-npm            = "12.2.3"
+uv             = "0.13"
+npm            = "12"
 
 [tools."http:actionlint"]
 version          = "master"
@@ -42,8 +37,8 @@ components = ["rustfmt", "clippy", "rust-src"]
 [tool_alias]
 cargo-mutants = "cargo:cargo-mutants"
 droast        = "cargo:dockerfile-roast"
-kprint        = "npm:@kprint/kprint"
-tombi         = "github:tombi-toml/tombi"
+kprint        = "npm:@kprint/kprint[allow_low_downloads=true,trust_policy_excludes=*]"
+tombi         = "aqua:tombi-toml/tombi"
 
 [wrappers.actionlint]
 command = "mise"
@@ -79,14 +74,14 @@ auto = true
 # Backend plugins are experimental, so they must be enabled explicitly.
 experimental                        = true
 minimum_release_age                 = "0s"
-idiomatic_version_file_enable_tools = ["python"]
+idiomatic_version_file_enable_tools = ["python", "go"]
 
 [settings.python]
 uv_venv_auto = "source"
 
 [tasks]
 [tasks.format]
-alias = ["f", "fmt"]
+alias = ["f", "fmt", "kfmt"]
 run   = "kprint fmt"
 
 # Refactor safety net

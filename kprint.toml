@@ -17,13 +17,10 @@ excludes = [
 ]
 
 [exec]
-cwd      = "${configDir}"
-cacheKey = "1"
-timeout  = 30
-
-[[exec.commands]]
-command = "rustfmt"
-exts    = ["rs"]
+cwd          = "${configDir}"
+cacheKey     = "1"
+timeout      = 30
+playWithFire = ["rustfmt"]
 
 [[markdown.overrides]]
 files    = ["**/*.md"]
