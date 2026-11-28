@@ -7,7 +7,7 @@ cabal      = "3.18.2.0"
 ghc        = "9.14.1"
 ghcup      = "0.2.6.2"
 hyperfine  = "2.0.0"
-rust       = "1.100.0"
+rust       = "1.100.1"
 shellcheck = "0.11.0"
 
 [tool_alias]
