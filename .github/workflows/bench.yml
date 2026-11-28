@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv github:koalaman/shellcheck" }
+        with: { install_args: "python uv shellcheck" }
       - name: Pin the harness revision
         id: harness
         run: |
@@ -97,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-        with: { install_args: "python uv github:koalaman/shellcheck" }
+        with: { install_args: "python uv shellcheck" }
       - uses: actions/download-artifact@v8
         with: { name: candidate-plan, path: .bench }
       - name: Restore completed binary and provenance
